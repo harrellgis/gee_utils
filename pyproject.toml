@@ -34,3 +34,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "ee: requires a live Earth Engine session (set EE_PROJECT to run; skipped otherwise)",
+    "slow: hits real Earth Engine datasets over the network (implies ee)",
+]

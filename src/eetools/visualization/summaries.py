@@ -43,7 +43,21 @@ def _time_windows(
             )
 
     elif temporal_scale == "monthly":
-        n_months = end_date.difference(start_date, "month").toInt()
+        # Count whole calendar months in [start, end) rather than relying on
+        # ee.Date.difference(unit="month"), which uses an average month length
+        # (~30.44 days) and truncates — dropping the final window whenever the
+        # span includes 31-day months. advance(-1, "day") makes the end
+        # exclusive, mirroring the annual branch.
+        last_day = end_date.advance(-1, "day")
+        start_months = (
+            ee.Number(start_date.get("year"))
+            .multiply(12)
+            .add(start_date.get("month"))
+        )
+        end_months = (
+            ee.Number(last_day.get("year")).multiply(12).add(last_day.get("month"))
+        )
+        n_months = end_months.subtract(start_months).add(1)
         offsets = ee.List.sequence(0, n_months.subtract(1))
 
         def make_window(offset):
