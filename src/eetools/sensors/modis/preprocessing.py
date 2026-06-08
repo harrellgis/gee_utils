@@ -1,18 +1,20 @@
 import ee
 
 from eetools.constants import (
-    MODIS_LAI_FPAR_COLLECTION,
-    MODIS_LAI_FPAR_BANDS,
     FPAR_SCALE_FACTOR,
-    LAI_SCALE_FACTOR,
     FPAR_STDDEV_SCALE_FACTOR,
+    LAI_SCALE_FACTOR,
     LAI_STDDEV_SCALE_FACTOR,
+    MODIS_LAI_FPAR_BANDS,
+    MODIS_LAI_FPAR_COLLECTION,
 )
 
 
 def _mask_modis_lai_fpar_qa(image: ee.Image) -> ee.Image:
     qa_mask = (
-        image.select("FparLai_QC").bitwiseAnd(1).eq(0)
+        image.select("FparLai_QC")
+        .bitwiseAnd(1)
+        .eq(0)
         .And(image.select("FparLai_QC").rightShift(5).bitwiseAnd(7).lte(1))
         .And(image.select("FparExtra_QC").rightShift(5).bitwiseAnd(1).eq(0))
         .And(image.select("FparExtra_QC").rightShift(6).bitwiseAnd(1).eq(0))

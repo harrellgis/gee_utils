@@ -1,10 +1,12 @@
 import ee
 
-from eetools.constants import L8_SR_COLLECTION, L8_CLOUD_FILTER
+from eetools.constants import L8_CLOUD_FILTER, L8_SR_COLLECTION
+from eetools.sensors import masking as _masking
 
 
 def mask_edges(image: ee.Image) -> ee.Image:
-    """Return the image unchanged; included for interface compatibility with the Sentinel workflow.
+    """Return the image unchanged; included for interface compatibility with the
+    Sentinel workflow.
 
     Args:
         image: Landsat 8 ee.Image.
@@ -18,7 +20,8 @@ def mask_edges(image: ee.Image) -> ee.Image:
 def get_l8_sr_cld_col(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Filter the Landsat 8 SR collection to the AOI, date range, and cloud-cover threshold.
+    """Filter the Landsat 8 SR collection to the AOI, date range, and cloud-cover
+    threshold.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -54,7 +57,8 @@ def add_cld_shdw_mask(image: ee.Image) -> ee.Image:
 
 
 def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
-    """Apply the inverse of the 'cloudmask' band to mask cloud and shadow pixels from all bands.
+    """Apply the inverse of the 'cloudmask' band to mask cloud and shadow pixels from
+    all bands.
 
     Args:
         image: Landsat 8 ee.Image with a 'cloudmask' band added by add_cld_shdw_mask.
@@ -62,7 +66,7 @@ def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
     Returns:
         ee.Image with cloud and shadow pixels masked out across all bands.
     """
-    return image.updateMask(image.select("cloudmask").Not())
+    return _masking.apply_cloud_mask(image)
 
 
 def build_cloudfree_l8sr_col(
@@ -102,13 +106,13 @@ def build_l8_non_water_mask(
     Returns:
         ee.Image with a single 'non_water' band where 1 = land and 0 = water.
     """
-    comp = l8_collection.median()
-    water = (
-        comp.select("MNDWI").gt(mndwi_thresh)
-        .And(comp.select("NDVI").lt(ndvi_thresh))
-        .And(comp.select("SR_B5").lt(nir_thresh))
+    return _masking.build_non_water_mask(
+        l8_collection,
+        nir_band="SR_B5",
+        mndwi_thresh=mndwi_thresh,
+        ndvi_thresh=ndvi_thresh,
+        nir_thresh=nir_thresh,
     )
-    return water.Not().rename("non_water")
 
 
 def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
@@ -121,4 +125,4 @@ def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
     Returns:
         ee.Image with water pixels masked out across all bands.
     """
-    return image.updateMask(non_water_mask)
+    return _masking.apply_water_mask(image, non_water_mask)

@@ -55,12 +55,29 @@ def test_build_site_feature_includes_source_file(ee_session):
 def test_get_image_min_max_constant(ee_session):
     from eetools.utils import get_image_min_max
 
-    img = ee_session.Image.constant(0.42).rename("b").clip(
-        ee_session.Geometry.Rectangle([36.8, -3.4, 36.81, -3.39])
+    img = (
+        ee_session.Image.constant(0.42)
+        .rename("b")
+        .clip(ee_session.Geometry.Rectangle([36.8, -3.4, 36.81, -3.39]))
     )
     mn, mx = get_image_min_max(img, band_name="b", scale=100)
     assert mn == pytest.approx(0.42)
     assert mx == pytest.approx(0.42)
+
+
+def test_get_collection_min_max_across_images(ee_session, small_aoi):
+    from eetools.utils import get_collection_min_max
+
+    col = ee_session.ImageCollection(
+        [
+            ee_session.Image.constant(0.2).rename("b").clip(small_aoi),
+            ee_session.Image.constant(0.8).rename("b").clip(small_aoi),
+        ]
+    )
+    mn, mx = get_collection_min_max(col, band_name="b", scale=500)
+    # Global extremes aggregate across both images.
+    assert mn == pytest.approx(0.2)
+    assert mx == pytest.approx(0.8)
 
 
 def test_temporal_reducer_band_names(ee_session):

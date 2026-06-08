@@ -208,10 +208,7 @@ def test_summarize_collection_histograms(ee_session, small_aoi):
     from eetools.visualization.summaries import summarize_collection_histograms
 
     image = (
-        ee_session.Image.constant(0.5)
-        .rename("b")
-        .clip(small_aoi)
-        .set("site_name", "A")
+        ee_session.Image.constant(0.5).rename("b").clip(small_aoi).set("site_name", "A")
     )
     collection = ee_session.ImageCollection([image])
     result = summarize_collection_histograms(

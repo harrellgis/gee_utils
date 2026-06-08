@@ -1,19 +1,20 @@
 import ee
 
-from eetools.constants import S2_SCALE_FACTOR, S2_SR_COLLECTION, S2_BAND_MAP
-from eetools.utils import validate_collection_date_range
+from eetools.constants import S2_BAND_MAP, S2_SCALE_FACTOR, S2_SR_COLLECTION
+from eetools.sensors.indices import calc_indices, select_base_bands
 from eetools.sensors.sentinel.masking import (
+    apply_water_mask,
     build_cloudfree_s2sr_col,
     build_s2_non_water_mask,
-    apply_water_mask,
 )
-from eetools.sensors.indices import calc_indices, select_base_bands
+from eetools.utils import validate_collection_date_range
 
 
 def validate_s2_sr_date_range(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> None:
-    """Validate that the requested date window overlaps available Sentinel-2 SR imagery over the AOI.
+    """Validate that the requested date window overlaps available Sentinel-2 SR imagery
+    over the AOI.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -33,7 +34,8 @@ def validate_s2_sr_date_range(
 
 
 def process_s2_image(image: ee.Image) -> ee.Image:
-    """Select core Sentinel-2 SR bands, apply the reflectance scale factor, and add spectral indices.
+    """Select core Sentinel-2 SR bands, apply the reflectance scale factor, and add
+    spectral indices.
 
     Args:
         image: Raw Sentinel-2 SR ee.Image with original band names (B2, B3, B4, B5, B6, B7, B8, B8A, B11, B12, SCL).
@@ -44,7 +46,19 @@ def process_s2_image(image: ee.Image) -> ee.Image:
     source = image
     image = select_base_bands(
         source,
-        input_bands=["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "SCL"],
+        input_bands=[
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B8A",
+            "B11",
+            "B12",
+            "SCL",
+        ],
     ).multiply(S2_SCALE_FACTOR)
 
     image = calc_indices(image=image, band_map=S2_BAND_MAP, include_ndre=True)

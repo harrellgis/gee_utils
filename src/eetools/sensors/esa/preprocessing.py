@@ -1,6 +1,6 @@
 import ee
 
-from eetools.constants import ESA_WC_COLLECTION, ESA_BAND
+from eetools.constants import ESA_BAND, ESA_WC_COLLECTION
 
 
 def get_esa_land_mask() -> ee.Image:

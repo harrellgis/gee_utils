@@ -1,8 +1,7 @@
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 
 def add_year_shading(
@@ -86,7 +85,8 @@ def plot_single_metric_monthly(
     figsize: tuple = (12, 5),
     month_interval: int = 6,
 ):
-    """Plot a single monthly timeseries metric as a lineplot with a configurable date tick interval.
+    """Plot a single monthly timeseries metric as a lineplot with a configurable date
+    tick interval.
 
     Args:
         df: pd.DataFrame containing date_col and metric_col.
@@ -125,7 +125,7 @@ def plot_multi_metric_annually(
     df: pd.DataFrame,
     title: str,
     date_col: str = "date",
-    metric_col: list[str] | tuple[str, ...] = None,
+    metric_col: list[str] | tuple[str, ...] | None = None,
     figsize: tuple = (12, 6),
 ):
     """Plot multiple annual timeseries metrics overlaid on the same axis.
@@ -167,11 +167,12 @@ def plot_multi_metric_monthly(
     df: pd.DataFrame,
     title: str,
     date_col: str = "date",
-    metric_col: list[str] | tuple[str, ...] = None,
+    metric_col: list[str] | tuple[str, ...] | None = None,
     figsize: tuple = (14, 6),
     month_interval: int = 6,
 ):
-    """Plot multiple monthly timeseries metrics overlaid on the same axis with a configurable date tick interval.
+    """Plot multiple monthly timeseries metrics overlaid on the same axis with a
+    configurable date tick interval.
 
     Args:
         df: pd.DataFrame containing date_col and all columns listed in metric_col.

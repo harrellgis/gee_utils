@@ -31,7 +31,8 @@ def calc_evi(
     blue_band: str,
     output_band: str = "EVI",
 ) -> ee.Image:
-    """Calculate EVI for improved vegetation sensitivity in higher biomass and variable soil backgrounds.
+    """Calculate EVI for improved vegetation sensitivity in higher biomass and variable
+    soil backgrounds.
 
     Args:
         image: ee.Image containing at least nir_band, red_band, and blue_band.
@@ -60,7 +61,8 @@ def calc_savi(
     L: float = 0.5,
     output_band: str = "SAVI",
 ) -> ee.Image:
-    """Calculate SAVI to reduce soil background effects in sparsely vegetated landscapes.
+    """Calculate SAVI to reduce soil background effects in sparsely vegetated
+    landscapes.
 
     Args:
         image: ee.Image containing at least nir_band and red_band.
@@ -108,7 +110,8 @@ def calc_mndwi(
     swir1_band: str,
     output_band: str = "MNDWI",
 ) -> ee.Image:
-    """Calculate MNDWI using green and SWIR1 to enhance open-water detection against land surfaces.
+    """Calculate MNDWI using green and SWIR1 to enhance open-water detection against
+    land surfaces.
 
     Args:
         image: ee.Image containing at least green_band and swir1_band.
@@ -128,7 +131,8 @@ def calc_ndmi(
     swir1_band: str,
     output_band: str = "NDMI",
 ) -> ee.Image:
-    """Calculate NDMI as a moisture-sensitive index for vegetation and surface dryness assessment.
+    """Calculate NDMI as a moisture-sensitive index for vegetation and surface dryness
+    assessment.
 
     Args:
         image: ee.Image containing at least nir_band and swir1_band.
@@ -168,7 +172,8 @@ def calc_nirv(
     red_band: str,
     output_band: str = "NIRv",
 ) -> ee.Image:
-    """Calculate NIRv as a vegetation productivity proxy combining NIR reflectance and NDVI.
+    """Calculate NIRv as a vegetation productivity proxy combining NIR reflectance and
+    NDVI.
 
     Args:
         image: ee.Image containing at least nir_band and red_band.
@@ -242,7 +247,7 @@ def calc_kndvi_fixed_sigma(
     image: ee.Image,
     red_band: str,
     nir_band: str,
-    sigma: "ee.Image | ee.Number" = SIGMA,
+    sigma: "ee.Image | ee.Number | float" = SIGMA,
     output_band: str = "kNDVI_fixed",
 ) -> ee.Image:
     """Calculate RBF-kernel NDVI using a fixed or supplied sigma: kNDVI = tanh((NIR - RED)^2 / (2*sigma)^2).
@@ -273,7 +278,8 @@ def calc_kndvi_est_sigma(
     max_pixels: int = 1_000_000_000,
     tile_scale: int = 4,
 ) -> ee.Image:
-    """Calculate kNDVI using a per-image sigma estimated from the regional median of 0.5*(NIR+RED) within the AOI.
+    """Calculate kNDVI using a per-image sigma estimated from the regional median of
+    0.5*(NIR+RED) within the AOI.
 
     Args:
         image: ee.Image containing at least red_band and nir_band.
@@ -316,7 +322,8 @@ def calc_kndvi_temp_est_sigma(
     nir_band: str,
     reducer: ee.Reducer | None = None,
 ) -> ee.Image:
-    """Estimate a per-pixel temporal sigma image from 0.5*(NIR+RED) reduced across an image collection.
+    """Estimate a per-pixel temporal sigma image from 0.5*(NIR+RED) reduced across an
+    image collection.
 
     Args:
         collection: ee.ImageCollection used to derive the temporal sigma estimate.
@@ -441,7 +448,8 @@ def add_kndvi_temp_est_to_collection(
 
 ##################### Generic multi-index helpers ####################
 def calc_veg_indices(image: ee.Image, band_map: dict) -> ee.Image:
-    """Add the core vegetation and water indices (NDVI, kNDVI_fixed, Fpar, EVI, NDWI, MNDWI, SAVI) to an image.
+    """Add the core vegetation and water indices (NDVI, kNDVI_fixed, Fpar, EVI, NDWI,
+    MNDWI, SAVI) to an image.
 
     Args:
         image: ee.Image containing reflectance bands referenced by band_map.
@@ -450,17 +458,25 @@ def calc_veg_indices(image: ee.Image, band_map: dict) -> ee.Image:
     Returns:
         ee.Image with the original bands plus NDVI, kNDVI_fixed, Fpar, EVI, NDWI, MNDWI, and SAVI appended.
     """
-    return image.addBands(
-        [
-            calc_ndvi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
-            calc_kndvi_fixed_sigma(image, red_band=band_map["red"], nir_band=band_map["nir"]),
-            calc_fpar(image, nir_band=band_map["nir"], red_band=band_map["red"]),
-            calc_evi(image, nir_band=band_map["nir"], red_band=band_map["red"], blue_band=band_map["blue"]),
-            calc_ndwi(image, green_band=band_map["green"], nir_band=band_map["nir"]),
-            calc_mndwi(image, green_band=band_map["green"], swir1_band=band_map["swir1"]),
-            calc_savi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
-        ]
-    )
+    index_bands = [
+        calc_ndvi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
+        calc_kndvi_fixed_sigma(
+            image, red_band=band_map["red"], nir_band=band_map["nir"]
+        ),
+        calc_fpar(image, nir_band=band_map["nir"], red_band=band_map["red"]),
+        calc_evi(
+            image,
+            nir_band=band_map["nir"],
+            red_band=band_map["red"],
+            blue_band=band_map["blue"],
+        ),
+        calc_ndwi(image, green_band=band_map["green"], nir_band=band_map["nir"]),
+        calc_mndwi(image, green_band=band_map["green"], swir1_band=band_map["swir1"]),
+        calc_savi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
+    ]
+    # EE's addBands accepts a list of single-band images at runtime; the stub
+    # only types a single image-like, so the list arg is flagged.
+    return image.addBands(index_bands)  # type: ignore[arg-type]
 
 
 def calc_indices(
@@ -468,7 +484,8 @@ def calc_indices(
     band_map: dict,
     include_ndre: bool = False,
 ) -> ee.Image:
-    """Add the full index set (NDVI, kNDVI_fixed, Fpar, EVI, NDWI, MNDWI, SAVI, NDMI, NBR, NIRv, optionally NDRE) to an image.
+    """Add the full index set (NDVI, kNDVI_fixed, Fpar, EVI, NDWI, MNDWI, SAVI, NDMI,
+    NBR, NIRv, optionally NDRE) to an image.
 
     Args:
         image: ee.Image containing reflectance bands referenced by band_map.
@@ -480,9 +497,16 @@ def calc_indices(
     """
     index_bands = [
         calc_ndvi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
-        calc_kndvi_fixed_sigma(image, red_band=band_map["red"], nir_band=band_map["nir"]),
+        calc_kndvi_fixed_sigma(
+            image, red_band=band_map["red"], nir_band=band_map["nir"]
+        ),
         calc_fpar(image, nir_band=band_map["nir"], red_band=band_map["red"]),
-        calc_evi(image, nir_band=band_map["nir"], red_band=band_map["red"], blue_band=band_map["blue"]),
+        calc_evi(
+            image,
+            nir_band=band_map["nir"],
+            red_band=band_map["red"],
+            blue_band=band_map["blue"],
+        ),
         calc_ndwi(image, green_band=band_map["green"], nir_band=band_map["nir"]),
         calc_mndwi(image, green_band=band_map["green"], swir1_band=band_map["swir1"]),
         calc_savi(image, nir_band=band_map["nir"], red_band=band_map["red"]),
@@ -493,10 +517,14 @@ def calc_indices(
 
     if include_ndre:
         index_bands.append(
-            calc_ndre(image, nir_band=band_map["nir"], red_edge_band=band_map["red_edge"])
+            calc_ndre(
+                image, nir_band=band_map["nir"], red_edge_band=band_map["red_edge"]
+            )
         )
 
-    return image.addBands(index_bands)
+    # EE's addBands accepts a list of single-band images at runtime; the stub
+    # only types a single image-like, so the list arg is flagged.
+    return image.addBands(index_bands)  # type: ignore[arg-type]
 
 
 def select_base_bands(
@@ -504,7 +532,8 @@ def select_base_bands(
     input_bands: list[str],
     output_bands: list[str] | None = None,
 ) -> ee.Image:
-    """Select base reflectance bands from an image, optionally renaming them for cross-sensor harmonization.
+    """Select base reflectance bands from an image, optionally renaming them for cross-
+    sensor harmonization.
 
     Args:
         image: ee.Image from which to select bands.

@@ -22,14 +22,14 @@ def _fmask_image(ee, fmask_value):
 @pytest.mark.parametrize(
     "fmask_value, expected",
     [
-        (0, 0),          # clear
-        (1 << 1, 1),     # cloud bit
-        (1 << 3, 1),     # cloud-shadow bit
-        (1 << 2, 1),     # adjacent (HLS_MASK_ADJACENT is True by default)
-        (1 << 4, 1),     # snow (HLS_MASK_SNOW is True)
-        (1 << 5, 0),     # water (HLS_MASK_WATER_IN_QA is False -> not flagged)
-        (3 << 6, 1),     # high aerosol (HLS_MASK_HIGH_AEROSOL is True)
-        (2 << 6, 0),     # moderate aerosol (HLS_MASK_MODERATE_AEROSOL is False)
+        (0, 0),  # clear
+        (1 << 1, 1),  # cloud bit
+        (1 << 3, 1),  # cloud-shadow bit
+        (1 << 2, 1),  # adjacent (HLS_MASK_ADJACENT is True by default)
+        (1 << 4, 1),  # snow (HLS_MASK_SNOW is True)
+        (1 << 5, 0),  # water (HLS_MASK_WATER_IN_QA is False -> not flagged)
+        (3 << 6, 1),  # high aerosol (HLS_MASK_HIGH_AEROSOL is True)
+        (2 << 6, 0),  # moderate aerosol (HLS_MASK_MODERATE_AEROSOL is False)
     ],
 )
 def test_hls_fmask_cloud_mask_bits(ee_session, first_value, fmask_value, expected):

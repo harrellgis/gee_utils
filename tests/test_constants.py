@@ -21,9 +21,9 @@ BAND_MAP_CASES = [
 @pytest.mark.parametrize("band_map, source_bands", BAND_MAP_CASES)
 def test_band_map_targets_exist_in_source_bands(band_map, source_bands):
     for logical, actual in band_map.items():
-        assert actual in source_bands, (
-            f"{logical!r} -> {actual!r} is not a known source band"
-        )
+        assert (
+            actual in source_bands
+        ), f"{logical!r} -> {actual!r} is not a known source band"
 
 
 @pytest.mark.parametrize("band_map", [C.S2_BAND_MAP, C.L8_BAND_MAP, C.HLS_BAND_MAP])
@@ -73,6 +73,7 @@ def test_collection_ids_are_non_empty_strings(collection_id):
 def test_index_bands_are_subset_of_all_bands():
     assert set(C.S2_INDEX_BANDS).issubset(set(C.S2_ALL_BANDS))
     assert set(C.HLS_INDEX_BANDS).issubset(set(C.HLS_ALL_BANDS))
+    assert set(C.L8_INDEX_BANDS).issubset(set(C.L8_ALL_BANDS))
 
 
 def test_cloud_filter_thresholds_are_percentages():

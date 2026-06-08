@@ -1,4 +1,4 @@
-"""eetools — reusable Google Earth Engine utilities for environmental remote sensing."""
+"""Eetools — reusable Google Earth Engine utilities for environmental remote sensing."""
 
 import ee
 

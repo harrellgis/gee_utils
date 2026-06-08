@@ -1,24 +1,25 @@
 import ee
 
 from eetools.constants import (
-    L8_SR_COLLECTION,
-    L8_SCALE_FACTOR,
     L8_ADD_OFFSET,
     L8_BAND_MAP,
-)
-from eetools.utils import validate_collection_date_range
-from eetools.sensors.landsat.masking import (
-    build_cloudfree_l8sr_col,
-    build_l8_non_water_mask,
-    apply_water_mask,
+    L8_SCALE_FACTOR,
+    L8_SR_COLLECTION,
 )
 from eetools.sensors.indices import calc_indices, select_base_bands
+from eetools.sensors.landsat.masking import (
+    apply_water_mask,
+    build_cloudfree_l8sr_col,
+    build_l8_non_water_mask,
+)
+from eetools.utils import validate_collection_date_range
 
 
 def validate_l8_sr_date_range(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> None:
-    """Validate that the requested date window overlaps available Landsat 8 SR imagery over the AOI.
+    """Validate that the requested date window overlaps available Landsat 8 SR imagery
+    over the AOI.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -38,7 +39,8 @@ def validate_l8_sr_date_range(
 
 
 def process_l8_image(image: ee.Image) -> ee.Image:
-    """Select core Landsat 8 SR bands, apply the scale factor and additive offset, and add spectral indices.
+    """Select core Landsat 8 SR bands, apply the scale factor and additive offset, and
+    add spectral indices.
 
     Args:
         image: Raw Landsat 8 C2 L2 ee.Image with original band names (SR_B2 through SR_B7).

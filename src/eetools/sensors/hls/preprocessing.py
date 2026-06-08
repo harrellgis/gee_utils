@@ -1,24 +1,25 @@
 import ee
 
 from eetools.constants import (
+    HLS_BAND_MAP,
     HLS_L30_COLLECTION,
     HLS_S30_COLLECTION,
-    HLS_BAND_MAP,
 )
-from eetools.utils import validate_collection_date_range
 from eetools.sensors.hls.masking import (
+    apply_water_mask,
     build_cloudfree_hls_l30_col,
     build_cloudfree_hls_s30_col,
     build_hls_non_water_mask,
-    apply_water_mask,
 )
 from eetools.sensors.indices import calc_indices, select_base_bands
+from eetools.utils import validate_collection_date_range
 
 
 def validate_hls_date_range(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> None:
-    """Validate that the requested date window overlaps available HLS (L30 and S30) imagery over the AOI.
+    """Validate that the requested date window overlaps available HLS (L30 and S30)
+    imagery over the AOI.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -49,7 +50,7 @@ def add_native_crs(image: ee.Image, reference_band: str = "RED") -> ee.Image:
     """
     image = ee.Image(image)
     native_crs = image.select(reference_band).projection().crs()
-    return image.set("native_crs", native_crs)
+    return ee.Image(image.set("native_crs", native_crs))
 
 
 def filter_hls_by_native_crs(
@@ -75,7 +76,8 @@ def filter_hls_by_native_crs(
 
 
 def harmonize_hls_l30_bands(image: ee.Image) -> ee.Image:
-    """Rename HLSL30 source bands to the common merged HLS band schema (BLUE, GREEN, RED, NIR, SWIR1, SWIR2).
+    """Rename HLSL30 source bands to the common merged HLS band schema (BLUE, GREEN,
+    RED, NIR, SWIR1, SWIR2).
 
     Args:
         image: HLSL30 ee.Image with original band names B2, B3, B4, B5, B6, B7.
@@ -93,7 +95,8 @@ def harmonize_hls_l30_bands(image: ee.Image) -> ee.Image:
 
 
 def harmonize_hls_s30_bands(image: ee.Image) -> ee.Image:
-    """Rename HLSS30 source bands to the common merged HLS band schema (BLUE, GREEN, RED, NIR, SWIR1, SWIR2).
+    """Rename HLSS30 source bands to the common merged HLS band schema (BLUE, GREEN,
+    RED, NIR, SWIR1, SWIR2).
 
     Args:
         image: HLSS30 ee.Image with original band names B2, B3, B4, B8A, B11, B12.
@@ -143,7 +146,8 @@ def process_hls_s30_image(image: ee.Image) -> ee.Image:
 def get_hls_l30_collection(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Build a processed HLSL30 collection with cloud masking and spectral indices applied.
+    """Build a processed HLSL30 collection with cloud masking and spectral indices
+    applied.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -161,7 +165,8 @@ def get_hls_l30_collection(
 def get_hls_s30_collection(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Build a processed HLSS30 collection with cloud masking and spectral indices applied.
+    """Build a processed HLSS30 collection with cloud masking and spectral indices
+    applied.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -183,7 +188,8 @@ def get_hls_merged_collection(
     apply_water_masking: bool = True,
     target_crs: str | None = None,
 ) -> ee.ImageCollection:
-    """Build a merged processed HLS collection (L30 and S30) with shared bands, indices, and optional water masking.
+    """Build a merged processed HLS collection (L30 and S30) with shared bands, indices,
+    and optional water masking.
 
     Args:
         aoi: Area of interest as ee.Geometry.

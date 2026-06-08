@@ -1,3 +1,5 @@
+from typing import cast
+
 import ee
 
 
@@ -50,9 +52,7 @@ def _time_windows(
         # exclusive, mirroring the annual branch.
         last_day = end_date.advance(-1, "day")
         start_months = (
-            ee.Number(start_date.get("year"))
-            .multiply(12)
-            .add(start_date.get("month"))
+            ee.Number(start_date.get("year")).multiply(12).add(start_date.get("month"))
         )
         end_months = (
             ee.Number(last_day.get("year")).multiply(12).add(last_day.get("month"))
@@ -89,7 +89,8 @@ def summarize_collection_histograms(
     scale: float,
     max_pixels: float = 1e13,
 ) -> list[dict]:
-    """Compute a fixed-bin histogram of pixel values for each image in an ee.ImageCollection.
+    """Compute a fixed-bin histogram of pixel values for each image in an
+    ee.ImageCollection.
 
     Args:
         image_collection: ee.ImageCollection to summarize; each image is expected to have a 'site_name' property.
@@ -103,29 +104,34 @@ def summarize_collection_histograms(
     Returns:
         list of dicts, one per image, each with keys 'site_name' and 'histogram' (list of [bin_center, count] pairs).
     """
-    image_list = image_collection.toList(image_collection.size())
-    n_images = image_collection.size().getInfo()
-    summaries = []
 
-    for i in range(n_images):
-        image = ee.Image(image_list.get(i))
-        site_name = image.get("site_name").getInfo()
-
-        histogram = (
-            image.select(band_name)
-            .reduceRegion(
-                reducer=ee.Reducer.fixedHistogram(min_value, max_value, steps),
-                geometry=image.geometry(),
-                scale=scale,
-                maxPixels=max_pixels,
-            )
-            .get(band_name)
-            .getInfo()
+    # Build one feature per image carrying its site_name and histogram array
+    # server-side, then pull the whole collection back in a single getInfo().
+    def _histogram_feature(image: ee.Image) -> ee.Feature:
+        image = ee.Image(image)
+        histogram = image.select(band_name).reduceRegion(
+            reducer=ee.Reducer.fixedHistogram(min_value, max_value, steps),
+            geometry=image.geometry(),
+            scale=scale,
+            maxPixels=int(max_pixels),
+        )
+        return ee.Feature(
+            None,
+            {
+                "site_name": image.get("site_name"),
+                "histogram": histogram.get(band_name),
+            },
         )
 
-        summaries.append({"site_name": site_name, "histogram": histogram})
-
-    return summaries
+    fc = ee.FeatureCollection(image_collection.map(_histogram_feature))
+    info = cast(dict, fc.getInfo())
+    return [
+        {
+            "site_name": feature["properties"].get("site_name"),
+            "histogram": feature["properties"].get("histogram"),
+        }
+        for feature in info["features"]
+    ]
 
 
 def image_collection_to_sample_fc(
@@ -138,7 +144,8 @@ def image_collection_to_sample_fc(
     tile_scale: int = 4,
     geometries: bool = False,
 ) -> ee.FeatureCollection:
-    """Sample every image in an ImageCollection over polygon regions and return a flat FeatureCollection of pixel samples.
+    """Sample every image in an ImageCollection over polygon regions and return a flat
+    FeatureCollection of pixel samples.
 
     Args:
         collection: ee.ImageCollection to sample.
@@ -182,7 +189,8 @@ def image_collection_to_region_stats_fc(
     image_properties: list[str] | None = None,
     tile_scale: int = 4,
 ) -> ee.FeatureCollection:
-    """Reduce each image in a collection over polygon regions and return a flat FeatureCollection of per-region statistics.
+    """Reduce each image in a collection over polygon regions and return a flat
+    FeatureCollection of per-region statistics.
 
     Args:
         collection: ee.ImageCollection to reduce.
@@ -227,7 +235,8 @@ def build_period_composites(
     temporal_scale: str = "annual",
     composite_stat: str = "median",
 ) -> ee.ImageCollection:
-    """Build annual or monthly composites from an ImageCollection, producing one composite per period with data.
+    """Build annual or monthly composites from an ImageCollection, producing one
+    composite per period with data.
 
     Args:
         collection: ee.ImageCollection to composite.
@@ -243,9 +252,9 @@ def build_period_composites(
     _validate_composite_stat(composite_stat)
 
     collection = ee.ImageCollection(collection).select(bands)
-    start_date = ee.Date(start_date)
-    end_date = ee.Date(end_date)
-    windows = _time_windows(start_date, end_date, temporal_scale)
+    start = ee.Date(start_date)
+    end = ee.Date(end_date)
+    windows = _time_windows(start, end, temporal_scale)
 
     def make_composite(feature):
         feature = ee.Feature(feature)
@@ -290,7 +299,8 @@ def reduce_image_over_region(
     scale: int = 5566,
     tile_scale: int = 4,
 ) -> ee.Feature:
-    """Reduce a single image over a region geometry and return a Feature with band statistics and image properties.
+    """Reduce a single image over a region geometry and return a Feature with band
+    statistics and image properties.
 
     Args:
         image: ee.Image to reduce; should carry date, year, month, day, image_count, temporal_scale, and composite_stat properties.
@@ -310,7 +320,7 @@ def reduce_image_over_region(
         reducer=reducer,
         geometry=region,
         scale=scale,
-        maxPixels=1e13,
+        maxPixels=int(1e13),
         tileScale=tile_scale,
     )
 
@@ -338,7 +348,8 @@ def collection_to_region_timeseries(
     scale: int = 5566,
     tile_scale: int = 4,
 ) -> ee.FeatureCollection:
-    """Reduce every image in a collection over a region and return a long-format FeatureCollection timeseries.
+    """Reduce every image in a collection over a region and return a long-format
+    FeatureCollection timeseries.
 
     Args:
         collection: ee.ImageCollection to reduce; images should carry temporal metadata properties.

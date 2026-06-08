@@ -81,9 +81,7 @@ def test_process_s2_image_scales_and_adds_indices(ee_session, first_value):
         ee_session.Image.constant(
             [1000, 2000, 3000, 4000, 4500, 5000, 5000, 5200, 2500, 1500, 4]
         )
-        .rename(
-            ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "SCL"]
-        )
+        .rename(["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "SCL"])
         .set("system:time_start", ee_session.Date("2021-06-01").millis())
     )
     out = ee_session.Image(process_s2_image(raw))

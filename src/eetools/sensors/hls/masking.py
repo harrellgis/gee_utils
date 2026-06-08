@@ -1,21 +1,23 @@
 import ee
 
 from eetools.constants import (
-    HLS_L30_COLLECTION,
-    HLS_S30_COLLECTION,
     HLS_CLOUD_FILTER,
+    HLS_L30_COLLECTION,
     HLS_MASK_ADJACENT,
+    HLS_MASK_HIGH_AEROSOL,
+    HLS_MASK_MODERATE_AEROSOL,
     HLS_MASK_SNOW,
     HLS_MASK_WATER_IN_QA,
-    HLS_MASK_MODERATE_AEROSOL,
-    HLS_MASK_HIGH_AEROSOL,
+    HLS_S30_COLLECTION,
 )
+from eetools.sensors import masking as _masking
 
 
 def get_hls_l30_col(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Filter the HLSL30 collection to the AOI, date range, and cloud-coverage threshold.
+    """Filter the HLSL30 collection to the AOI, date range, and cloud-coverage
+    threshold.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -36,7 +38,8 @@ def get_hls_l30_col(
 def get_hls_s30_col(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Filter the HLSS30 collection to the AOI, date range, and cloud-coverage threshold.
+    """Filter the HLSS30 collection to the AOI, date range, and cloud-coverage
+    threshold.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -92,7 +95,8 @@ def add_fmask_cloud_mask(image: ee.Image) -> ee.Image:
 
 
 def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
-    """Apply the inverse of the HLS 'cloudmask' band to mask excluded pixels from all bands.
+    """Apply the inverse of the HLS 'cloudmask' band to mask excluded pixels from all
+    bands.
 
     Args:
         image: HLS ee.Image with a 'cloudmask' band added by add_fmask_cloud_mask.
@@ -100,7 +104,7 @@ def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
     Returns:
         ee.Image with cloud, shadow, and any additionally flagged pixels masked out across all bands.
     """
-    return image.updateMask(image.select("cloudmask").Not())
+    return _masking.apply_cloud_mask(image)
 
 
 def build_cloudfree_hls_l30_col(
@@ -160,13 +164,13 @@ def build_hls_non_water_mask(
     Returns:
         ee.Image with a single 'non_water' band where 1 = land and 0 = water.
     """
-    comp = hls_collection.median()
-    water = (
-        comp.select("MNDWI").gt(mndwi_thresh)
-        .And(comp.select("NDVI").lt(ndvi_thresh))
-        .And(comp.select("NIR").lt(nir_thresh))
+    return _masking.build_non_water_mask(
+        hls_collection,
+        nir_band="NIR",
+        mndwi_thresh=mndwi_thresh,
+        ndvi_thresh=ndvi_thresh,
+        nir_thresh=nir_thresh,
     )
-    return water.Not().rename("non_water")
 
 
 def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
@@ -179,4 +183,4 @@ def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
     Returns:
         ee.Image with water pixels masked out across all bands.
     """
-    return image.updateMask(non_water_mask)
+    return _masking.apply_water_mask(image, non_water_mask)

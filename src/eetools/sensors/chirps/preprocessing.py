@@ -7,7 +7,8 @@ from eetools.utils import validate_collection_date_range
 def validate_chirps_date_range(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> None:
-    """Validate that the requested date window overlaps available CHIRPS v3 Daily Reanalysis imagery over the AOI.
+    """Validate that the requested date window overlaps available CHIRPS v3 Daily
+    Reanalysis imagery over the AOI.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -45,7 +46,8 @@ def get_chirps_collection(
     start_date: str | ee.Date,
     end_date: str | ee.Date,
 ) -> ee.ImageCollection:
-    """Build a CHIRPS v3 Daily Reanalysis precipitation collection for the AOI and date range.
+    """Build a CHIRPS v3 Daily Reanalysis precipitation collection for the AOI and date
+    range.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -55,14 +57,14 @@ def get_chirps_collection(
     Returns:
         ee.ImageCollection of daily precipitation images (mm/day) from the UCSB-CHC/CHIRPS/V3/DAILY_RNL dataset.
     """
-    start_date = ee.Date(start_date)
-    end_date = ee.Date(end_date)
+    start = ee.Date(start_date)
+    end = ee.Date(end_date)
 
-    validate_chirps_date_range(aoi, start_date, end_date)
+    validate_chirps_date_range(aoi, start, end)
 
     return (
         ee.ImageCollection(CHIRPS_COLLECTION)
         .filterBounds(aoi)
-        .filterDate(start_date, end_date)
+        .filterDate(start, end)
         .map(process_chirps_image)
     )

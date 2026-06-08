@@ -47,16 +47,51 @@ Earth Engine must be authenticated once on the machine (`earthengine authenticat
 ## Commands
 
 ```bash
-# Tests
-uv run pytest
+# Tests — see "Testing" below for the marker split
+uv run pytest                  # everything (EE tests skip without a session)
+uv run pytest -m "not ee"      # pure/mock tests only — fast, no credentials (what CI runs)
 
-# Lint (ruff: E, F, I rule sets; line length 88)
-uv run ruff check src/
+# Lint (ruff: E, F, I; E501 is deferred to the formatter)
+uv run ruff check src/ tests/
 
 # Format
-uv run black src/
-uv run ruff check --fix src/   # applies import sorting (I)
+uv run black src/ tests/
+uv run black --check src/ tests/   # CI gate
+uv run ruff check --fix src/ tests/   # applies import sorting (I)
+
+# Type check
+uv run mypy src/
 ```
+
+CI (`.github/workflows/ci.yml`) runs ruff + `black --check` + mypy + `pytest -m "not ee"`
+on Python 3.11 and 3.12.
+
+---
+
+## Testing
+
+The suite is split into two tiers by pytest marker (registered in `pyproject.toml`):
+
+- **Pure / mock tests** (no marker) — `_config`, `tables`, `plots`, `constants`,
+  validation guards, and the `io` export layer (mocked so no real export tasks fire).
+  These always run and need no Earth Engine session.
+- **`@pytest.mark.ee`** — exercise real `ee.*` graph-building. Most run on *synthetic
+  `ee.Image.constant` images* so index/QA math is checked against hand-computed values;
+  a subset is also marked **`@pytest.mark.slow`** because it hits real datasets.
+
+The `ee_session` fixture (in `tests/conftest.py`) initializes Earth Engine from
+`EE_PROJECT` (or `GOOGLE_CLOUD_PROJECT`); if no authenticated session is available it
+**skips** every `ee` test rather than failing — so CI stays green without credentials.
+
+```bash
+# Run the EE tests locally (requires `earthengine authenticate` + a registered project)
+EE_PROJECT=<your-project> uv run pytest        # PowerShell: $env:EE_PROJECT="<project>"
+uv run pytest -m "not slow"                    # synthetic EE tests, skip network datasets
+uv run pytest -m "not ee"                      # pure tests only (CI mode)
+```
+
+A persisted default project (`earthengine set_project <project>`) lets the EE tests run
+without setting `EE_PROJECT` each time.
 
 ---
 
@@ -81,7 +116,8 @@ gee_utils/
 │   │   ├── modis/           # preprocessing
 │   │   └── sentinel/        # masking + preprocessing
 │   └── visualization/       # plots.py, summaries.py, tables.py (matplotlib/seaborn/pandas)
-└── tests/
+└── tests/                   # one test_*.py per source module; conftest.py holds shared
+                             # fixtures + the ee_session fixture (see "Testing")
 ```
 
 **Per-sensor module pattern** (`sensors/<sensor>/`): a `masking.py` builds the cloud-free (and optional water-masked) collection, and a `preprocessing.py` exposes the public `get_<sensor>_collection(aoi, start_date, end_date, ...)` that validates the date range, applies scale factors/offsets, calls `calc_indices()` with the sensor's `*_BAND_MAP`, and returns an `ee.ImageCollection`. Follow this shape when adding a sensor.

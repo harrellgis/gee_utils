@@ -1,6 +1,11 @@
+import logging
+from typing import cast
+
 import ee
 
 from eetools._config import get_project
+
+logger = logging.getLogger(__name__)
 
 
 def export_image_to_drive(
@@ -37,7 +42,7 @@ def export_image_to_drive(
         region=aoi,
         scale=scale,
         crs=crs,
-        maxPixels=1e13,
+        maxPixels=int(1e13),
         formatOptions={"noData": no_data_value},
     )
 
@@ -51,7 +56,7 @@ def _image_export_suffix(
     date_property: str = "date",
     fallback_property: str = "year",
 ) -> str:
-    props = image.toDictionary([date_property, fallback_property]).getInfo()
+    props = cast(dict, image.toDictionary([date_property, fallback_property]).getInfo())
     if props.get(date_property) is not None:
         return str(props[date_property]).replace(":", "-")
     if props.get(fallback_property) is not None:
@@ -73,7 +78,8 @@ def export_image_collection_to_drive(
     fallback_property: str = "year",
     file_suffix: str | None = None,
 ) -> list:
-    """Export every image in an ImageCollection to Google Drive as individual GeoTIFF tasks.
+    """Export every image in an ImageCollection to Google Drive as individual GeoTIFF
+    tasks.
 
     Args:
         collection: ee.ImageCollection to export.
@@ -96,7 +102,7 @@ def export_image_collection_to_drive(
     if band_names is not None:
         collection = collection.select(band_names)
 
-    n = collection.size().getInfo()
+    n = cast(int, collection.size().getInfo())
     images = collection.toList(n)
     tasks = []
 
@@ -108,7 +114,7 @@ def export_image_collection_to_drive(
             if date_property is None
             else [date_property, fallback_property]
         )
-        props = image.toDictionary(props_to_get).getInfo()
+        props = cast(dict, image.toDictionary(props_to_get).getInfo())
 
         if date_property is not None and props.get(date_property) is not None:
             suffix = str(props[date_property]).replace(":", "-")
@@ -218,11 +224,11 @@ def export_image_to_asset(
         assetId=asset_id,
         region=aoi,
         scale=scale,
-        maxPixels=1e13,
+        maxPixels=int(1e13),
         crs=crs,
     )
     task.start()
-    print("Export started:", task.status())
+    logger.info("Export started: %s", task.status())
 
 
 def export_table_to_drive(
@@ -252,11 +258,11 @@ def export_table_to_drive(
         fileFormat=fileFormat,
     )
     task.start()
-    print("Export started:", task.status())
+    logger.info("Export started: %s", task.status())
 
 
 def check_ee_task_status(task_id: str) -> dict | None:
-    """Query an Earth Engine batch task by ID and print its current status fields.
+    """Query an Earth Engine batch task by ID and log its current status fields.
 
     Args:
         task_id: The EE task ID string to look up.
@@ -269,12 +275,15 @@ def check_ee_task_status(task_id: str) -> dict | None:
     for task in tasks:
         if task.id == task_id:
             status = task.status()
-            print("Task ID:", task_id)
-            print("State:", status.get("state"))
-            print("Description:", status.get("description"))
-            print("Progress:", status.get("progress", "N/A"))
-            print("Error Message:", status.get("error_message", "None"))
+            logger.info(
+                "Task %s — state=%s, description=%s, progress=%s, error=%s",
+                task_id,
+                status.get("state"),
+                status.get("description"),
+                status.get("progress", "N/A"),
+                status.get("error_message", "None"),
+            )
             return status
 
-    print("Task ID not found.")
+    logger.warning("Task ID not found: %s", task_id)
     return None

@@ -23,11 +23,11 @@ def _qa_image(ee, qa_pixel, qa_radsat, data=0.5):
 @pytest.mark.parametrize(
     "qa_pixel, qa_radsat, expected",
     [
-        (0, 0, 0),       # clear
-        (1, 0, 1),       # QA_PIXEL bit 0 set (fill) -> flagged
+        (0, 0, 0),  # clear
+        (1, 0, 1),  # QA_PIXEL bit 0 set (fill) -> flagged
         (0b10000, 0, 1),  # bit 4 (cloud) set -> flagged
         (0b100000, 0, 0),  # bit 5 (outside 0-4 window) -> not flagged
-        (0, 1, 1),       # saturated band -> flagged
+        (0, 1, 1),  # saturated band -> flagged
     ],
 )
 def test_l8_add_cld_shdw_mask_bits(

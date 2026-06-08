@@ -99,8 +99,7 @@ def stats_feature_collection():
             return {
                 "type": "FeatureCollection",
                 "features": [
-                    {"type": "Feature", "properties": dict(row)}
-                    for row in self._rows
+                    {"type": "Feature", "properties": dict(row)} for row in self._rows
                 ],
             }
 

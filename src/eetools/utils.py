@@ -1,5 +1,7 @@
-import ee
 from pathlib import Path
+from typing import cast
+
+import ee
 import geopandas as gpd
 from shapely.geometry import mapping
 
@@ -11,7 +13,8 @@ def validate_collection_date_range(
     end_date: ee.Date,
     sensor_label: str = "imagery",
 ) -> None:
-    """Validate that a requested date window overlaps the available imagery over the AOI.
+    """Validate that a requested date window overlaps the available imagery over the
+    AOI.
 
     Args:
         collection_id: EE collection asset ID string, or list of IDs that are merged before checking.
@@ -34,13 +37,15 @@ def validate_collection_date_range(
     if col.size().getInfo() == 0:
         raise ValueError(f"No {sensor_label} found for the provided AOI.")
 
-    min_ts = col.aggregate_min("system:time_start").getInfo()
-    max_ts = col.aggregate_max("system:time_start").getInfo()
+    # getInfo() is typed Optional; in this branch the collection is non-empty so
+    # the aggregates/millis are real numbers — cast for the numeric comparisons.
+    min_ts = cast(int, col.aggregate_min("system:time_start").getInfo())
+    max_ts = cast(int, col.aggregate_max("system:time_start").getInfo())
     min_str = ee.Date(min_ts).format("YYYY-MM-dd").getInfo()
     max_str = ee.Date(max_ts).format("YYYY-MM-dd").getInfo()
 
-    s_ms = start_date.millis().getInfo()
-    e_ms = end_date.millis().getInfo()
+    s_ms = cast(int, start_date.millis().getInfo())
+    e_ms = cast(int, end_date.millis().getInfo())
     s_str = start_date.format("YYYY-MM-dd").getInfo()
     e_str = end_date.format("YYYY-MM-dd").getInfo()
 
@@ -74,7 +79,8 @@ def _clip_and_mask_image(image: ee.Image, geometry: ee.Geometry) -> ee.Image:
 def clip_image_to_fc(
     fc: ee.FeatureCollection, image: ee.Image, name_field: str = "site_name"
 ) -> ee.ImageCollection:
-    """Clip a single image to each feature in a FeatureCollection, producing one clipped image per feature.
+    """Clip a single image to each feature in a FeatureCollection, producing one clipped
+    image per feature.
 
     Args:
         fc: ee.FeatureCollection whose features define the clip geometries.
@@ -95,7 +101,8 @@ def clip_image_to_fc(
 
 
 def gpkg_to_ee_geometry(path, layer=None) -> ee.Geometry:
-    """Read a local GeoPackage file and return its contents as a single ee.Geometry in WGS84.
+    """Read a local GeoPackage file and return its contents as a single ee.Geometry in
+    WGS84.
 
     Args:
         path: File path (str or Path) to the .gpkg file.
@@ -184,9 +191,13 @@ def get_sites_geometry(sites_fc: ee.FeatureCollection) -> ee.Geometry:
 
 
 def get_collection_min_max(
-    image_collection: ee.ImageCollection, band_name: str, scale: int, max_pixels: float = 1e13
+    image_collection: ee.ImageCollection,
+    band_name: str,
+    scale: int,
+    max_pixels: float = 1e13,
 ) -> tuple[float, float]:
-    """Get the approximate global min and max of a band across all images in an ee.ImageCollection.
+    """Get the approximate global min and max of a band across all images in an
+    ee.ImageCollection.
 
     Args:
         image_collection: ee.ImageCollection to inspect.
@@ -197,26 +208,29 @@ def get_collection_min_max(
     Returns:
         tuple of (global_min, global_max) as Python floats.
     """
-    image_list = image_collection.toList(image_collection.size())
-    n_images = image_collection.size().getInfo()
-    mins, maxs = [], []
+    min_key = f"{band_name}_min"
+    max_key = f"{band_name}_max"
 
-    for i in range(n_images):
-        image = ee.Image(image_list.get(i))
-        stats = (
-            image.select(band_name)
-            .reduceRegion(
-                reducer=ee.Reducer.minMax(),
-                geometry=image.geometry(),
-                scale=scale,
-                maxPixels=max_pixels,
-            )
-            .getInfo()
+    # Reduce each image to its per-image min/max server-side, then aggregate the
+    # extremes across the collection — one round-trip instead of one per image.
+    def _img_min_max(image: ee.Image) -> ee.Feature:
+        image = ee.Image(image)
+        stats = image.select(band_name).reduceRegion(
+            reducer=ee.Reducer.minMax(),
+            geometry=image.geometry(),
+            scale=scale,
+            maxPixels=int(max_pixels),
         )
-        mins.append(stats[f"{band_name}_min"])
-        maxs.append(stats[f"{band_name}_max"])
+        return ee.Feature(None, {"min": stats.get(min_key), "max": stats.get(max_key)})
 
-    return min(mins), max(maxs)
+    fc = ee.FeatureCollection(image_collection.map(_img_min_max))
+    extremes = cast(
+        dict,
+        ee.Dictionary(
+            {"min": fc.aggregate_min("min"), "max": fc.aggregate_max("max")}
+        ).getInfo(),
+    )
+    return extremes["min"], extremes["max"]
 
 
 def get_image_min_max(
@@ -254,7 +268,8 @@ def get_image_min_max(
 
 
 def resample_pixel_resolution(image: ee.Image, output_resolution: int) -> ee.Image:
-    """Resample an image to a target pixel resolution using mean aggregation for downscaling or bilinear interpolation for upscaling.
+    """Resample an image to a target pixel resolution using mean aggregation for
+    downscaling or bilinear interpolation for upscaling.
 
     Args:
         image: ee.Image to resample.
@@ -271,7 +286,9 @@ def resample_pixel_resolution(image: ee.Image, output_resolution: int) -> ee.Ima
     is_downscaling = output_scale.gt(nominal_scale)
 
     downscaled = (
-        image.reduceResolution(reducer=ee.Reducer.mean(), bestEffort=True, maxPixels=4096)
+        image.reduceResolution(
+            reducer=ee.Reducer.mean(), bestEffort=True, maxPixels=4096
+        )
         .reproject(crs=projection.crs(), scale=output_resolution)
         .copyProperties(image, image.propertyNames())
     )
@@ -301,7 +318,8 @@ def join_collections(
     join_property: str = "year",
     copy_properties_from: str = "col_1",
 ) -> ee.ImageCollection:
-    """Join two image collections on a shared property and stack selected bands into a single collection.
+    """Join two image collections on a shared property and stack selected bands into a
+    single collection.
 
     Args:
         col_1: Primary ee.ImageCollection.
@@ -322,12 +340,18 @@ def join_collections(
         renamed_band_names_2 = band_names_2
 
     join_filter = ee.Filter.equals(leftField=join_property, rightField=join_property)
-    joined = ee.Join.inner().apply(primary=col_1, secondary=col_2, condition=join_filter)
+    joined = ee.Join.inner().apply(
+        primary=col_1, secondary=col_2, condition=join_filter
+    )
 
     def _merge_pair(feature):
         feature = ee.Feature(feature)
-        img_1 = ee.Image(feature.get("primary")).select(band_names_1, renamed_band_names_1)
-        img_2 = ee.Image(feature.get("secondary")).select(band_names_2, renamed_band_names_2)
+        img_1 = ee.Image(feature.get("primary")).select(
+            band_names_1, renamed_band_names_1
+        )
+        img_2 = ee.Image(feature.get("secondary")).select(
+            band_names_2, renamed_band_names_2
+        )
         source_img = (
             ee.Image(feature.get("secondary"))
             if copy_properties_from == "col_2"
@@ -343,9 +367,10 @@ def join_collections(
 
 def temporal_reducer(
     col: ee.ImageCollection,
-    percentiles: list[int] = [10, 90],
+    percentiles: list[int] | None = None,
 ) -> ee.Image:
-    """Reduce an ImageCollection over time to mean, percentiles, and stdDev bands per pixel.
+    """Reduce an ImageCollection over time to mean, percentiles, and stdDev bands per
+    pixel.
 
     Args:
         col: ee.ImageCollection to reduce.
@@ -354,6 +379,8 @@ def temporal_reducer(
     Returns:
         ee.Image with one output band per reducer output (e.g. band_mean, band_p10, band_p90, band_stdDev).
     """
+    if percentiles is None:
+        percentiles = [10, 90]
     reducer = (
         ee.Reducer.mean()
         .combine(reducer2=ee.Reducer.percentile(percentiles), sharedInputs=True)
@@ -363,7 +390,8 @@ def temporal_reducer(
 
 
 def add_year_month(image: ee.Image) -> ee.Image:
-    """Add 'year' and 'month' integer properties to an image derived from its system:time_start.
+    """Add 'year' and 'month' integer properties to an image derived from its
+    system:time_start.
 
     Args:
         image: ee.Image with a valid system:time_start property.
@@ -372,4 +400,4 @@ def add_year_month(image: ee.Image) -> ee.Image:
         ee.Image with 'year' and 'month' properties set from the image's acquisition date.
     """
     date = ee.Date(image.get("system:time_start"))
-    return image.set({"year": date.get("year"), "month": date.get("month")})
+    return ee.Image(image.set({"year": date.get("year"), "month": date.get("month")}))

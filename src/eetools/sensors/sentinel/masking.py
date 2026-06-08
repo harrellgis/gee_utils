@@ -1,17 +1,18 @@
 import ee
 
 from eetools.constants import (
-    S2_SR_COLLECTION,
-    S2_CLOUD_PROB_COLLECTION,
-    CLOUD_FILTER,
-    CLD_PRB_THRESH,
-    NIR_DRK_THRESH,
-    CLD_PRJ_DIST_KM,
-    DDT_SCALE_M,
-    MORPH_SCALE_M,
-    ERODE_RADIUS_M,
     BUFFER_M,
+    CLD_PRB_THRESH,
+    CLD_PRJ_DIST_KM,
+    CLOUD_FILTER,
+    DDT_SCALE_M,
+    ERODE_RADIUS_M,
+    MORPH_SCALE_M,
+    NIR_DRK_THRESH,
+    S2_CLOUD_PROB_COLLECTION,
+    S2_SR_COLLECTION,
 )
+from eetools.sensors import masking as _masking
 
 
 def mask_edges(image: ee.Image) -> ee.Image:
@@ -31,7 +32,8 @@ def mask_edges(image: ee.Image) -> ee.Image:
 def get_s2_sr_cld_col(
     aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
 ) -> ee.ImageCollection:
-    """Build a joined Sentinel-2 SR and s2cloudless collection filtered to the AOI and date range.
+    """Build a joined Sentinel-2 SR and s2cloudless collection filtered to the AOI and
+    date range.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -79,16 +81,12 @@ def add_cld_shdw_mask(image: ee.Image) -> ee.Image:
     is_cloud = cld_prb.gt(CLD_PRB_THRESH)
 
     not_water = image.select("SCL").neq(6)
-    dark_pixels = (
-        image.select("B8").multiply(0.0001).lt(NIR_DRK_THRESH).And(not_water)
-    )
+    dark_pixels = image.select("B8").multiply(0.0001).lt(NIR_DRK_THRESH).And(not_water)
 
     shadow_azimuth_deg = ee.Number(90).subtract(
         ee.Number(image.get("MEAN_SOLAR_AZIMUTH_ANGLE"))
     )
-    max_dist_px = (
-        ee.Number(CLD_PRJ_DIST_KM).multiply(1000).divide(DDT_SCALE_M).int()
-    )
+    max_dist_px = ee.Number(CLD_PRJ_DIST_KM).multiply(1000).divide(DDT_SCALE_M).int()
 
     clouds_for_ddt = is_cloud.reproject(
         crs=image.select(0).projection(), scale=DDT_SCALE_M
@@ -112,7 +110,8 @@ def add_cld_shdw_mask(image: ee.Image) -> ee.Image:
 
 
 def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
-    """Apply the inverse of the 'cloudmask' band to mask cloud and shadow pixels from all bands.
+    """Apply the inverse of the 'cloudmask' band to mask cloud and shadow pixels from
+    all bands.
 
     Args:
         image: ee.Image with a 'cloudmask' band added by add_cld_shdw_mask.
@@ -120,7 +119,7 @@ def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
     Returns:
         ee.Image with cloud and shadow pixels masked out across all bands.
     """
-    return image.updateMask(image.select("cloudmask").Not())
+    return _masking.apply_cloud_mask(image)
 
 
 def build_cloudfree_s2sr_col(
@@ -160,13 +159,13 @@ def build_s2_non_water_mask(
     Returns:
         ee.Image with a single 'non_water' band where 1 = land and 0 = water.
     """
-    comp = s2_collection.median()
-    water = (
-        comp.select("MNDWI").gt(mndwi_thresh)
-        .And(comp.select("NDVI").lt(ndvi_thresh))
-        .And(comp.select("B8").lt(nir_thresh))
+    return _masking.build_non_water_mask(
+        s2_collection,
+        nir_band="B8",
+        mndwi_thresh=mndwi_thresh,
+        ndvi_thresh=ndvi_thresh,
+        nir_thresh=nir_thresh,
     )
-    return water.Not().rename("non_water")
 
 
 def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
@@ -179,4 +178,4 @@ def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
     Returns:
         ee.Image with water pixels masked out across all bands.
     """
-    return image.updateMask(non_water_mask)
+    return _masking.apply_water_mask(image, non_water_mask)

@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 
 def stats_fc_to_df(stats_fc) -> pd.DataFrame:
@@ -20,7 +19,8 @@ def combine_site_season_tables(
     dfs: list[pd.DataFrame] | tuple[pd.DataFrame, ...],
     expected_temporal_scale: str | None = "monthly",
 ) -> pd.DataFrame:
-    """Concatenate per-site or per-season DataFrames, optionally filtering to one temporal scale.
+    """Concatenate per-site or per-season DataFrames, optionally filtering to one
+    temporal scale.
 
     Args:
         dfs: List or tuple of pd.DataFrames to concatenate; must contain at least one DataFrame.
@@ -37,10 +37,7 @@ def combine_site_season_tables(
     if "date" in combined.columns:
         combined["date"] = pd.to_datetime(combined["date"])
 
-    if (
-        expected_temporal_scale is not None
-        and "temporal_scale" in combined.columns
-    ):
+    if expected_temporal_scale is not None and "temporal_scale" in combined.columns:
         combined = combined[
             combined["temporal_scale"].eq(expected_temporal_scale)
         ].copy()

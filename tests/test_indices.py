@@ -57,9 +57,7 @@ def test_calc_evi_value(synthetic_reflectance_image, first_value):
         red_band="red",
         blue_band="blue",
     )
-    expected = 2.5 * (
-        (0.50 - 0.30) / (0.50 + 6 * 0.30 - 7.5 * 0.10 + 1)
-    )
+    expected = 2.5 * ((0.50 - 0.30) / (0.50 + 6 * 0.30 - 7.5 * 0.10 + 1))
     assert first_value(out, "EVI") == pytest.approx(expected)
 
 
@@ -112,8 +110,19 @@ def test_calc_indices_appends_full_band_set(
         synthetic_reflectance_image, band_map=reflectance_band_map, include_ndre=True
     )
     names = out.bandNames().getInfo()
-    for band in ["NDVI", "kNDVI_fixed", "Fpar", "EVI", "NDWI", "MNDWI", "SAVI",
-                 "NDMI", "NBR", "NIRv", "NDRE"]:
+    for band in [
+        "NDVI",
+        "kNDVI_fixed",
+        "Fpar",
+        "EVI",
+        "NDWI",
+        "MNDWI",
+        "SAVI",
+        "NDMI",
+        "NBR",
+        "NIRv",
+        "NDRE",
+    ]:
         assert band in names
 
 
@@ -126,9 +135,7 @@ def test_calc_indices_excludes_ndre_by_default(
     assert "NDRE" not in out.bandNames().getInfo()
 
 
-def test_calc_veg_indices_band_set(
-    synthetic_reflectance_image, reflectance_band_map
-):
+def test_calc_veg_indices_band_set(synthetic_reflectance_image, reflectance_band_map):
     from eetools.sensors.indices import calc_veg_indices
 
     out = calc_veg_indices(synthetic_reflectance_image, band_map=reflectance_band_map)
