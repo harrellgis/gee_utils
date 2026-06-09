@@ -8,3 +8,6 @@ build/
 
 # Local, machine-specific Claude Code settings (e.g. personal EE_PROJECT)
 .claude/settings.local.json
+
+# Scratch/exploratory notebooks (not tracked for now)
+notebooks/

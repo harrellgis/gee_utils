@@ -18,12 +18,19 @@ dependencies = [
     "seaborn>=0.13.0",
 ]
 
+[project.optional-dependencies]
+notebook = [
+    "geemap>=0.37.2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "black>=24.0.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "jupyterlab>=4.5.8",
+    "ipykernel>=7.2.0",
 ]
 
 [tool.hatch.version]

@@ -33,6 +33,24 @@ uv pip install -e /path/to/gee_utils      # editable
 uv pip install git+https://github.com/<owner>/gee_utils.git
 ```
 
+### Optional dependencies
+
+Extra features live behind [optional extras](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#extras) so the base install stays lean:
+
+| Extra | Adds | For |
+| --- | --- | --- |
+| `notebook` | [`geemap`](https://geemap.org/) | Interactive Earth Engine map visualization in Jupyter notebooks |
+
+```bash
+# Local development — include an extra (or use --all-extras)
+uv sync --extra notebook
+
+# As a dependency in another project
+uv pip install -e "/path/to/gee_utils[notebook]"
+# or
+uv pip install "eetools[notebook] @ git+https://github.com/<owner>/gee_utils.git"
+```
+
 ## Authentication
 
 Authenticate once per machine, then initialize in code with your project:
