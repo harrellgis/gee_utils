@@ -19,6 +19,15 @@ MODIS_LAI_FPAR_COLLECTION = "MODIS/061/MCD15A3H"
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
+# Copernicus DEM GLO-30 — canonical elevation source for all terrain work
+COPERNICUS_DEM_COLLECTION = "COPERNICUS/DEM/GLO30"
+
+# Biodiversity Intactness Index (BII) — sub-Saharan Africa (bii4africa, sat-io)
+_BII_ROOT = "projects/earthengine-legacy/assets/projects/sat-io/open-datasets/BII"
+BII_1KM_COLLECTION = f"{_BII_ROOT}/BII_1km"
+BII_8KM_COLLECTION = f"{_BII_ROOT}/BII_8km"
+BII_MASK_ASSET = f"{_BII_ROOT}/BII_Mask"
+
 #################### SENTINEL-2 ##########################
 S2_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
 S2_ALL_BANDS = [
@@ -184,6 +193,68 @@ LAI_STDDEV_SCALE_FACTOR = 0.1
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"
+
+#################### Copernicus DEM GLO-30 ##########################
+# Canonical elevation datasource for all Earth Engine terrain work. The GLO30
+# product is a tiled ImageCollection of a Digital Surface Model; its source
+# elevation band is "DEM" (metres above the EGM2008 geoid). It is mosaicked and
+# pinned to its native projection before terrain analysis, and the elevation band
+# is renamed to "elevation" so it can be passed directly to ee.Terrain.
+COPERNICUS_DEM_BAND = "DEM"
+ELEVATION_BAND = "elevation"
+# Bands produced by ee.Terrain.products on the elevation image (elevation retained).
+TERRAIN_BANDS = ["elevation", "slope", "aspect", "hillshade"]
+
+#################### Biodiversity Intactness Index (BII) ##########################
+# Per-resolution band order as the asset ingests (drives the toBands() rename).
+# The 1km and 8km collections order their bands differently.
+BII_1KM_BANDS = [
+    "Land Use",
+    "Land Use Intensity",
+    "BII All",
+    "BII Amphibians",
+    "BII Birds",
+    "BII Forbs",
+    "BII Graminoids",
+    "BII Mammals",
+    "BII All Plants",
+    "BII Reptiles",
+    "BII Trees",
+    "BII All Vertebrates",
+]
+BII_8KM_BANDS = [
+    "BII All",
+    "BII Amphibians",
+    "BII Birds",
+    "BII Forbs",
+    "BII Graminoids",
+    "BII Mammals",
+    "BII All Plants",
+    "BII Reptiles",
+    "BII Trees",
+    "BII All Vertebrates",
+    "Land Use",
+    "Land Use Intensity",
+]
+# The per-taxon BII bands (proportion of intact populations, 0-1).
+BII_TAXON_BANDS = [
+    "BII All",
+    "BII Amphibians",
+    "BII Birds",
+    "BII Forbs",
+    "BII Graminoids",
+    "BII Mammals",
+    "BII All Plants",
+    "BII Reptiles",
+    "BII Trees",
+    "BII All Vertebrates",
+]
+BII_LAND_USE_BAND = "Land Use"
+BII_LAND_USE_INTENSITY_BAND = "Land Use Intensity"
+# Output band order after preprocessing: taxon BII bands then the land-use bands.
+BII_PROCESSED_BANDS = BII_TAXON_BANDS + [BII_LAND_USE_BAND, BII_LAND_USE_INTENSITY_BAND]
+# Land Use classes excluded from the Land Use Intensity mask (per the source script).
+BII_EXCLUDED_LAND_USE_CLASSES = [2, 5]
 
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma

@@ -14,6 +14,8 @@ Flavours:
   names from ``constants.py``. ``min``/``max`` assume the **scaled-reflectance**
   output of the ``get_*_collection`` builders (which apply each sensor's scale
   factor/offset, so reflectance is ~0-1) — not raw DN.
+* **Terrain** — elevation/slope/aspect/hillshade single-band layers for the
+  Copernicus DEM and ``ee.Terrain`` products (see ``sensors/dem``).
 * **Vector styling** — ``{"color", "width", ...}`` for site/boundary FeatureCollections.
 * **Derived products** — palettes for downstream metrics (e.g. Biodiversity
   Intactness Index).
@@ -43,6 +45,20 @@ NDVI_VIS_PARAMS = {
         "#207401",
         "#056201",
         "#004C00",  # dense vegetation
+    ],
+}
+
+DNDVI_VIS_PARAMS = {
+    "min": -1,
+    "max": 1,
+    "palette": [
+        "#006400",  # Vegetation Gain
+        "#008000",
+        "#32CD32",
+        "#FFFFFF",  # No Change
+        "#DEB887",
+        "#A52A2A",
+        "#800000",  # Vegetation Loss
     ],
 }
 
@@ -170,6 +186,53 @@ NDRE_VIS_PARAMS = {
         "#7F0000",
         "#004C00",
     ],
+}
+
+# --------------------------------------------------------------------------- #
+# Terrain (Copernicus DEM GLO-30 / ee.Terrain) — single-band layers
+# --------------------------------------------------------------------------- #
+# Elevation in metres; terrain ramp (low blue -> high white). Tune max per AOI.
+ELEVATION_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 3000.0,
+    "palette": [
+        "#333399",
+        "#00a2e5",
+        "#55dd77",
+        "#ffff99",
+        "#aa926b",
+        "#aa928d",
+        "#ffffff",
+    ],
+}
+
+# Slope in degrees (0 flat -> steep); 0-60 covers most terrain.
+SLOPE_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 60.0,
+    "palette": ["#ffffff", "#fdae61", "#f46d43", "#d73027", "#a50026"],
+}
+
+# Aspect in degrees (0-360, cyclic); rainbow with matching ends for wrap-around.
+ASPECT_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 360.0,
+    "palette": [
+        "#ff0000",
+        "#ffff00",
+        "#00ff00",
+        "#00ffff",
+        "#0000ff",
+        "#ff00ff",
+        "#ff0000",
+    ],
+}
+
+# Hillshade is an unsigned byte (0-255); greyscale.
+HILLSHADE_VIS_PARAMS = {
+    "min": 0,
+    "max": 255,
+    "palette": ["#000000", "#ffffff"],
 }
 
 # --------------------------------------------------------------------------- #

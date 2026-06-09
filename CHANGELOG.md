@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `sensors.bii.preprocessing` module for the **Biodiversity Intactness Index** (sat-io
+  sub-Saharan Africa, 1 km & 8 km): `get_bii_image(resolution)` reproduces the published
+  processing (self-masked per-taxon BII bands, land-use-class-masked Land Use Intensity,
+  global validity mask), and `get_bii(aoi, bands, resolution="1km")` returns the selected
+  band(s) clipped to the AOI (single-band for one band, multiband for several).
+- `sensors.dem.preprocessing` module establishing **Copernicus DEM GLO-30**
+  (`COPERNICUS/DEM/GLO30`) as the canonical elevation source: `get_copernicus_dem(aoi=None)`
+  returns the mosaicked DEM in its native projection as a single `elevation` band, and
+  `get_terrain(aoi=None, elevation=None, add_elevation=True)` derives slope/aspect/hillshade
+  via `ee.Terrain.products`.
 - `utils.vector_files_to_feature_collection(sites, layer=None)` combining multiple
   vector files into one `ee.FeatureCollection` with one dissolved feature per file.
   Identity is caller-supplied via `(path, site_id, site_name)` tuples (never inferred
@@ -26,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for interactive Earth Engine map visualization in notebooks.
 - `visualization.vis_params` module of ready-made geemap visualization dictionaries —
   single-band index palettes (NDVI, FPAR, EVI, NDWI, MNDWI, SAVI, NDMI, NBR, NIRv,
-  NDRE), RGB true-colour composites (Sentinel-2, Landsat 8, HLS), site/boundary vector
-  styling, and Biodiversity Intactness Index palettes.
+  NDRE), terrain palettes (elevation, slope, aspect, hillshade), RGB true-colour
+  composites (Sentinel-2, Landsat 8, HLS), site/boundary vector styling, and
+  Biodiversity Intactness Index palettes.
 - `utils.generate_diff_image(image_initial, image_final, bands=None, output_suffix=None)`
   computing the per-band change (final - initial) between two images — e.g. the
   difference in median NDVI between two years.

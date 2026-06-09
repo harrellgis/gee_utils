@@ -5,8 +5,9 @@ import pytest
 from eetools.constants import HLS_COMMON_BANDS, L8_BANDS, S2_BANDS
 from eetools.visualization import vis_params
 
-INDEX_PARAMS = [
+PALETTE_PARAMS = [
     vis_params.NDVI_VIS_PARAMS,
+    vis_params.DNDVI_VIS_PARAMS,
     vis_params.FPAR_VIS_PARAMS,
     vis_params.EVI_VIS_PARAMS,
     vis_params.NDWI_VIS_PARAMS,
@@ -16,6 +17,10 @@ INDEX_PARAMS = [
     vis_params.NBR_VIS_PARAMS,
     vis_params.NIRV_VIS_PARAMS,
     vis_params.NDRE_VIS_PARAMS,
+    vis_params.ELEVATION_VIS_PARAMS,
+    vis_params.SLOPE_VIS_PARAMS,
+    vis_params.ASPECT_VIS_PARAMS,
+    vis_params.HILLSHADE_VIS_PARAMS,
     vis_params.BII_VIS_PARAMS,
     vis_params.BII_CLASS_VIS_PARAMS,
 ]
@@ -27,7 +32,7 @@ RGB_PARAMS = [
 ]
 
 
-@pytest.mark.parametrize("params", INDEX_PARAMS)
+@pytest.mark.parametrize("params", PALETTE_PARAMS)
 def test_palette_params_well_formed(params):
     assert set(params) == {"min", "max", "palette"}
     assert params["min"] < params["max"]
