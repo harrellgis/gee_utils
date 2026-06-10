@@ -51,6 +51,7 @@ S2_ALL_BANDS = [
     "NDMI",
     "NBR",
     "NIRv",
+    "BSI",
     "NDRE",
 ]
 S2_INDEX_BANDS = [
@@ -64,6 +65,7 @@ S2_INDEX_BANDS = [
     "NDMI",
     "NBR",
     "NIRv",
+    "BSI",
     "NDRE",
 ]
 S2_BAND_MAP = {
@@ -113,6 +115,7 @@ HLS_ALL_BANDS = [
     "NDMI",
     "NBR",
     "NIRv",
+    "BSI",
 ]
 HLS_INDEX_BANDS = [
     "NDVI",
@@ -125,6 +128,7 @@ HLS_INDEX_BANDS = [
     "NDMI",
     "NBR",
     "NIRv",
+    "BSI",
 ]
 HLS_BAND_MAP = {
     "blue": "BLUE",
@@ -158,6 +162,7 @@ L8_INDEX_BANDS = [
     "NDMI",
     "NBR",
     "NIRv",
+    "BSI",
 ]
 # Landsat keeps its native SR_B* band names (unlike HLS, which renames), so the
 # full processed band set is the base bands followed by the appended indices.
@@ -255,6 +260,19 @@ BII_LAND_USE_INTENSITY_BAND = "Land Use Intensity"
 BII_PROCESSED_BANDS = BII_TAXON_BANDS + [BII_LAND_USE_BAND, BII_LAND_USE_INTENSITY_BAND]
 # Land Use classes excluded from the Land Use Intensity mask (per the source script).
 BII_EXCLUDED_LAND_USE_CLASSES = [2, 5]
+
+#################### Hansen Global Forest Change ##########################
+# Single static multiband ee.Image (Landsat-derived forest extent/change), 30.92 m.
+HANSEN_GFC_COLLECTION = "UMD/hansen/global_forest_change_2025_v1_13"
+HANSEN_TREECOVER_BAND = "treecover2000"  # canopy cover % for year 2000 (0-100)
+HANSEN_LOSS_BAND = "loss"  # binary stand-replacement loss over the study period
+HANSEN_GAIN_BAND = "gain"  # binary non-forest -> forest gain (2000-2012 only)
+HANSEN_LOSSYEAR_BAND = "lossyear"  # year of loss, encoded 1-25 (see epoch below)
+# Default canopy-cover % threshold defining "forest" when masking loss products.
+HANSEN_TREE_COVER_THRESHOLD = 10
+# lossyear encodes 1-25 for 2001-2025; absolute year = HANSEN_LOSSYEAR_EPOCH + value.
+HANSEN_LOSSYEAR_EPOCH = 2000
+HANSEN_LOSSYEAR_MAX = 25  # highest lossyear code in v1.13 (-> 2025)
 
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma

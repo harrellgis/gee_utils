@@ -69,6 +69,22 @@ def test_calc_nirv_value(synthetic_reflectance_image, first_value):
     assert first_value(out, "NIRv") == pytest.approx(0.50 * 0.25)
 
 
+def test_calc_bsi_value(synthetic_reflectance_image, first_value):
+    from eetools.sensors.indices import calc_bsi
+
+    # ((swir1 + red) - (nir + blue)) / ((swir1 + red) + (nir + blue))
+    out = calc_bsi(
+        synthetic_reflectance_image,
+        swir1_band="swir1",
+        red_band="red",
+        nir_band="nir",
+        blue_band="blue",
+    )
+    num = (0.25 + 0.30) - (0.50 + 0.10)
+    den = (0.25 + 0.30) + (0.50 + 0.10)
+    assert first_value(out, "BSI") == pytest.approx(num / den)
+
+
 def test_calc_fpar_clamped(synthetic_reflectance_image, first_value):
     from eetools.sensors.indices import calc_fpar
 
@@ -121,6 +137,7 @@ def test_calc_indices_appends_full_band_set(
         "NDMI",
         "NBR",
         "NIRv",
+        "BSI",
         "NDRE",
     ]:
         assert band in names

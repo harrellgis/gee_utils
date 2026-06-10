@@ -208,6 +208,44 @@ def calc_ndre(
     return image.normalizedDifference([nir_band, red_edge_band]).rename(output_band)
 
 
+def calc_bsi(
+    image: ee.Image,
+    swir1_band: str,
+    red_band: str,
+    nir_band: str,
+    blue_band: str,
+    output_band: str = "BSI",
+) -> ee.Image:
+    """Calculate the Bare Soil Index (BSI) to highlight exposed/bare soil against
+    vegetation.
+
+    BSI = ((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE)).
+
+    Uses .expression() rather than normalizedDifference because the numerator and
+    denominator are band sums and BSI is validly negative over vegetated surfaces.
+
+    Args:
+        image: ee.Image containing at least swir1_band, red_band, nir_band, and blue_band.
+        swir1_band: Name of the SWIR1 reflectance band.
+        red_band: Name of the red reflectance band.
+        nir_band: Name of the near-infrared reflectance band.
+        blue_band: Name of the blue reflectance band.
+        output_band: Name of the output BSI band (default 'BSI').
+
+    Returns:
+        ee.Image with a single band named output_band containing BSI values in [-1, 1].
+    """
+    return image.expression(
+        "((swir1 + red) - (nir + blue)) / ((swir1 + red) + (nir + blue))",
+        {
+            "swir1": image.select(swir1_band),
+            "red": image.select(red_band),
+            "nir": image.select(nir_band),
+            "blue": image.select(blue_band),
+        },
+    ).rename(output_band)
+
+
 ##################### Fpar calculation ####################
 def calc_fpar(
     image: ee.Image,
@@ -485,7 +523,7 @@ def calc_indices(
     include_ndre: bool = False,
 ) -> ee.Image:
     """Add the full index set (NDVI, kNDVI_fixed, Fpar, EVI, NDWI, MNDWI, SAVI, NDMI,
-    NBR, NIRv, optionally NDRE) to an image.
+    NBR, NIRv, BSI, optionally NDRE) to an image.
 
     Args:
         image: ee.Image containing reflectance bands referenced by band_map.
@@ -513,6 +551,13 @@ def calc_indices(
         calc_ndmi(image, nir_band=band_map["nir"], swir1_band=band_map["swir1"]),
         calc_nbr(image, nir_band=band_map["nir"], swir2_band=band_map["swir2"]),
         calc_nirv(image, nir_band=band_map["nir"], red_band=band_map["red"]),
+        calc_bsi(
+            image,
+            swir1_band=band_map["swir1"],
+            red_band=band_map["red"],
+            nir_band=band_map["nir"],
+            blue_band=band_map["blue"],
+        ),
     ]
 
     if include_ndre:
