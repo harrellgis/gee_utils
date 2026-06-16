@@ -56,7 +56,9 @@ def _image_export_suffix(
     date_property: str = "date",
     fallback_property: str = "year",
 ) -> str:
-    props = cast(dict, image.toDictionary([date_property, fallback_property]).getInfo())
+    props = cast(
+        dict, image.toDictionary([date_property, fallback_property]).getInfo()
+    )
     if props.get(date_property) is not None:
         return str(props[date_property]).replace(":", "-")
     if props.get(fallback_property) is not None:

@@ -24,6 +24,8 @@ Palettes and ranges are ported from the NIP Habitat Health Metric project. They 
 starter defaults; copy and tweak per AOI/season as needed.
 """
 
+import copy
+
 # --------------------------------------------------------------------------- #
 # Single-band spectral index layers ({"min", "max", "palette"})
 # --------------------------------------------------------------------------- #
@@ -288,3 +290,37 @@ BII_CLASS_VIS_PARAMS = {
     "max": 4,
     "palette": ["#d73027", "#fee08b", "#d9ef8b", "#1a9850"],
 }
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def change_vis_min_max(
+    vis_params: dict,
+    new_min: float,
+    new_max: float,
+) -> dict:
+    """Return a copy of a visualization-params dict with new min/max stretch values.
+
+    Use this to re-stretch a preset (e.g. NDVI_VIS_PARAMS) for a specific AOI/index
+    without authoring a new dict. The input dict is not modified — the shared module-level
+    presets are safe to pass in.
+
+    Args:
+        vis_params: A visualization-params dict (e.g. one of the *_VIS_PARAMS presets), typically containing 'min', 'max', and 'palette'.
+        new_min: New minimum stretch value.
+        new_max: New maximum stretch value.
+
+    Returns:
+        A new dict identical to vis_params but with 'min' and 'max' set to the new values.
+
+    Raises:
+        ValueError: If new_min is not less than new_max.
+    """
+    if new_min >= new_max:
+        raise ValueError(f"new_min ({new_min}) must be less than new_max ({new_max})")
+
+    updated = copy.deepcopy(vis_params)
+    updated["min"] = new_min
+    updated["max"] = new_max
+    return updated
