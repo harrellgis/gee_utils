@@ -274,6 +274,48 @@ HANSEN_TREE_COVER_THRESHOLD = 10
 HANSEN_LOSSYEAR_EPOCH = 2000
 HANSEN_LOSSYEAR_MAX = 25  # highest lossyear code in v1.13 (-> 2025)
 
+#################### SENTINEL-1 SAR GRD ##########################
+# C-band dual-pol Ground Range Detected, log-scaled to dB. Heterogeneous time
+# series (mixed polarizations / modes / resolutions / orbit passes), so the
+# collection builder always filters to a homogeneous set before use. No spectral
+# indices (SAR backscatter, not reflectance); speckle filtering is not applied by
+# the source and is added here.
+S1_GRD_COLLECTION = "COPERNICUS/S1_GRD"
+# Common IW land configuration: dual cross-pol VV+VH. Cross-pol (VH) is the most
+# informative for vegetation/water discrimination.
+S1_DEFAULT_POLARIZATIONS = ["VV", "VH"]
+S1_DEFAULT_INSTRUMENT_MODE = "IW"  # Interferometric Wide — the standard land mode
+# ASCENDING and DESCENDING look geometries differ and must never be mixed in a
+# time series; the builder pins one pass (override per analysis).
+S1_DEFAULT_ORBIT_PASS = "DESCENDING"
+# Scene-edge pixels carry very low backscatter (terrain-correction border noise);
+# pixels below this dB value are masked.
+S1_EDGE_THRESHOLD_DB = -30.0
+# Focal-median speckle-filter neighbourhood radius (median is unbiased in dB).
+S1_SPECKLE_RADIUS_M = 50
+S1_SCALE = 10
+
+#################### OPERA DSWx (Dynamic Surface Water Extent) ##########################
+# Pre-classified surface-water products (no spectral indexing). Shared
+# WTR/BWTR/CONF/DIAG band schema on a 30 m MGRS grid; HLS (optical) and S1 (radar)
+# differ in their invalid/mask class codes — see the per-product valid-max below.
+DSWX_HLS_COLLECTION = "OPERA/DSWX/L3_V1/HLS"  # optical (Harmonized Landsat/Sentinel-2)
+DSWX_S1_COLLECTION = "OPERA/DSWX/L3_V1/S1"  # radar (Sentinel-1), cloud-independent
+DSWX_WTR_BAND = "WTR_Water_classification"  # primary water classification
+DSWX_BWTR_BAND = "BWTR_Binary_water"  # binary water (1) / not-water (0)
+DSWX_CONF_BAND = "CONF_Confidence"
+DSWX_DIAG_BAND = "DIAG_diagnostic"
+# Shared water-class codes.
+DSWX_OPEN_WATER = 1
+DSWX_PARTIAL_SURFACE_WATER = 2  # HLS only — subpixel inundation (wetlands/coastline)
+DSWX_INUNDATED_VEGETATION = 3  # S1 only — high dual-pol ratio + wetland land cover
+# First invalid class code per product; pixels with WTR >= this are sensor masks,
+# not water. HLS: 252 snow / 253 cloud / 254 ocean. S1: 250 HAND / 251
+# layover-shadow / 254 ocean (the catalog sample code wrongly reuses 252 for S1).
+DSWX_HLS_VALID_MAX = 252
+DSWX_S1_VALID_MAX = 250
+DSWX_SCALE = 30
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 

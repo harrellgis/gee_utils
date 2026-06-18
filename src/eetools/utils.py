@@ -289,9 +289,7 @@ def vector_files_to_feature_collection(
         raise ValueError("No files provided to build a FeatureCollection.")
 
     features = [
-        load_site_feature(
-            path, site_id=site_id, site_name=site_name, layer=layer
-        )
+        load_site_feature(path, site_id=site_id, site_name=site_name, layer=layer)
         for path, site_id, site_name in sites
     ]
     return ee.FeatureCollection(features)
@@ -390,9 +388,7 @@ def get_collection_min_max(
             scale=scale,
             maxPixels=int(max_pixels),
         )
-        return ee.Feature(
-            None, {"min": stats.get(min_key), "max": stats.get(max_key)}
-        )
+        return ee.Feature(None, {"min": stats.get(min_key), "max": stats.get(max_key)})
 
     fc = ee.FeatureCollection(image_collection.map(_img_min_max))
     extremes = cast(
@@ -438,9 +434,7 @@ def get_image_min_max(
     return stats[min_key], stats[max_key]
 
 
-def resample_pixel_resolution(
-    image: ee.Image, output_resolution: int
-) -> ee.Image:
+def resample_pixel_resolution(image: ee.Image, output_resolution: int) -> ee.Image:
     """Resample an image to a target pixel resolution using mean aggregation for
     downscaling or bilinear interpolation for upscaling.
 
@@ -512,9 +506,7 @@ def join_collections(
     if renamed_band_names_2 is None:
         renamed_band_names_2 = band_names_2
 
-    join_filter = ee.Filter.equals(
-        leftField=join_property, rightField=join_property
-    )
+    join_filter = ee.Filter.equals(leftField=join_property, rightField=join_property)
     joined = ee.Join.inner().apply(
         primary=col_1, secondary=col_2, condition=join_filter
     )
@@ -533,9 +525,7 @@ def join_collections(
             else ee.Image(feature.get("primary"))
         )
         merged = img_1.addBands(img_2)
-        return merged.copyProperties(
-            source_img, source_img.propertyNames()
-        ).set(
+        return merged.copyProperties(source_img, source_img.propertyNames()).set(
             join_property, ee.Image(feature.get("primary")).get(join_property)
         )
 
@@ -577,9 +567,7 @@ def add_year_month(image: ee.Image) -> ee.Image:
         ee.Image with 'year' and 'month' properties set from the image's acquisition date.
     """
     date = ee.Date(image.get("system:time_start"))
-    return ee.Image(
-        image.set({"year": date.get("year"), "month": date.get("month")})
-    )
+    return ee.Image(image.set({"year": date.get("year"), "month": date.get("month")}))
 
 
 def generate_diff_image(
@@ -610,9 +598,7 @@ def generate_diff_image(
     diff = image_final.subtract(image_initial)
 
     if output_suffix is not None:
-        renamed = diff.bandNames().map(
-            lambda name: ee.String(name).cat(output_suffix)
-        )
+        renamed = diff.bandNames().map(lambda name: ee.String(name).cat(output_suffix))
         diff = diff.rename(renamed)
 
     return diff
