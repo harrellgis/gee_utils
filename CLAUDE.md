@@ -109,18 +109,28 @@ gee_utils/
 │   ├── utils.py             # date-range validation, AOI/GPKG → ee.Geometry, clipping, joins, temporal reducers, resampling
 │   ├── sensors/
 │   │   ├── indices.py       # all spectral-index functions + calc_indices()/calc_veg_indices() multi-index builders
-│   │   ├── chirps/          # preprocessing
+│   │   ├── masking.py       # shared cloud/water mask helpers used by the optical sensors
+│   │   ├── bii/             # Biodiversity Intactness Index preprocessing
+│   │   ├── chirps/          # precipitation preprocessing (+ monthly/annual rainfall table export)
+│   │   ├── dem/             # Copernicus DEM / terrain preprocessing
+│   │   ├── dswx/            # OPERA DSWx surface water (HLS + S1) masking + preprocessing
+│   │   ├── dynamicworld/    # Dynamic World LULC masking (cover-type filter) + preprocessing
 │   │   ├── esa/             # WorldCover preprocessing
+│   │   ├── hansen/          # Global Forest Change preprocessing
 │   │   ├── hls/             # masking + preprocessing
 │   │   ├── landsat/         # masking + preprocessing
 │   │   ├── modis/           # preprocessing
-│   │   └── sentinel/        # masking + preprocessing
+│   │   ├── sentinel/        # Sentinel-2 SR masking + preprocessing
+│   │   ├── sentinel1/       # Sentinel-1 SAR GRD masking (edge + speckle) + preprocessing
+│   │   └── wdpa/            # World Database on Protected Areas (vector) preprocessing + Drive export
 │   └── visualization/       # plots.py, summaries.py, tables.py (matplotlib/seaborn/pandas)
 └── tests/                   # one test_*.py per source module; conftest.py holds shared
                              # fixtures + the ee_session fixture (see "Testing")
 ```
 
 **Per-sensor module pattern** (`sensors/<sensor>/`): a `masking.py` builds the cloud-free (and optional water-masked) collection, and a `preprocessing.py` exposes the public `get_<sensor>_collection(aoi, start_date, end_date, ...)` that validates the date range, applies scale factors/offsets, calls `calc_indices()` with the sensor's `*_BAND_MAP`, and returns an `ee.ImageCollection`. Follow this shape when adding a sensor.
+
+Non-optical sensors deviate where appropriate: `sentinel1` (SAR backscatter) and the pre-classified products `dswx` / `dynamicworld` skip `calc_indices()` (no reflectance bands), and `wdpa` is a **vector** sensor — it returns an `ee.FeatureCollection`, has no `masking.py` or date validation, and its `get_*` functions filter by attribute/AOI instead.
 
 ### Key Conventions
 

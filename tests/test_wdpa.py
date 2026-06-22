@@ -41,6 +41,43 @@ def test_export_wdpa_to_drive_wires_filter_and_export():
     assert out == "FC"
 
 
+def test_export_wdpa_to_drive_polygons_only_coerces_before_export():
+    with (
+        patch.object(preprocessing, "get_wdpa_collection", return_value="RAW"),
+        patch.object(
+            preprocessing, "keep_polygon_geometries", return_value="POLYS"
+        ) as coerce,
+        patch.object(preprocessing, "export_table_to_drive") as export_tbl,
+    ):
+        out = preprocessing.export_wdpa_to_drive(
+            folder="folder",
+            file_prefix="ke_pas",
+            country="KEN",
+            file_format="SHP",
+            polygons_only=True,
+        )
+
+    coerce.assert_called_once_with("RAW")
+    _, kwargs = export_tbl.call_args
+    assert kwargs["collection"] == "POLYS"
+    assert kwargs["fileFormat"] == "SHP"
+    assert out == "POLYS"
+
+
+def test_export_wdpa_to_drive_default_does_not_coerce():
+    with (
+        patch.object(preprocessing, "get_wdpa_collection", return_value="RAW"),
+        patch.object(preprocessing, "keep_polygon_geometries") as coerce,
+        patch.object(preprocessing, "export_table_to_drive"),
+    ):
+        out = preprocessing.export_wdpa_to_drive(
+            folder="folder", file_prefix="ke_pas", country="KEN"
+        )
+
+    coerce.assert_not_called()
+    assert out == "RAW"
+
+
 def test_export_wdpa_in_aoi_to_drive_wires_loader_and_export():
     with (
         patch.object(preprocessing, "get_wdpa_in_aoi", return_value="FC") as get_fc,
@@ -54,7 +91,7 @@ def test_export_wdpa_in_aoi_to_drive_wires_loader_and_export():
     _, kwargs = export_tbl.call_args
     assert kwargs["collection"] == "FC"
     assert kwargs["fileNamePrefix"] == "aoi_pas"
-    assert kwargs["fileFormat"] == "SHP"  # default vector format
+    assert kwargs["fileFormat"] == "GeoJSON"  # default (handles WDPA mixed geometries)
     assert out == "FC"
 
 
@@ -82,6 +119,22 @@ def test_get_wdpa_collection_filters_by_identifier(ee_session):
     one = preprocessing.get_wdpa_collection(identifier=site_id)
     assert one.size().getInfo() >= 1
     assert one.aggregate_array("SITE_ID").distinct().getInfo() == [site_id]
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_keep_polygon_geometries_yields_polygon_only(ee_session):
+    # Kenya WDPA includes GeometryCollection features (polygons + lines) that break a
+    # Shapefile export; coercion must leave only Polygon/MultiPolygon types.
+    ke = preprocessing.get_wdpa_collection(country="KEN")
+    coerced = preprocessing.keep_polygon_geometries(ke)
+    gtypes = (
+        coerced.map(lambda f: f.set("t", f.geometry().type()))
+        .aggregate_array("t")
+        .distinct()
+        .getInfo()
+    )
+    assert set(gtypes) <= {"Polygon", "MultiPolygon"}
 
 
 @pytest.mark.ee
