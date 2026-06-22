@@ -123,6 +123,10 @@ gee_utils/
 │   │   ├── sentinel/        # Sentinel-2 SR masking + preprocessing
 │   │   ├── sentinel1/       # Sentinel-1 SAR GRD masking (edge + speckle) + preprocessing
 │   │   └── wdpa/            # World Database on Protected Areas (vector) preprocessing + Drive export
+│   ├── landtrendr/          # METHOD subpackage (not a sensor): LandTrendr temporal segmentation
+│   │   ├── collection.py    # medoid composite + multi-sensor (Roy-harmonized) annual builder
+│   │   ├── segmentation.py  # run-param defaults + run_landtrendr / run_landtrendr_from_aoi
+│   │   └── outputs.py       # get_change_map / get_fitted_stack / get_segment_data (array-image parsers)
 │   └── visualization/       # plots.py, summaries.py, tables.py (matplotlib/seaborn/pandas)
 └── tests/                   # one test_*.py per source module; conftest.py holds shared
                              # fixtures + the ee_session fixture (see "Testing")
@@ -131,6 +135,8 @@ gee_utils/
 **Per-sensor module pattern** (`sensors/<sensor>/`): a `masking.py` builds the cloud-free (and optional water-masked) collection, and a `preprocessing.py` exposes the public `get_<sensor>_collection(aoi, start_date, end_date, ...)` that validates the date range, applies scale factors/offsets, calls `calc_indices()` with the sensor's `*_BAND_MAP`, and returns an `ee.ImageCollection`. Follow this shape when adding a sensor.
 
 Non-optical sensors deviate where appropriate: `sentinel1` (SAR backscatter) and the pre-classified products `dswx` / `dynamicworld` skip `calc_indices()` (no reflectance bands), and `wdpa` is a **vector** sensor — it returns an `ee.FeatureCollection`, has no `masking.py` or date validation, and its `get_*` functions filter by attribute/AOI instead.
+
+`landtrendr/` is a **method** subpackage (not a sensor): it fuses the Landsat builders into a one-image-per-year, Roy-harmonized medoid series, runs `ee.Algorithms.TemporalSegmentation.LandTrendr`, and parses the array-image outputs. Its segmentation band must be **loss-positive** (NBR/NDVI/NDMI ×−1, tracked by `DIST_DIR`), and run-param defaults + Roy coefficients live in `constants.py`.
 
 ### Key Conventions
 

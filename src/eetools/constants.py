@@ -399,6 +399,45 @@ WDPA_GIS_AREA_FIELD = (
     "GIS_AREA"  # km^2, Mollweide-computed — use for area, NOT REP_AREA
 )
 
+#################### LANDTRENDR (temporal segmentation) ##########################
+# LandTrendr runs on ONE annual image per year (medoid composite), band 1 = a
+# loss-positive segmentation index, subsequent bands fit-to-vertices (FTV). All sensors
+# are harmonized to a common band naming and the OLI family (L8/L9) is brought onto the
+# TM/ETM+ (L5/L7) reflectance baseline before indexing.
+LANDTRENDR_COMMON_BANDS = HLS_COMMON_BANDS  # BLUE, GREEN, RED, NIR, SWIR1, SWIR2
+
+# Roy et al. 2016 OLI -> ETM+ harmonization, per common band (BLUE,GREEN,RED,NIR,SWIR1,
+# SWIR2), replicated from the emaprlab LandTrendr.js `harmonizationRoy`. Applied in C2
+# reflectance space as:  etm = (oli - intercept) / slope.
+ROY_OLI_TO_ETM_SLOPES = [0.9785, 0.9542, 0.9825, 1.0073, 1.0171, 0.9949]
+ROY_OLI_TO_ETM_INTERCEPTS = [-0.0095, -0.0016, -0.0022, -0.0021, -0.0030, 0.0029]
+
+# The 8 LandTrendr run parameters (Kennedy et al. 2010). `timeSeries` is attached at run
+# time. Tune per landscape; these are sensible disturbance-mapping defaults.
+LANDTRENDR_DEFAULT_RUN_PARAMS = {
+    "maxSegments": 6,
+    "spikeThreshold": 0.9,
+    "vertexCountOvershoot": 3,
+    "preventOneYearRecovery": True,
+    "recoveryThreshold": 0.25,
+    "pvalThreshold": 0.05,
+    "bestModelProportion": 0.75,
+    "minObservationsNeeded": 6,
+}
+
+# Per-sensor config the annual builder iterates over: (collection ID, reflective bands,
+# is_oli). OLI sensors are Roy-harmonized; TM/ETM+ are the baseline.
+LANDTRENDR_SENSORS = {
+    "L5": (L5_SR_COLLECTION, TM_BANDS, False),
+    "L7": (L7_SR_COLLECTION, TM_BANDS, False),
+    "L8": (L8_SR_COLLECTION, L8_BANDS, True),
+    "L9": (L9_SR_COLLECTION, L9_BANDS, True),
+}
+
+# Normalized indices supported as the segmentation index. Loss = NEGATIVE delta for these,
+# so they are multiplied by -1 to make loss-positive for segmentation (dist_dir = -1).
+LANDTRENDR_NORMALIZED_INDICES = ("NBR", "NDVI", "NDMI")
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 
