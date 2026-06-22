@@ -50,6 +50,46 @@ def export_image_to_drive(
     return task
 
 
+def export_image_list_to_drive(
+    images: list[tuple[ee.Image, str, int]],
+    aoi: ee.Geometry,
+    folder: str,
+    crs: str = "EPSG:4326",
+) -> list:
+    """Export a list of (image, name, scale) tuples to Google Drive, one task per image.
+
+    A convenience wrapper over export_image_to_drive for the common case of exporting
+    several distinct, individually-named images (e.g. a set of derived layers) to the same
+    Drive folder and CRS in one call. Each tuple's name is used as both the task
+    description and the output file prefix. Unlike export_image_collection_to_drive (which
+    exports the images of a single ImageCollection), this takes arbitrary images that each
+    carry their own filename and scale.
+
+    Args:
+        images: List of (image, export_name, scale) tuples — the ee.Image to export, the filename/description string, and the output pixel size in metres.
+        aoi: Export region as ee.Geometry, shared by every image.
+        folder: Google Drive folder name to write all files into.
+        crs: Coordinate reference system applied to every export (default EPSG:4326).
+
+    Returns:
+        list of started ee.batch.Task objects, one per input image, in input order.
+    """
+    tasks = []
+    for image, export_name, scale in images:
+        task = export_image_to_drive(
+            image=image,
+            aoi=aoi,
+            description=export_name,
+            folder=folder,
+            file_prefix=export_name,
+            scale=scale,
+            crs=crs,
+        )
+        tasks.append(task)
+
+    return tasks
+
+
 def _image_export_suffix(
     image: ee.Image,
     index: int,

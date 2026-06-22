@@ -316,6 +316,56 @@ DSWX_HLS_VALID_MAX = 252
 DSWX_S1_VALID_MAX = 250
 DSWX_SCALE = 30
 
+#################### DYNAMIC WORLD (near-real-time LULC) ##########################
+# Per-Sentinel-2-acquisition 10 m LULC: nine class-probability bands (sum to 1 per pixel)
+# plus a `label` argmax band (integer class code 0-8). Time series; cloud masking is built
+# in (no extra mask needed). The per-acquisition `label` is unstable — composite the
+# probability bands for stable LULC / landscape metrics rather than using a single label.
+DW_COLLECTION = "GOOGLE/DYNAMICWORLD/V1"
+DW_LABEL_BAND = "label"
+# Probability bands, ordered so list index == the `label` integer code for that class.
+DW_PROBABILITY_BANDS = [
+    "water",
+    "trees",
+    "grass",
+    "flooded_vegetation",
+    "crops",
+    "shrub_and_scrub",
+    "built",
+    "bare",
+    "snow_and_ice",
+]
+# `label` integer code -> class name (argmax of the probability bands).
+DW_CLASSES = {
+    0: "water",
+    1: "trees",
+    2: "grass",
+    3: "flooded_vegetation",
+    4: "crops",
+    5: "shrub_and_scrub",
+    6: "built",
+    7: "bare",
+    8: "snow_and_ice",
+}
+DW_SCALE = 10
+
+#################### WDPA (World Database on Protected Areas) ##########################
+# Vector FeatureCollection of protected-area polygons (UNEP-WCMC / IUCN), updated monthly.
+# `current` always resolves to the newest monthly release; pin a YYYYMM snapshot
+# (e.g. "WCMC/WDPA/202606/polygons") for reproducible analysis.
+# LICENSE: No Commercial Use without prior written UNEP-WCMC permission (commercial =
+# any for-profit OR revenue-generating use, incl. by non-profits), and attribution is
+# mandatory — flag for any paid/client deliverable.
+WDPA_POLYGONS_COLLECTION = "WCMC/WDPA/current/polygons"
+WDPA_COUNTRY_FIELD = "ISO3"  # ISO 3166-3 alpha-3 country code (e.g. "BWA", "KEN")
+WDPA_ID_FIELD = (
+    "SITE_ID"  # whole-site id in the live `current` asset (= WDPAID in older
+)
+# WDPA releases); SITE_PID is the per-parcel id (= the former WDPA_PID).
+WDPA_GIS_AREA_FIELD = (
+    "GIS_AREA"  # km^2, Mollweide-computed — use for area, NOT REP_AREA
+)
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 

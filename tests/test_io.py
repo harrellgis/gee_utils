@@ -175,6 +175,44 @@ def test_export_image_collection_to_drive_one_task_per_image(mock_ee):
     assert prefixes == ["site_2022", "site_2023"]
 
 
+def test_export_image_list_to_drive_one_task_per_image(mock_ee):
+    img_a, img_b = MagicMock(name="img_a"), MagicMock(name="img_b")
+
+    with patch.object(io, "export_image_to_drive") as export_one:
+        export_one.side_effect = ["task_a", "task_b"]
+        tasks = io.export_image_list_to_drive(
+            images=[(img_a, "layer_a", 10), (img_b, "layer_b", 30)],
+            aoi="AOI",
+            folder="folder",
+            crs="EPSG:32734",
+        )
+
+    assert tasks == ["task_a", "task_b"]
+    assert export_one.call_count == 2
+
+    # First tuple -> name used for both description and file prefix; per-tuple scale.
+    first = export_one.call_args_list[0].kwargs
+    assert first["image"] is img_a
+    assert first["aoi"] == "AOI"
+    assert first["description"] == "layer_a"
+    assert first["file_prefix"] == "layer_a"
+    assert first["scale"] == 10
+    assert first["folder"] == "folder"
+    assert first["crs"] == "EPSG:32734"
+
+    second = export_one.call_args_list[1].kwargs
+    assert second["image"] is img_b
+    assert second["file_prefix"] == "layer_b"
+    assert second["scale"] == 30
+
+
+def test_export_image_list_to_drive_empty_list(mock_ee):
+    with patch.object(io, "export_image_to_drive") as export_one:
+        tasks = io.export_image_list_to_drive(images=[], aoi="AOI", folder="folder")
+    assert tasks == []
+    export_one.assert_not_called()
+
+
 def test_export_site_collections_delegates_per_site(mock_ee):
     site_collections = {
         "site_a": {"collection": "col_a", "aoi": "aoi_a"},
