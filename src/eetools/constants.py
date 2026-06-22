@@ -182,6 +182,39 @@ L8_ADD_OFFSET = -0.2
 L8_CLOUD_FILTER = 50  # % max CLOUD_COVER per image
 L8_SCALE = 30
 
+#################### LANDSAT 5 / 7 / 9 (C2 L2 SR) ##########################
+# All Landsat Collection 2 Level-2 SR share the same scaling, offset, default cloud
+# filter, QA_PIXEL/QA_RADSAT cloud masking, and 30 m resolution as Landsat 8.
+L9_SR_COLLECTION = "LANDSAT/LC09/C02/T1_L2"  # OLI-2; schema-identical to Landsat 8
+L7_SR_COLLECTION = "LANDSAT/LE07/C02/T1_L2"  # ETM+ (SLC-off after 2003-05-31)
+L5_SR_COLLECTION = "LANDSAT/LT05/C02/T1_L2"  # TM (archive 1984-2012)
+
+LANDSAT_C2_SCALE_FACTOR = L8_SCALE_FACTOR  # 2.75e-05, shared by all Landsat C2 L2 SR
+LANDSAT_C2_ADD_OFFSET = L8_ADD_OFFSET  # -0.2 (non-zero offset!)
+LANDSAT_C2_CLOUD_FILTER = L8_CLOUD_FILTER  # 50% max CLOUD_COVER per image
+LANDSAT_SCALE = L8_SCALE  # 30 m
+
+# Landsat 9 (OLI) is band-for-band identical to Landsat 8 (OLI).
+L9_BANDS = L8_BANDS
+L9_BAND_MAP = L8_BAND_MAP
+L9_INDEX_BANDS = L8_INDEX_BANDS
+L9_ALL_BANDS = L8_ALL_BANDS
+
+# Landsat 5 (TM) and Landsat 7 (ETM+) share the TM/ETM+ band layout: reflective bands
+# numbered 1-5,7 with NO coastal-aerosol band, so every band is SHIFTED down by one
+# relative to OLI (TM/ETM+ NIR=SR_B4, Red=SR_B3, SWIR1=SR_B5 vs OLI NIR=SR_B5...).
+TM_BANDS = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
+TM_BAND_MAP = {
+    "blue": "SR_B1",
+    "green": "SR_B2",
+    "red": "SR_B3",
+    "nir": "SR_B4",
+    "swir1": "SR_B5",
+    "swir2": "SR_B7",
+}
+TM_INDEX_BANDS = L8_INDEX_BANDS  # same index set (no red-edge band -> no NDRE)
+TM_ALL_BANDS = TM_BANDS + TM_INDEX_BANDS
+
 #################### MODIS LAI/Fpar ##########################
 MODIS_LAI_FPAR_BANDS = [
     "Fpar",

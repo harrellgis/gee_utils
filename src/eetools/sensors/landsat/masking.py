@@ -1,6 +1,10 @@
 import ee
 
-from eetools.constants import L8_CLOUD_FILTER, L8_SR_COLLECTION
+from eetools.constants import (
+    L8_CLOUD_FILTER,
+    L8_SR_COLLECTION,
+    LANDSAT_C2_CLOUD_FILTER,
+)
 from eetools.sensors import masking as _masking
 
 
@@ -126,3 +130,69 @@ def apply_water_mask(image: ee.Image, non_water_mask: ee.Image) -> ee.Image:
         ee.Image with water pixels masked out across all bands.
     """
     return _masking.apply_water_mask(image, non_water_mask)
+
+
+def build_cloudfree_landsat_col(
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    collection_id: str,
+    cloud_filter: int = LANDSAT_C2_CLOUD_FILTER,
+) -> ee.ImageCollection:
+    """Build any Landsat C2 L2 SR collection with cloud and shadow masking applied.
+
+    Generic over the four Landsat C2 L2 collections (L5 TM, L7 ETM+, L8/L9 OLI), which
+    share the same QA_PIXEL/QA_RADSAT cloud-mask logic; only the collection ID differs.
+    Filters to the AOI, date range, and CLOUD_COVER threshold, then applies the shared
+    cloud/shadow mask.
+
+    Args:
+        aoi: Area of interest as ee.Geometry.
+        start_date: Collection start date as ee.Date.
+        end_date: Collection end date as ee.Date.
+        collection_id: Landsat C2 L2 collection asset ID (e.g. LANDSAT/LT05/C02/T1_L2).
+        cloud_filter: Maximum CLOUD_COVER percentage per image (default LANDSAT_C2_CLOUD_FILTER).
+
+    Returns:
+        ee.ImageCollection of cloud- and shadow-masked Landsat SR images.
+    """
+    return (
+        ee.ImageCollection(collection_id)
+        .filterBounds(aoi)
+        .filterDate(start_date, end_date)
+        .filter(ee.Filter.lte("CLOUD_COVER", cloud_filter))
+        .map(mask_edges)
+        .map(add_cld_shdw_mask)
+        .map(apply_cld_shdw_mask)
+    )
+
+
+def build_landsat_non_water_mask(
+    collection: ee.ImageCollection,
+    nir_band: str,
+    mndwi_thresh: float = 0.1,
+    ndvi_thresh: float = 0.2,
+    nir_thresh: float = 0.15,
+) -> ee.Image:
+    """Build a boolean non-water mask from a Landsat collection median composite.
+
+    Generic over the Landsat family; pass the sensor's NIR band name ('SR_B5' for L8/L9
+    OLI, 'SR_B4' for L5/L7 TM/ETM+).
+
+    Args:
+        collection: ee.ImageCollection with MNDWI, NDVI, and the named NIR band computed.
+        nir_band: NIR reflectance band name ('SR_B5' for OLI, 'SR_B4' for TM/ETM+).
+        mndwi_thresh: MNDWI threshold above which a pixel is considered water (default 0.1).
+        ndvi_thresh: NDVI threshold below which a pixel is considered water (default 0.2).
+        nir_thresh: NIR reflectance threshold below which a pixel is considered water (default 0.15).
+
+    Returns:
+        ee.Image with a single 'non_water' band where 1 = land and 0 = water.
+    """
+    return _masking.build_non_water_mask(
+        collection,
+        nir_band=nir_band,
+        mndwi_thresh=mndwi_thresh,
+        ndvi_thresh=ndvi_thresh,
+        nir_thresh=nir_thresh,
+    )

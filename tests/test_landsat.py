@@ -129,3 +129,111 @@ def test_get_l8_sr_collection_real(ee_session, small_aoi):
     if col.size().getInfo() == 0:
         pytest.skip("no Landsat scenes for the AOI/window")
     assert "NDVI" in col.first().bandNames().getInfo()
+
+
+# --------------------------------------------------------------------------- #
+# Landsat 9 (OLI) — identical band layout to Landsat 8
+# --------------------------------------------------------------------------- #
+def test_process_l9_image_adds_indices_and_keeps_time(ee_session):
+    from eetools.sensors.landsat.preprocessing import process_l9_image
+
+    raw = (
+        ee_session.Image.constant([8000, 9000, 10000, 20000, 15000, 12000])
+        .rename(["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"])
+        .set("system:time_start", ee_session.Date("2022-06-01").millis())
+    )
+    out = ee_session.Image(process_l9_image(raw))
+    names = out.bandNames().getInfo()
+    assert "NDVI" in names
+    assert "SR_B4" in names  # OLI red
+    assert out.get("system:time_start").getInfo() is not None
+
+
+# --------------------------------------------------------------------------- #
+# Landsat 5 / 7 (TM / ETM+) — shifted band numbering vs OLI
+# --------------------------------------------------------------------------- #
+def test_process_l5_image_uses_tm_band_map(ee_session, first_value):
+    # The point of the TM band map: NDVI must come from SR_B4 (NIR) / SR_B3 (Red),
+    # not the OLI SR_B5/SR_B4. Verify the computed value against the TM bands.
+    from eetools.constants import LANDSAT_C2_ADD_OFFSET as OFF
+    from eetools.constants import LANDSAT_C2_SCALE_FACTOR as SF
+    from eetools.sensors.landsat.preprocessing import process_l5_image
+
+    # TM bands: SR_B1, SR_B2, SR_B3(red), SR_B4(nir), SR_B5, SR_B7. Raw values kept
+    # high enough that scaled reflectance stays positive (normalizedDifference masks
+    # negative inputs).
+    raw = (
+        ee_session.Image.constant([10000, 10000, 8000, 20000, 15000, 9000])
+        .rename(["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"])
+        .set("system:time_start", ee_session.Date("2005-06-01").millis())
+    )
+    out = ee_session.Image(process_l5_image(raw))
+    assert "NDVI" in out.bandNames().getInfo()
+
+    red = 8000 * SF + OFF
+    nir = 20000 * SF + OFF
+    expected_ndvi = (nir - red) / (nir + red)
+    assert first_value(out, "NDVI") == pytest.approx(expected_ndvi, rel=1e-6)
+
+
+def test_process_l7_image_adds_indices_and_keeps_time(ee_session):
+    from eetools.sensors.landsat.preprocessing import process_l7_image
+
+    raw = (
+        ee_session.Image.constant([10000, 10000, 8000, 20000, 15000, 9000])
+        .rename(["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"])
+        .set("system:time_start", ee_session.Date("2001-06-01").millis())
+    )
+    out = ee_session.Image(process_l7_image(raw))
+    names = out.bandNames().getInfo()
+    assert "NDVI" in names
+    assert "SR_B3" in names  # TM/ETM+ red
+    assert out.get("system:time_start").getInfo() is not None
+
+
+@pytest.mark.slow
+def test_get_l9_sr_collection_real(ee_session, small_aoi):
+    from eetools.sensors.landsat.preprocessing import get_l9_sr_collection
+
+    col = get_l9_sr_collection(
+        small_aoi,
+        ee_session.Date("2022-01-01"),
+        ee_session.Date("2022-06-01"),
+        apply_water_masking=False,
+    )
+    assert isinstance(col, ee_session.ImageCollection)
+    if col.size().getInfo() == 0:
+        pytest.skip("no Landsat 9 scenes for the AOI/window")
+    assert "NDVI" in col.first().bandNames().getInfo()
+
+
+@pytest.mark.slow
+def test_get_l7_sr_collection_real(ee_session, small_aoi):
+    from eetools.sensors.landsat.preprocessing import get_l7_sr_collection
+
+    col = get_l7_sr_collection(
+        small_aoi,
+        ee_session.Date("2001-01-01"),
+        ee_session.Date("2001-06-01"),
+        apply_water_masking=False,
+    )
+    assert isinstance(col, ee_session.ImageCollection)
+    if col.size().getInfo() == 0:
+        pytest.skip("no Landsat 7 scenes for the AOI/window")
+    assert "NDVI" in col.first().bandNames().getInfo()
+
+
+@pytest.mark.slow
+def test_get_l5_sr_collection_real(ee_session, small_aoi):
+    from eetools.sensors.landsat.preprocessing import get_l5_sr_collection
+
+    col = get_l5_sr_collection(
+        small_aoi,
+        ee_session.Date("2010-01-01"),
+        ee_session.Date("2010-06-01"),
+        apply_water_masking=False,
+    )
+    assert isinstance(col, ee_session.ImageCollection)
+    if col.size().getInfo() == 0:
+        pytest.skip("no Landsat 5 scenes for the AOI/window")
+    assert "NDVI" in col.first().bandNames().getInfo()
