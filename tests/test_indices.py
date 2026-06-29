@@ -122,9 +122,8 @@ def test_calc_indices_appends_full_band_set(
 ):
     from eetools.sensors.indices import calc_indices
 
-    out = calc_indices(
-        synthetic_reflectance_image, band_map=reflectance_band_map, include_ndre=True
-    )
+    # The default selection includes NDRE because reflectance_band_map has a red edge.
+    out = calc_indices(synthetic_reflectance_image, band_map=reflectance_band_map)
     names = out.bandNames().getInfo()
     for band in [
         "NDVI",
@@ -143,13 +142,98 @@ def test_calc_indices_appends_full_band_set(
         assert band in names
 
 
-def test_calc_indices_excludes_ndre_by_default(
+def test_calc_indices_skips_ndre_without_red_edge(
     synthetic_reflectance_image, reflectance_band_map
 ):
     from eetools.sensors.indices import calc_indices
 
-    out = calc_indices(synthetic_reflectance_image, band_map=reflectance_band_map)
+    # A band map lacking 'red_edge' (like Landsat/HLS) auto-skips NDRE in the default set.
+    no_re = {k: v for k, v in reflectance_band_map.items() if k != "red_edge"}
+    out = calc_indices(synthetic_reflectance_image, band_map=no_re)
     assert "NDRE" not in out.bandNames().getInfo()
+
+
+def test_calc_ndbi_value(
+    synthetic_reflectance_image, first_value, reflectance_band_map
+):
+    from eetools.sensors.indices import calc_indices
+
+    # NDBI = (swir1 - nir) / (swir1 + nir) = (0.25 - 0.50) / 0.75
+    out = calc_indices(
+        synthetic_reflectance_image, band_map=reflectance_band_map, indices=["NDBI"]
+    )
+    assert first_value(out, "NDBI") == pytest.approx((0.25 - 0.50) / (0.25 + 0.50))
+
+
+def test_calc_indices_by_domain(synthetic_reflectance_image, reflectance_band_map):
+    from eetools.sensors.indices import calc_indices
+
+    out = calc_indices(
+        synthetic_reflectance_image, band_map=reflectance_band_map, domains=["urban"]
+    )
+    names = out.bandNames().getInfo()
+    assert "NDBI" in names and "UI" in names
+    # Domain selection does not pull in the default vegetation core.
+    assert "NDVI" not in names
+
+
+def test_calc_indices_unknown_name_raises(
+    synthetic_reflectance_image, reflectance_band_map
+):
+    from eetools.sensors.indices import calc_indices
+
+    with pytest.raises(ValueError, match="Unknown index"):
+        calc_indices(
+            synthetic_reflectance_image,
+            band_map=reflectance_band_map,
+            indices=["NOPE"],
+        )
+
+
+def test_calc_indices_explicit_missing_band_raises(
+    synthetic_reflectance_image, reflectance_band_map
+):
+    from eetools.sensors.indices import calc_indices
+
+    # MTCI needs 'red_edge2', which the basic reflectance band map lacks.
+    with pytest.raises(ValueError, match="requires band_map key"):
+        calc_indices(
+            synthetic_reflectance_image,
+            band_map=reflectance_band_map,
+            indices=["MTCI"],
+        )
+
+
+def test_calc_indices_domain_skips_unavailable_rededge(
+    synthetic_reflectance_image, reflectance_band_map
+):
+    from eetools.sensors.indices import calc_indices
+
+    # vegetation domain includes NDRE (red_edge present) but skips MTCI/IRECI/S2REP
+    # (need red_edge2/red_edge3) rather than erroring.
+    out = calc_indices(
+        synthetic_reflectance_image,
+        band_map=reflectance_band_map,
+        domains=["vegetation"],
+    )
+    names = out.bandNames().getInfo()
+    assert "NDRE" in names
+    for absent in ["MTCI", "IRECI", "S2REP"]:
+        assert absent not in names
+
+
+def test_calc_mtci_value_with_red_edge_bands(ee_session, first_value):
+    from eetools.sensors.indices import calc_indices
+
+    # Sentinel-2-style image with the red-edge bands present.
+    bands = ["red", "red_edge", "red_edge2"]
+    values = [0.10, 0.20, 0.35]
+    img = ee_session.Image.constant(values).rename(bands)
+    band_map = {"red": "red", "red_edge": "red_edge", "red_edge2": "red_edge2"}
+
+    out = calc_indices(img, band_map=band_map, indices=["MTCI"])
+    # MTCI = (re2 - re1) / (re1 - red) = (0.35 - 0.20) / (0.20 - 0.10)
+    assert first_value(out, "MTCI") == pytest.approx((0.35 - 0.20) / (0.20 - 0.10))
 
 
 def test_calc_veg_indices_band_set(synthetic_reflectance_image, reflectance_band_map):

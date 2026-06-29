@@ -12,6 +12,7 @@ from eetools.sensors.hls.masking import (
     build_hls_non_water_mask,
 )
 from eetools.sensors.indices import calc_indices, select_base_bands
+from eetools.sensors.masking import validate_water_mask_selection
 from eetools.utils import validate_collection_date_range
 
 
@@ -113,38 +114,58 @@ def harmonize_hls_s30_bands(image: ee.Image) -> ee.Image:
     return ee.Image(image.copyProperties(source, ["system:time_start", "system:index"]))
 
 
-def process_hls_l30_image(image: ee.Image) -> ee.Image:
+def process_hls_l30_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Rename HLSL30 bands to the common schema and add spectral indices.
 
     Args:
         image: HLSL30 ee.Image with original band names as supplied by the HLS collection.
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with harmonized band names and appended index bands, preserving system:time_start and system:index.
     """
     source = image
     image = harmonize_hls_l30_bands(source)
-    image = calc_indices(image=image, band_map=HLS_BAND_MAP, include_ndre=False)
+    image = calc_indices(
+        image=image, band_map=HLS_BAND_MAP, indices=indices, domains=domains
+    )
     return image.copyProperties(source, ["system:time_start", "system:index"])
 
 
-def process_hls_s30_image(image: ee.Image) -> ee.Image:
+def process_hls_s30_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Rename HLSS30 bands to the common schema and add spectral indices.
 
     Args:
         image: HLSS30 ee.Image with original band names as supplied by the HLS collection.
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with harmonized band names and appended index bands, preserving system:time_start and system:index.
     """
     source = image
     image = harmonize_hls_s30_bands(source)
-    image = calc_indices(image=image, band_map=HLS_BAND_MAP, include_ndre=False)
+    image = calc_indices(
+        image=image, band_map=HLS_BAND_MAP, indices=indices, domains=domains
+    )
     return image.copyProperties(source, ["system:time_start", "system:index"])
 
 
 def get_hls_l30_collection(
-    aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a processed HLSL30 collection with cloud masking and spectral indices
     applied.
@@ -153,17 +174,23 @@ def get_hls_l30_collection(
         aoi: Area of interest as ee.Geometry.
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection of cloud-masked HLSL30 images with harmonized bands and index bands appended.
     """
     return build_cloudfree_hls_l30_col(aoi, start_date, end_date).map(
-        process_hls_l30_image
+        lambda img: process_hls_l30_image(img, indices=indices, domains=domains)
     )
 
 
 def get_hls_s30_collection(
-    aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a processed HLSS30 collection with cloud masking and spectral indices
     applied.
@@ -172,12 +199,14 @@ def get_hls_s30_collection(
         aoi: Area of interest as ee.Geometry.
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection of cloud-masked HLSS30 images with harmonized bands and index bands appended.
     """
     return build_cloudfree_hls_s30_col(aoi, start_date, end_date).map(
-        process_hls_s30_image
+        lambda img: process_hls_s30_image(img, indices=indices, domains=domains)
     )
 
 
@@ -187,6 +216,8 @@ def get_hls_merged_collection(
     end_date: ee.Date,
     apply_water_masking: bool = True,
     target_crs: str | None = None,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a merged processed HLS collection (L30 and S30) with shared bands, indices,
     and optional water masking.
@@ -197,14 +228,25 @@ def get_hls_merged_collection(
         end_date: Collection end date as ee.Date.
         apply_water_masking: If True, applies a spectral water mask derived from the merged collection median (default True).
         target_crs: Optional CRS string (e.g. 'EPSG:32736') to filter out off-tile HLS images with incorrect footprints; no CRS filter applied if None.
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection of merged L30 and S30 images sorted by time, with harmonized bands and index bands appended.
+
+    Raises:
+        ValueError: if apply_water_masking is True but the index selection omits NDVI or MNDWI.
     """
     validate_hls_date_range(aoi, start_date, end_date)
+    if apply_water_masking:
+        validate_water_mask_selection(HLS_BAND_MAP, indices, domains)
 
-    hls_l30 = get_hls_l30_collection(aoi, start_date, end_date)
-    hls_s30 = get_hls_s30_collection(aoi, start_date, end_date)
+    hls_l30 = get_hls_l30_collection(
+        aoi, start_date, end_date, indices=indices, domains=domains
+    )
+    hls_s30 = get_hls_s30_collection(
+        aoi, start_date, end_date, indices=indices, domains=domains
+    )
     merged = hls_l30.merge(hls_s30).sort("system:time_start")
 
     if target_crs is not None:

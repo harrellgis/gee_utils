@@ -23,6 +23,7 @@ from eetools.sensors.landsat.masking import (
     build_l8_non_water_mask,
     build_landsat_non_water_mask,
 )
+from eetools.sensors.masking import validate_water_mask_selection
 from eetools.utils import validate_collection_date_range
 
 
@@ -49,12 +50,18 @@ def validate_l8_sr_date_range(
     )
 
 
-def process_l8_image(image: ee.Image) -> ee.Image:
+def process_l8_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Select core Landsat 8 SR bands, apply the scale factor and additive offset, and
     add spectral indices.
 
     Args:
         image: Raw Landsat 8 C2 L2 ee.Image with original band names (SR_B2 through SR_B7).
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
@@ -65,7 +72,9 @@ def process_l8_image(image: ee.Image) -> ee.Image:
         input_bands=["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
     )
     image = image.multiply(L8_SCALE_FACTOR).add(L8_ADD_OFFSET)
-    image = calc_indices(image=image, band_map=L8_BAND_MAP, include_ndre=False)
+    image = calc_indices(
+        image=image, band_map=L8_BAND_MAP, indices=indices, domains=domains
+    )
     return image.copyProperties(source, ["system:time_start"])
 
 
@@ -74,6 +83,8 @@ def get_l8_sr_collection(
     start_date: ee.Date,
     end_date: ee.Date,
     apply_water_masking: bool = True,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a cloud-masked Landsat 8 SR collection with spectral indices.
 
@@ -82,14 +93,23 @@ def get_l8_sr_collection(
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
         apply_water_masking: If True, applies a spectral water mask derived from the collection median (default True).
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection with calibrated SR bands and index bands appended.
+
+    Raises:
+        ValueError: if apply_water_masking is True but the index selection omits NDVI or MNDWI.
     """
     validate_l8_sr_date_range(aoi, start_date, end_date)
+    if apply_water_masking:
+        validate_water_mask_selection(L8_BAND_MAP, indices, domains)
 
     l8_cloudfree = build_cloudfree_l8sr_col(aoi, start_date, end_date)
-    l8_processed = l8_cloudfree.map(process_l8_image)
+    l8_processed = l8_cloudfree.map(
+        lambda img: process_l8_image(img, indices=indices, domains=domains)
+    )
 
     if not apply_water_masking:
         return l8_processed
@@ -102,7 +122,11 @@ def get_l8_sr_collection(
 # Generic Landsat C2 L2 core (shared by Landsat 5 / 7 / 9)
 # --------------------------------------------------------------------------- #
 def process_landsat_image(
-    image: ee.Image, source_bands: list[str], band_map: dict
+    image: ee.Image,
+    source_bands: list[str],
+    band_map: dict,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.Image:
     """Select reflective bands, apply C2 L2 scale/offset, and append spectral indices.
 
@@ -113,6 +137,8 @@ def process_landsat_image(
         image: Raw Landsat C2 L2 ee.Image.
         source_bands: Reflective bands to select (L8_BANDS/L9_BANDS for OLI, TM_BANDS for TM/ETM+).
         band_map: Logical-key -> band-name map that drives the index functions for this sensor.
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
@@ -120,7 +146,9 @@ def process_landsat_image(
     source = image
     image = select_base_bands(source, input_bands=source_bands)
     image = image.multiply(LANDSAT_C2_SCALE_FACTOR).add(LANDSAT_C2_ADD_OFFSET)
-    image = calc_indices(image=image, band_map=band_map, include_ndre=False)
+    image = calc_indices(
+        image=image, band_map=band_map, indices=indices, domains=domains
+    )
     return image.copyProperties(source, ["system:time_start"])
 
 
@@ -133,6 +161,8 @@ def get_landsat_sr_collection(
     band_map: dict,
     sensor_label: str,
     apply_water_masking: bool = True,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a cloud-masked Landsat C2 L2 SR collection with spectral indices (generic).
 
@@ -150,9 +180,14 @@ def get_landsat_sr_collection(
         band_map: Logical-key -> band-name map for this sensor.
         sensor_label: Human-readable sensor name used in date-range error messages.
         apply_water_masking: If True, apply a spectral water mask derived from the collection median (default True).
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection with calibrated SR bands and index bands appended.
+
+    Raises:
+        ValueError: if apply_water_masking is True but the index selection omits NDVI or MNDWI.
     """
     validate_collection_date_range(
         collection_id=collection_id,
@@ -161,10 +196,14 @@ def get_landsat_sr_collection(
         end_date=end_date,
         sensor_label=sensor_label,
     )
+    if apply_water_masking:
+        validate_water_mask_selection(band_map, indices, domains)
 
     cloudfree = build_cloudfree_landsat_col(aoi, start_date, end_date, collection_id)
     processed = cloudfree.map(
-        lambda img: process_landsat_image(img, source_bands, band_map)
+        lambda img: process_landsat_image(
+            img, source_bands, band_map, indices=indices, domains=domains
+        )
     )
 
     if not apply_water_masking:
@@ -199,16 +238,24 @@ def validate_l9_sr_date_range(
     )
 
 
-def process_l9_image(image: ee.Image) -> ee.Image:
+def process_l9_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Select Landsat 9 (OLI) bands, apply the scale/offset, and add spectral indices.
 
     Args:
         image: Raw Landsat 9 C2 L2 ee.Image (OLI band layout, SR_B2-SR_B7).
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
     """
-    return process_landsat_image(image, L9_BANDS, L9_BAND_MAP)
+    return process_landsat_image(
+        image, L9_BANDS, L9_BAND_MAP, indices=indices, domains=domains
+    )
 
 
 def get_l9_sr_collection(
@@ -216,6 +263,8 @@ def get_l9_sr_collection(
     start_date: ee.Date,
     end_date: ee.Date,
     apply_water_masking: bool = True,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a cloud- and (optionally) water-masked Landsat 9 SR collection with indices.
 
@@ -224,6 +273,8 @@ def get_l9_sr_collection(
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
         apply_water_masking: If True, applies a spectral water mask derived from the collection median (default True).
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection with calibrated SR bands and index bands appended.
@@ -237,6 +288,8 @@ def get_l9_sr_collection(
         band_map=L9_BAND_MAP,
         sensor_label="Landsat 9 SR imagery",
         apply_water_masking=apply_water_masking,
+        indices=indices,
+        domains=domains,
     )
 
 
@@ -265,7 +318,11 @@ def validate_l7_sr_date_range(
     )
 
 
-def process_l7_image(image: ee.Image) -> ee.Image:
+def process_l7_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Select Landsat 7 (ETM+) bands, apply the scale/offset, and add spectral indices.
 
     Note: ETM+ band numbering differs from OLI (NIR=SR_B4, Red=SR_B3, SWIR1=SR_B5); the
@@ -273,11 +330,15 @@ def process_l7_image(image: ee.Image) -> ee.Image:
 
     Args:
         image: Raw Landsat 7 C2 L2 ee.Image (TM/ETM+ band layout, SR_B1-SR_B5, SR_B7).
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
     """
-    return process_landsat_image(image, TM_BANDS, TM_BAND_MAP)
+    return process_landsat_image(
+        image, TM_BANDS, TM_BAND_MAP, indices=indices, domains=domains
+    )
 
 
 def get_l7_sr_collection(
@@ -285,6 +346,8 @@ def get_l7_sr_collection(
     start_date: ee.Date,
     end_date: ee.Date,
     apply_water_masking: bool = True,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a cloud- and (optionally) water-masked Landsat 7 SR collection with indices.
 
@@ -296,6 +359,8 @@ def get_l7_sr_collection(
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
         apply_water_masking: If True, applies a spectral water mask derived from the collection median (default True).
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection with calibrated SR bands and index bands appended.
@@ -309,6 +374,8 @@ def get_l7_sr_collection(
         band_map=TM_BAND_MAP,
         sensor_label="Landsat 7 SR imagery",
         apply_water_masking=apply_water_masking,
+        indices=indices,
+        domains=domains,
     )
 
 
@@ -337,7 +404,11 @@ def validate_l5_sr_date_range(
     )
 
 
-def process_l5_image(image: ee.Image) -> ee.Image:
+def process_l5_image(
+    image: ee.Image,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> ee.Image:
     """Select Landsat 5 (TM) bands, apply the scale/offset, and add spectral indices.
 
     Note: TM band numbering differs from OLI (NIR=SR_B4, Red=SR_B3, SWIR1=SR_B5); the TM
@@ -345,11 +416,15 @@ def process_l5_image(image: ee.Image) -> ee.Image:
 
     Args:
         image: Raw Landsat 5 C2 L2 ee.Image (TM band layout, SR_B1-SR_B5, SR_B7).
+        indices: Explicit index names to append, or None for the default harmonized core.
+        domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
     """
-    return process_landsat_image(image, TM_BANDS, TM_BAND_MAP)
+    return process_landsat_image(
+        image, TM_BANDS, TM_BAND_MAP, indices=indices, domains=domains
+    )
 
 
 def get_l5_sr_collection(
@@ -357,6 +432,8 @@ def get_l5_sr_collection(
     start_date: ee.Date,
     end_date: ee.Date,
     apply_water_masking: bool = True,
+    indices: list[str] | tuple[str, ...] | None = None,
+    domains: list[str] | tuple[str, ...] | None = None,
 ) -> ee.ImageCollection:
     """Build a cloud- and (optionally) water-masked Landsat 5 SR collection with indices.
 
@@ -367,6 +444,8 @@ def get_l5_sr_collection(
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
         apply_water_masking: If True, applies a spectral water mask derived from the collection median (default True).
+        indices: Explicit index names each image should contain, or None for the default harmonized core.
+        domains: Index domains to include, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
         ee.ImageCollection with calibrated SR bands and index bands appended.
@@ -380,4 +459,6 @@ def get_l5_sr_collection(
         band_map=TM_BAND_MAP,
         sensor_label="Landsat 5 SR imagery",
         apply_water_masking=apply_water_masking,
+        indices=indices,
+        domains=domains,
     )

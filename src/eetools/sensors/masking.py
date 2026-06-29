@@ -8,6 +8,39 @@ means a threshold or logic change happens in exactly one place.
 
 import ee
 
+# The spectral water mask reads these index bands off the collection median, so any
+# custom index selection must still produce them when water masking is enabled.
+WATER_MASK_INDICES = ("NDVI", "MNDWI")
+
+
+def validate_water_mask_selection(
+    band_map: dict,
+    indices: list[str] | tuple[str, ...] | None,
+    domains: list[str] | tuple[str, ...] | None,
+) -> None:
+    """Ensure a custom index selection still yields the bands the water mask needs.
+
+    Args:
+        band_map: Logical-key -> band-name map for the sensor (drives availability).
+        indices: Explicit index selection passed to the collection builder, or None.
+        domains: Domain selection passed to the collection builder, or None.
+
+    Returns:
+        None. Raises ValueError if water masking is requested but the resolved selection
+        omits NDVI or MNDWI.
+    """
+    # Local import to avoid a module-load cycle (indices imports nothing from here).
+    from eetools.sensors.indices import resolve_index_names
+
+    resolved = set(resolve_index_names(band_map, indices=indices, domains=domains))
+    missing = [name for name in WATER_MASK_INDICES if name not in resolved]
+    if missing:
+        raise ValueError(
+            f"Water masking requires {missing} in the index selection; include them "
+            "(e.g. add to `indices`, or select the relevant domains) or pass "
+            "apply_water_masking=False."
+        )
+
 
 def build_non_water_mask(
     collection: ee.ImageCollection,

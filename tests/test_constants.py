@@ -34,7 +34,7 @@ def test_band_maps_expose_core_logical_keys(band_map):
 
 
 def test_sentinel_band_map_has_swir2_and_red_edge():
-    # S2 is the only sensor calc_indices is called on with include_ndre=True.
+    # S2 is the only sensor with a red edge, so NDRE is auto-included for it.
     assert "swir2" in C.S2_BAND_MAP
     assert "red_edge" in C.S2_BAND_MAP
 

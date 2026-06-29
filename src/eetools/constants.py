@@ -28,6 +28,22 @@ BII_1KM_COLLECTION = f"{_BII_ROOT}/BII_1km"
 BII_8KM_COLLECTION = f"{_BII_ROOT}/BII_8km"
 BII_MASK_ASSET = f"{_BII_ROOT}/BII_Mask"
 
+#################### SPECTRAL-INDEX BAND CONVENTION ##########################
+# Awesome Spectral Indices (ASI; Montero et al. 2023, doi:10.1038/s41597-023-02096-0)
+# standardized band letters for each logical band_map key. Every *_BAND_MAP below maps
+# these same logical keys to a sensor's physical band names, so the generic index
+# functions in sensors/indices.py are sensor-agnostic. Documented for cross-tool
+# portability (e.g. spyndex/eemont use these letters directly).
+ASI_BAND_LETTERS = {
+    "blue": "B",
+    "green": "G",
+    "red": "R",
+    "red_edge": "RE1",
+    "nir": "N",
+    "swir1": "S1",
+    "swir2": "S2",
+}
+
 #################### SENTINEL-2 ##########################
 S2_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
 S2_ALL_BANDS = [
@@ -72,8 +88,11 @@ S2_BAND_MAP = {
     "blue": "B2",
     "green": "B3",
     "red": "B4",
-    "red_edge": "B5",
+    "red_edge": "B5",  # RE1
+    "red_edge2": "B6",  # RE2 — enables MTCI/IRECI/S2REP/BAIS2 (Sentinel-2 only)
+    "red_edge3": "B7",  # RE3
     "nir": "B8",
+    "nir2": "B8A",  # N2 (narrow NIR) — used by BAIS2
     "swir1": "B11",
     "swir2": "B12",
 }

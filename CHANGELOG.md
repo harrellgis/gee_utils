@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 15 additional spectral indices, selectable by name or application domain: **GNDVI**,
+  **EVI2**, **OSAVI** (vegetation), **GVMI** (moisture), **NDBI**, **UI** (urban), **MBI**,
+  **EMBI**, **DBSI** (soil), **BAI**, **NBR2** (burn), and the Sentinel-2 red-edge indices
+  **MTCI**, **IRECI**, **S2REP**, **BAIS2**. Formulas follow the Awesome Spectral Indices
+  catalogue; each carries its ASI `short_name` and reference DOI in the docstring.
+- Declarative index registry (`sensors.indices.INDEX_REGISTRY` / `IndexSpec`) driving
+  `calc_indices(image, band_map, indices=None, domains=None)`: select indices by name or by
+  domain (`vegetation`, `water`, `moisture`, `soil`, `burn`, `urban`), with automatic
+  band-availability filtering (red-edge indices compute on Sentinel-2 and are skipped on
+  sensors without a red edge). Adding an index is now a single registry entry.
+- `indices` / `domains` selection arguments on every collection builder
+  (`get_s2_sr_collection`, `get_l5/l7/l8/l9_sr_collection`, `get_hls_*_collection`) and the
+  per-image `process_*` functions, so callers choose which indices a collection carries.
+- Sentinel-2 band map extended with `red_edge2` (B6), `red_edge3` (B7), and `nir2` (B8A) to
+  support the red-edge indices; `constants.ASI_BAND_LETTERS` documents the logical-key →
+  ASI band-letter mapping.
 - `sensors.bii.preprocessing` module for the **Biodiversity Intactness Index** (sat-io
   sub-Saharan Africa, 1 km & 8 km): `get_bii_image(resolution)` reproduces the published
   processing (self-masked per-taxon BII bands, land-use-class-masked Land Use Intensity,
@@ -54,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `README.md` with install, authentication, quickstart, and testing docs.
 
 ### Changed
+- **Breaking:** `calc_indices` no longer accepts `include_ndre`. NDRE is now emitted whenever
+  the band map exposes a `red_edge` key (i.e. Sentinel-2), via the registry's
+  band-availability filtering. Remove `include_ndre=...` from call sites.
+- Spectral water masking validates that a custom index selection still includes NDVI and
+  MNDWI when `apply_water_masking=True`, raising `ValueError` otherwise.
 - **Breaking:** `utils.gpkg_to_ee_geometry` is renamed to `utils.vector_file_to_ee_geometry`
   and now reads any geopandas-supported format (.gpkg, .geojson, .shp, ...), not only
   GeoPackage. Update call sites to the new name.

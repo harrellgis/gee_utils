@@ -87,7 +87,7 @@ def test_process_s2_image_scales_and_adds_indices(ee_session, first_value):
     out = ee_session.Image(process_s2_image(raw))
     names = out.bandNames().getInfo()
     assert "NDVI" in names
-    assert "NDRE" in names  # S2 is processed with include_ndre=True
+    assert "NDRE" in names  # NDRE auto-included: the S2 band map has a red edge
     # Reflectance is scaled by S2_SCALE_FACTOR.
     assert first_value(out, "B4") == pytest.approx(3000 * S2_SCALE_FACTOR)
     assert out.get("system:time_start").getInfo() is not None
