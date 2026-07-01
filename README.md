@@ -6,9 +6,13 @@ behind a consistent API: build cloud- and water-masked image collections, append
 a harmonized set of spectral indices, reduce over time, export to Drive or Earth
 Engine assets, and summarize/visualize the results.
 
-Supported sources: **Sentinel-2 SR**, **Landsat 8 C2 L2 SR**, **NASA HLS**
-(L30/S30), **MODIS** MCD15A3H LAI/FPAR, **CHIRPS** precipitation, and
-**ESA WorldCover**.
+Supported sources: **Sentinel-2 SR**, **Landsat 5/7/8/9 C2 L2 SR**, **NASA HLS**
+(L30/S30), **MODIS** MCD15A3H LAI/FPAR, **CHIRPS** precipitation,
+**ESA WorldCover**, **Sentinel-1 SAR GRD**, **OPERA DSWx** surface water,
+**Dynamic World** LULC, **Copernicus DEM**/terrain, **Hansen** Global Forest
+Change, **BII** (Biodiversity Intactness Index), and **WDPA** protected-area
+vectors. It also includes a **LandTrendr** temporal-segmentation method
+subpackage built on the harmonized Landsat builders.
 
 ## Requirements
 
@@ -98,6 +102,29 @@ task = export_image_to_drive(
 print(task.status())
 ```
 
+By default each collection carries a harmonized core of indices. To choose exactly
+which indices each image gets, pass `indices` (by name) and/or `domains` (whole
+families: `vegetation`, `water`, `moisture`, `soil`, `burn`, `urban`). Selection is
+sensor-aware — red-edge indices (MTCI, IRECI, S2REP, BAIS2) compute on Sentinel-2 and
+are silently skipped on sensors without a red edge.
+
+```python
+# Whole domains — here without water masking, since these families omit MNDWI.
+veg_burn = get_s2_sr_collection(
+    aoi, start, end, domains=["vegetation", "burn"], apply_water_masking=False
+)
+
+# Specific indices by name. Water masking is on by default, so the selection must
+# include NDVI and MNDWI (both are read by the spectral water mask).
+named = get_s2_sr_collection(
+    aoi, start, end, indices=["NDVI", "MNDWI", "NDBI", "BAIS2"]
+)
+```
+
+Indices come from a central registry (`eetools.sensors.indices.INDEX_REGISTRY`); the
+same `indices`/`domains` arguments are accepted by `calc_indices()` directly. Adding a
+new index is a single registry entry.
+
 Each sensor exposes a `get_<sensor>_collection(aoi, start_date, end_date, ...)`
 builder (`get_l8_sr_collection`, `get_hls_merged_collection`,
 `get_chirps_collection`, `get_modis_lai_fpar_col`, …) that validates the date
@@ -112,7 +139,8 @@ src/eetools/
 ├── io.py             # exports to Drive / EE assets, task status helpers
 ├── utils.py          # geometry/GPKG helpers, date validation, reducers, resampling
 ├── sensors/          # per-sensor masking.py + preprocessing.py, plus indices.py
-└── visualization/    # plots.py, summaries.py, tables.py
+├── landtrendr/       # LandTrendr temporal-segmentation method (collection/segmentation/outputs)
+└── visualization/    # plots.py, summaries.py, tables.py, vis_params.py
 ```
 
 ## Development

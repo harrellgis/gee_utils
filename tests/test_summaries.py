@@ -222,3 +222,96 @@ def test_summarize_collection_histograms(ee_session, small_aoi):
     assert isinstance(result, list)
     assert result[0]["site_name"] == "A"
     assert result[0]["histogram"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# build_seasonal_composites
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def seasonal_collection(ee_session):
+    """Collection with one image in the wet season (Apr) of 2020 and 2021, and
+    one image outside the season (Jan) in 2022 — used to verify per-year
+    filtering and empty-year exclusion."""
+    return ee_session.ImageCollection(
+        [
+            ee_session.Image.constant(0.3)
+            .toFloat()
+            .rename("b")
+            .set("system:time_start", ee_session.Date("2020-04-15").millis()),
+            ee_session.Image.constant(0.7)
+            .toFloat()
+            .rename("b")
+            .set("system:time_start", ee_session.Date("2021-04-15").millis()),
+            # 2022 image falls outside the (3, 5) season window
+            ee_session.Image.constant(0.9)
+            .toFloat()
+            .rename("b")
+            .set("system:time_start", ee_session.Date("2022-01-15").millis()),
+        ]
+    )
+
+
+@pytest.mark.ee
+def test_build_seasonal_composites_happy_path(ee_session, seasonal_collection):
+    from eetools.visualization.summaries import build_seasonal_composites
+
+    composites = build_seasonal_composites(
+        seasonal_collection,
+        bands=["b"],
+        start_year=2020,
+        end_year=2021,
+        season_months=(3, 5),
+        season_name="wet",
+        composite_stat="median",
+    )
+    assert composites.size().getInfo() == 2
+    first = composites.sort("system:time_start").first()
+    assert first.get("year").getInfo() == 2020
+    assert first.get("season").getInfo() == "wet"
+    assert first.get("season_months").getInfo() == "3-5"
+    assert first.get("composite_stat").getInfo() == "median"
+
+
+@pytest.mark.ee
+def test_build_seasonal_composites_excludes_empty_years(ee_session, seasonal_collection):
+    from eetools.visualization.summaries import build_seasonal_composites
+
+    # 2022 has no images in months 3-5, so the output should have only 2020 and 2021.
+    composites = build_seasonal_composites(
+        seasonal_collection,
+        bands=["b"],
+        start_year=2020,
+        end_year=2022,
+        season_months=(3, 5),
+        season_name="wet",
+    )
+    assert composites.size().getInfo() == 2
+
+
+def test_build_seasonal_composites_rejects_invalid_stat():
+    from eetools.visualization.summaries import build_seasonal_composites
+
+    with pytest.raises(ValueError, match="composite_stat"):
+        build_seasonal_composites(
+            None,  # type: ignore[arg-type]
+            bands=["b"],
+            start_year=2020,
+            end_year=2021,
+            season_months=(3, 5),
+            season_name="wet",
+            composite_stat="max",
+        )
+
+
+def test_build_seasonal_composites_rejects_invalid_months():
+    from eetools.visualization.summaries import build_seasonal_composites
+
+    with pytest.raises(ValueError, match="season_months"):
+        build_seasonal_composites(
+            None,  # type: ignore[arg-type]
+            bands=["b"],
+            start_year=2020,
+            end_year=2021,
+            season_months=(5, 3),  # start > end
+            season_name="wet",
+        )

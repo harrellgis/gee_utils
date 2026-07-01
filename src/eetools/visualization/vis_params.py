@@ -190,6 +190,264 @@ NDRE_VIS_PARAMS = {
     ],
 }
 
+# kNDVI (RBF form): tanh output is always [0, 1].
+KNDVI_FIXED_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 1.0,
+    "palette": [
+        "#FFFFFF",
+        "#CE7E45",
+        "#DF923D",
+        "#F1B555",
+        "#FCD163",
+        "#99B718",
+        "#74A901",
+        "#66A000",
+        "#529400",
+        "#3E8601",
+        "#207401",
+        "#056201",
+        "#004C00",
+    ],
+}
+
+EVI2_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#000080",
+        "#0000FF",
+        "#FFFFFF",
+        "#FDE725",
+        "#5DC863",
+        "#21918C",
+        "#3B528B",
+        "#004C00",
+    ],
+}
+
+GNDVI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#0000FF",
+        "#FFFFFF",
+        "#FFFFB2",
+        "#D9F0A3",
+        "#78C679",
+        "#31A354",
+        "#006837",
+        "#004C00",
+    ],
+}
+
+OSAVI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#440154",
+        "#3B528B",
+        "#21918C",
+        "#5DC863",
+        "#FDE725",
+        "#FFFFCC",
+        "#006400",
+    ],
+}
+
+# MTCI and IRECI are chlorophyll-ratio indices with unbounded positive range;
+# the caps below cover typical healthy-canopy values.
+MTCI_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 10.0,
+    "palette": [
+        "#FFFFE5",
+        "#F7FCB9",
+        "#D9F0A3",
+        "#ADDD8E",
+        "#78C679",
+        "#41AB5D",
+        "#238B45",
+        "#006837",
+    ],
+}
+
+IRECI_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 15.0,
+    "palette": [
+        "#FFFFE5",
+        "#F7FCB9",
+        "#D9F0A3",
+        "#ADDD8E",
+        "#78C679",
+        "#41AB5D",
+        "#238B45",
+        "#006837",
+    ],
+}
+
+# S2REP is the red-edge inflection point in nanometres (~700–730 nm).
+# Low values indicate stress; high values indicate healthy canopy.
+S2REP_VIS_PARAMS = {
+    "min": 700.0,
+    "max": 730.0,
+    "palette": [
+        "#D73027",
+        "#FC8D59",
+        "#FEE090",
+        "#FFFFBF",
+        "#E0F3F8",
+        "#91BFDB",
+        "#4575B4",
+    ],
+}
+
+GVMI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#A52A2A",  # dry
+        "#F5DEB3",
+        "#FFFFBF",
+        "#C7E9B4",
+        "#7FCDBB",
+        "#41B6C4",
+        "#225EA8",  # moist
+    ],
+}
+
+# Soil indices: positive values indicate bare/exposed soil; negative indicates
+# vegetated or water surfaces.
+BSI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",  # vegetated
+        "#74A901",
+        "#FFFFBF",
+        "#D2B48C",
+        "#A0522D",
+        "#8B4513",
+        "#4A2500",  # bare soil
+    ],
+}
+
+# MBI has a +0.5 offset baked in; practical range is ~0–1 (bare soil ≈ 0.5+).
+MBI_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",
+        "#74A901",
+        "#FFFFBF",
+        "#D2B48C",
+        "#A0522D",
+        "#8B4513",
+    ],
+}
+
+EMBI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",
+        "#74A901",
+        "#FFFFBF",
+        "#D2B48C",
+        "#A0522D",
+        "#8B4513",
+    ],
+}
+
+DBSI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",
+        "#74A901",
+        "#FFFFBF",
+        "#D2B48C",
+        "#A0522D",
+        "#8B4513",
+        "#4A2500",
+    ],
+}
+
+NBR2_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#0000FF",
+        "#FFFFFF",
+        "#FFFFB2",
+        "#FECC5C",
+        "#FD8D3C",
+        "#E31A1C",
+        "#800026",
+    ],
+}
+
+# BAI is unbounded (1 / distance² from a reference burn point); cap at 500 for
+# display — most fire-affected pixels fall in the 50–500 range.
+BAI_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 500.0,
+    "palette": [
+        "#FFFFFF",
+        "#FFFFB2",
+        "#FECC5C",
+        "#FD8D3C",
+        "#F03B20",
+        "#BD0026",
+        "#800026",
+    ],
+}
+
+# BAIS2 output typically spans ~0–3 over burned/non-burned surfaces (S2 only).
+BAIS2_VIS_PARAMS = {
+    "min": 0.0,
+    "max": 3.0,
+    "palette": [
+        "#FFFFFF",
+        "#FFFFB2",
+        "#FECC5C",
+        "#FD8D3C",
+        "#F03B20",
+        "#BD0026",
+        "#800026",
+    ],
+}
+
+# Urban indices: positive values indicate built-up / impervious surfaces.
+NDBI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",  # natural / non-urban
+        "#90EE90",
+        "#FFFFFF",
+        "#C8C8C8",
+        "#888888",
+        "#444444",
+        "#1A1A1A",  # dense urban
+    ],
+}
+
+UI_VIS_PARAMS = {
+    "min": -1.0,
+    "max": 1.0,
+    "palette": [
+        "#006400",
+        "#90EE90",
+        "#FFFFFF",
+        "#C8C8C8",
+        "#888888",
+        "#444444",
+        "#1A1A1A",
+    ],
+}
+
 # --------------------------------------------------------------------------- #
 # Terrain (Copernicus DEM GLO-30 / ee.Terrain) — single-band layers
 # --------------------------------------------------------------------------- #
@@ -318,7 +576,9 @@ def change_vis_min_max(
         ValueError: If new_min is not less than new_max.
     """
     if new_min >= new_max:
-        raise ValueError(f"new_min ({new_min}) must be less than new_max ({new_max})")
+        raise ValueError(
+            f"new_min ({new_min}) must be less than new_max ({new_max})"
+        )
 
     updated = copy.deepcopy(vis_params)
     updated["min"] = new_min

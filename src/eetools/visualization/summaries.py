@@ -291,6 +291,84 @@ def build_period_composites(
     return ee.ImageCollection.fromImages(images_list)
 
 
+def build_seasonal_composites(
+    collection: ee.ImageCollection,
+    bands: list[str],
+    start_year: int,
+    end_year: int,
+    season_months: tuple[int, int],
+    season_name: str,
+    composite_stat: str = "median",
+) -> ee.ImageCollection:
+    """Build per-year seasonal composites by filtering each year's collection to a
+    fixed window of consecutive months.
+
+    For each year in [start_year, end_year] the collection is filtered to the
+    months [season_months[0], season_months[1]] (inclusive) and reduced with
+    composite_stat. Years that contain no images in the season window are
+    excluded from the output (the ImageCollection contains no null entries).
+
+    Args:
+        collection: ee.ImageCollection to composite.
+        bands: List of band names to select before compositing.
+        start_year: First year to process, inclusive.
+        end_year: Last year to process, inclusive.
+        season_months: (start_month, end_month) as 1-based integers (e.g. (3, 5)
+            for March through May, inclusive).  Both months must fall within the
+            same calendar year; cross-year seasons (e.g. Nov–Jan) are not
+            supported.
+        season_name: Label stored as the 'season' property on each output image
+            (e.g. 'wet', 'dry').
+        composite_stat: Statistic used to combine images; one of 'mean',
+            'median', or 'sum' (default 'median').
+
+    Returns:
+        ee.ImageCollection of per-year composites, one per year with imagery in
+        the season window, each carrying system:time_start, year, season,
+        season_months, image_count, and composite_stat properties.
+
+    Raises:
+        ValueError: If composite_stat is not 'mean', 'median', or 'sum', or if
+            season_months is not a valid (start, end) pair with 1 ≤ start ≤ end ≤ 12.
+    """
+    _validate_composite_stat(composite_stat)
+    start_month, end_month = season_months
+    if not (1 <= start_month <= end_month <= 12):
+        raise ValueError(
+            f"season_months must satisfy 1 <= start <= end <= 12; got {season_months}"
+        )
+
+    season_label = f"{start_month}-{end_month}"
+    col = ee.ImageCollection(collection).select(bands)
+    years = ee.List.sequence(start_year, end_year)
+
+    def _make_composite(year: ee.Number) -> ee.Image:
+        year = ee.Number(year)
+        window_start = ee.Date.fromYMD(year, start_month, 1)
+        window_end = ee.Date.fromYMD(year, end_month, 1).advance(1, "month")
+        subset = col.filterDate(window_start, window_end)
+        image_count = subset.size()
+        composite = _apply_stat(subset, composite_stat)
+        return ee.Image(
+            ee.Algorithms.If(
+                image_count.gt(0),
+                composite.set(
+                    {
+                        "system:time_start": window_start.millis(),
+                        "year": year,
+                        "season": season_name,
+                        "season_months": season_label,
+                        "image_count": image_count,
+                        "composite_stat": composite_stat,
+                    }
+                ),
+                None,
+            )
+        )
+
+    return ee.ImageCollection.fromImages(years.map(_make_composite))
+
+
 def reduce_image_over_region(
     image: ee.Image,
     region: ee.Geometry,

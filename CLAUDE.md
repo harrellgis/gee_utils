@@ -24,7 +24,7 @@ At the start of every session, load context in this order:
 
 ## What This Repo Does
 
-`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 8 C2 L2 SR, NASA HLS L30/S30, MODIS LAI/Fpar, CHIRPS precipitation, ESA WorldCover) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
+`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS LAI/Fpar, CHIRPS precipitation, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
 
 ---
 
@@ -128,6 +128,7 @@ gee_utils/
 │   │   ├── segmentation.py  # run-param defaults + run_landtrendr / run_landtrendr_from_aoi
 │   │   └── outputs.py       # get_change_map / get_fitted_stack / get_segment_data (array-image parsers)
 │   └── visualization/       # plots.py, summaries.py, tables.py (matplotlib/seaborn/pandas)
+│                            # + vis_params.py (ready-made EE/geemap visParams presets)
 └── tests/                   # one test_*.py per source module; conftest.py holds shared
                              # fixtures + the ee_session fixture (see "Testing")
 ```

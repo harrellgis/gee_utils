@@ -463,3 +463,9 @@ SIGMA = 0.15  # default kNDVI sigma
 DEFAULT_MAX_PIXELS = 1e13
 DEFAULT_FILE_FORMAT = "GeoTIFF"
 DEFAULT_CRS = "EPSG:4326"
+
+# Representative wet/dry season month ranges for tropical East-African sites.
+# Format: (start_month, end_month) inclusive; pass directly to build_seasonal_composites.
+# Override per AOI and region — these are illustrative defaults, not universal.
+SEASON_WET: tuple[int, int] = (3, 5)   # Mar–May  (long rains)
+SEASON_DRY: tuple[int, int] = (7, 10)  # Jul–Oct  (boreal dry)
