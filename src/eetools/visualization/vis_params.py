@@ -576,9 +576,7 @@ def change_vis_min_max(
         ValueError: If new_min is not less than new_max.
     """
     if new_min >= new_max:
-        raise ValueError(
-            f"new_min ({new_min}) must be less than new_max ({new_max})"
-        )
+        raise ValueError(f"new_min ({new_min}) must be less than new_max ({new_max})")
 
     updated = copy.deepcopy(vis_params)
     updated["min"] = new_min

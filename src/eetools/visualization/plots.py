@@ -40,6 +40,37 @@ def add_year_shading(
     return ax
 
 
+def add_year_markers(
+    ax,
+    dry_date: str = "2023-01-01",
+    wet_date: str = "2025-01-01",
+    dry_label: str = "2023 dry year",
+    wet_label: str = "2025 wet year",
+):
+    """Add vertical dashed markers for dry and wet reference years to a matplotlib axis.
+
+    Args:
+        ax: matplotlib Axes object to annotate.
+        dry_date: Date string for the dry-year marker line (default '2023-01-01').
+        wet_date: Date string for the wet-year marker line (default '2025-01-01').
+        dry_label: Text label placed at the dry-year marker (default '2023 dry year').
+        wet_label: Text label placed at the wet-year marker (default '2025 wet year').
+
+    Returns:
+        matplotlib Axes object with dry and wet vertical dashed lines and text annotations added.
+    """
+    dry_date = pd.to_datetime(dry_date)
+    wet_date = pd.to_datetime(wet_date)
+
+    ax.axvline(dry_date, linestyle="--", linewidth=1)
+    ax.axvline(wet_date, linestyle="--", linewidth=1)
+
+    ax.text(dry_date, ax.get_ylim()[1], dry_label, rotation=90, va="top", ha="right")
+    ax.text(wet_date, ax.get_ylim()[1], wet_label, rotation=90, va="top", ha="right")
+
+    return ax
+
+
 def plot_single_metric_annually(
     df: pd.DataFrame,
     title: str,
@@ -210,34 +241,3 @@ def plot_multi_metric_monthly(
     plt.tight_layout()
 
     return fig, ax
-
-
-def add_year_markers(
-    ax,
-    dry_date: str = "2023-01-01",
-    wet_date: str = "2025-01-01",
-    dry_label: str = "2023 dry year",
-    wet_label: str = "2025 wet year",
-):
-    """Add vertical dashed markers for dry and wet reference years to a matplotlib axis.
-
-    Args:
-        ax: matplotlib Axes object to annotate.
-        dry_date: Date string for the dry-year marker line (default '2023-01-01').
-        wet_date: Date string for the wet-year marker line (default '2025-01-01').
-        dry_label: Text label placed at the dry-year marker (default '2023 dry year').
-        wet_label: Text label placed at the wet-year marker (default '2025 wet year').
-
-    Returns:
-        matplotlib Axes object with dry and wet vertical dashed lines and text annotations added.
-    """
-    dry_date = pd.to_datetime(dry_date)
-    wet_date = pd.to_datetime(wet_date)
-
-    ax.axvline(dry_date, linestyle="--", linewidth=1)
-    ax.axvline(wet_date, linestyle="--", linewidth=1)
-
-    ax.text(dry_date, ax.get_ylim()[1], dry_label, rotation=90, va="top", ha="right")
-    ax.text(wet_date, ax.get_ylim()[1], wet_label, rotation=90, va="top", ha="right")
-
-    return ax

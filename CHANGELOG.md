@@ -70,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `README.md` with install, authentication, quickstart, and testing docs.
 
 ### Changed
+- **Breaking:** Vector utilities (`vector_file_to_ee_geometry`, `vector_file_to_features`,
+  `vector_files_to_feature_collection`, `merge_vector_files`, `build_site_feature`,
+  `load_site_feature`, `get_sites_geometry`, `fc_select_properties`,
+  `buffer_feature_collection`) have moved from `eetools.utils` to the new
+  `eetools.vectors` module. Update imports to `from eetools.vectors import ...`.
+- **Breaking:** Compositing functions (`build_composite`, `build_period_composites`,
+  `build_seasonal_composites`) and zonal/sampling functions (`reduce_image_over_region`,
+  `collection_to_region_timeseries`, `image_collection_to_region_stats_fc`,
+  `image_collection_to_sample_fc`, `summarize_collection_histograms`) have moved from
+  `eetools.visualization.summaries` (now deleted) to `eetools.compositing` and
+  `eetools.zonal` respectively. Update imports accordingly.
 - **Breaking:** `calc_indices` no longer accepts `include_ndre`. NDRE is now emitted whenever
   the band map exposes a `red_edge` key (i.e. Sentinel-2), via the registry's
   band-availability filtering. Remove `include_ndre=...` from call sites.

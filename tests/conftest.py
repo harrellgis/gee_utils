@@ -195,3 +195,25 @@ def synthetic_reflectance_image(ee_session, reflectance_band_map):
 def small_aoi(ee_session):
     """A small land AOI (coastal Kwale, Kenya) for real-dataset integration."""
     return ee_session.Geometry.Rectangle([39.20, -4.30, 39.25, -4.25])
+
+
+@pytest.fixture
+def timed_collection(ee_session):
+    """A 2-image constant collection with one image in 2020 and one in 2021.
+
+    The constants are cast to a common float type — otherwise each
+    ``ee.Image.constant`` carries a distinct typed value-range and EE rejects
+    reductions across the collection as "inhomogeneous".
+    """
+    return ee_session.ImageCollection(
+        [
+            ee_session.Image.constant(0.2)
+            .toFloat()
+            .rename("b")
+            .set("system:time_start", ee_session.Date("2020-06-01").millis()),
+            ee_session.Image.constant(0.6)
+            .toFloat()
+            .rename("b")
+            .set("system:time_start", ee_session.Date("2021-06-01").millis()),
+        ]
+    )

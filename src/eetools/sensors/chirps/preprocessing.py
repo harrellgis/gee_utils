@@ -1,12 +1,10 @@
 import ee
 
+from eetools.compositing import build_period_composites
 from eetools.constants import CHIRPS_COLLECTION, CHIRPS_PRECIP_BAND
 from eetools.io import export_table_to_drive
 from eetools.utils import validate_collection_date_range
-from eetools.visualization.summaries import (
-    build_period_composites,
-    collection_to_region_timeseries,
-)
+from eetools.zonal import collection_to_region_timeseries
 
 
 def validate_chirps_date_range(

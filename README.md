@@ -125,6 +125,27 @@ Indices come from a central registry (`eetools.sensors.indices.INDEX_REGISTRY`);
 same `indices`/`domains` arguments are accepted by `calc_indices()` directly. Adding a
 new index is a single registry entry.
 
+Use `build_period_composites` to reduce a collection to one composite per year or
+month, or `build_seasonal_composites` to produce one composite per year restricted
+to a recurring window of months (e.g. a wet or dry season):
+
+```python
+from eetools.visualization.summaries import build_seasonal_composites
+from eetools.constants import SEASON_WET  # (3, 5) — Mar–May; override per region
+
+# One median composite per year covering the wet-season months (Mar–May)
+wet_season = build_seasonal_composites(
+    collection=collection,
+    bands=["NDVI"],
+    start_year=2018,
+    end_year=2023,
+    season_months=SEASON_WET,
+    season_name="wet",
+    composite_stat="median",
+)
+# Each image carries year, season, season_months, image_count, composite_stat properties
+```
+
 Each sensor exposes a `get_<sensor>_collection(aoi, start_date, end_date, ...)`
 builder (`get_l8_sr_collection`, `get_hls_merged_collection`,
 `get_chirps_collection`, `get_modis_lai_fpar_col`, …) that validates the date
