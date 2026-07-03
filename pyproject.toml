@@ -18,6 +18,9 @@ dependencies = [
     "seaborn>=0.13.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/harrellgis/gee_utils"
+
 [project.optional-dependencies]
 notebook = [
     "geemap>=0.37.2",
