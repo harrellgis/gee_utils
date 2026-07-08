@@ -33,16 +33,31 @@ def medoid_composite(collection: ee.ImageCollection, bands: list[str]) -> ee.Ima
         bands: Band names used both for the distance computation and the output.
 
     Returns:
-        ee.Image medoid composite containing only the named bands.
+        ee.Image medoid composite containing only the named bands. When ``collection`` is
+        empty (a LandTrendr year with zero scenes after date/sensor filtering) a fully-masked
+        image with the same band names and double type is returned, so downstream ``.select``
+        / index math and the LandTrendr time series treat that year as all-missing rather than
+        crashing on a 0-band image.
     """
-    median = collection.select(bands).median()
+    collection = ee.ImageCollection(collection)
+    has_images = collection.size().gt(0)
 
-    def _add_distance(image: ee.Image) -> ee.Image:
-        diff = image.select(bands).subtract(median).pow(2).reduce(ee.Reducer.sum())
-        # Negate so qualityMosaic (which keeps the MAXIMUM) selects the SMALLEST distance.
-        return image.addBands(diff.multiply(-1).rename("medoid_distance"))
+    def _real_medoid() -> ee.Image:
+        median = collection.select(bands).median()
 
-    return collection.map(_add_distance).qualityMosaic("medoid_distance").select(bands)
+        def _add_distance(image: ee.Image) -> ee.Image:
+            diff = image.select(bands).subtract(median).pow(2).reduce(ee.Reducer.sum())
+            # Negate so qualityMosaic (keeps the MAXIMUM) selects the SMALLEST distance.
+            return image.addBands(diff.multiply(-1).rename("medoid_distance"))
+
+        return (
+            collection.map(_add_distance).qualityMosaic("medoid_distance").select(bands)
+        )
+
+    # Match the real branch's dtype: _prep_scene's scale/offset makes reflectance double,
+    # and identical types across ee.Algorithms.If branches are required.
+    empty = ee.Image.constant([0] * len(bands)).rename(bands).toDouble().selfMask()
+    return ee.Image(ee.Algorithms.If(has_images, _real_medoid().toDouble(), empty))
 
 
 def _harmonize_oli_to_etm(image: ee.Image) -> ee.Image:

@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computes per-pixel cosine similarity (dot product of the unit-length vectors) for
   cross-year change detection. Collection ID, band list, and scale live in `constants.py`.
 
+### Fixed
+- `landtrendr.collection.medoid_composite` no longer crashes (`Image.select: Band pattern
+  'BLUE' was applied to an Image with no bands`) when a LandTrendr year has zero source
+  scenes after date/sensor filtering. An empty input collection now returns a fully-masked
+  double image with the requested band names (guarded by `ee.Algorithms.If` on collection
+  size, mirroring `compositing.build_period_composites`), so that year contributes only
+  masked pixels to the time series — the behavior LandTrendr's `minObservationsNeeded`
+  already expects — instead of producing a bandless image.
+
 ### Changed
 - LandTrendr's segmentation and fit-to-vertices (FTV) bands now accept **any
   `INDEX_REGISTRY` index computable from the Landsat common bands**, not just the former

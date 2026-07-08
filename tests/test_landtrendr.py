@@ -84,6 +84,36 @@ def test_medoid_composite_picks_median_closest(ee_session, first_value):
 
 
 @pytest.mark.ee
+def test_medoid_composite_empty_collection_returns_masked_bands(ee_session):
+    from eetools.constants import LANDTRENDR_COMMON_BANDS
+    from eetools.landtrendr.collection import medoid_composite
+
+    # A year with zero scenes after filtering: the guard returns a fully-masked image with
+    # the requested band names (not a 0-band image that would crash the next .select).
+    empty = ee_session.ImageCollection([])
+    out = medoid_composite(empty, LANDTRENDR_COMMON_BANDS)
+    assert out.bandNames().getInfo() == LANDTRENDR_COMMON_BANDS
+    # Downstream index math over the common bands still builds without error...
+    from eetools.landtrendr.collection import _segmentation_band
+
+    seg = _segmentation_band(out, "NBR")
+    assert seg.bandNames().getInfo() == ["NBR"]
+    # ...and every pixel is masked, so the year contributes nothing to the series.
+    masked_count = (
+        out.select("BLUE")
+        .mask()
+        .reduceRegion(
+            reducer=ee_session.Reducer.sum(),
+            geometry=ee_session.Geometry.Point([0, 0]).buffer(30),
+            scale=30,
+        )
+        .get("BLUE")
+        .getInfo()
+    )
+    assert masked_count == 0
+
+
+@pytest.mark.ee
 def test_harmonize_oli_to_etm_matches_roy_formula(ee_session, first_value):
     from eetools.constants import (
         LANDTRENDR_COMMON_BANDS,
