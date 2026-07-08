@@ -55,8 +55,10 @@ def run_landtrendr_from_aoi(
         aoi: Area of interest as ee.Geometry.
         start_year: First composite year (inclusive).
         end_year: Last composite year (inclusive).
-        segmentation_index: Index LandTrendr segments on (default 'NBR').
-        ftv_indices: Additional indices carried as fit-to-vertices bands (default none).
+        segmentation_index: Index LandTrendr segments on; any INDEX_REGISTRY index computable
+            from the Landsat common bands (default 'NBR').
+        ftv_indices: Additional indices carried as fit-to-vertices bands; each any
+            INDEX_REGISTRY index computable from the common bands (default none).
         start_day: Growing-season window start as 'MM-DD' (default full year).
         end_day: Growing-season window end as 'MM-DD' (crosses the new year if before start_day).
         sensors: Landsat sensors to fuse (default all of L5/L7/L8/L9).

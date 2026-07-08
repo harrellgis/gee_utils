@@ -50,6 +50,22 @@ def test_build_landtrendr_collection_rejects_ftv_equal_to_seg_index():
         )
 
 
+def test_natural_index_rejects_unknown_index():
+    from eetools.landtrendr.collection import _natural_index
+
+    # Validation happens (pure) before any EE op, so a None composite never gets touched.
+    with pytest.raises(ValueError, match="Unknown index"):
+        _natural_index(None, "NOPE")
+
+
+def test_segmentation_band_rejects_red_edge_index():
+    from eetools.landtrendr.collection import _segmentation_band
+
+    # CIred_edge/NDRE need 'red_edge', which the Landsat common bands cannot provide.
+    with pytest.raises(ValueError, match="requires band_map key"):
+        _segmentation_band(None, "CIred_edge")
+
+
 # --------------------------------------------------------------------------- #
 # Building blocks (synthetic constant images)
 # --------------------------------------------------------------------------- #
@@ -94,6 +110,35 @@ def test_segmentation_band_is_loss_positive(ee_session, first_value):
     assert seg.bandNames().getInfo() == ["NBR"]
     # Oriented loss-positive: the natural NBR is negated.
     assert first_value(seg, "NBR") == pytest.approx(-0.6)
+
+
+@pytest.mark.ee
+def test_segmentation_band_msavi2_is_negated(ee_session, first_value):
+    import math
+
+    from eetools.landtrendr.collection import _segmentation_band
+
+    # A generalized INDEX_REGISTRY index (dist_dir defaults to -1: greenness falls with loss).
+    comp = ee_session.Image.constant([0.5, 0.3]).rename(["NIR", "RED"])
+    seg = _segmentation_band(comp, "MSAVI2")
+    assert seg.bandNames().getInfo() == ["MSAVI2"]
+    natural = (2 * 0.5 + 1 - math.sqrt((2 * 0.5 + 1) ** 2 - 8 * (0.5 - 0.3))) / 2
+    assert first_value(seg, "MSAVI2") == pytest.approx(-natural)
+
+
+@pytest.mark.ee
+def test_segmentation_band_bsi_used_as_is(ee_session, first_value):
+    from eetools.landtrendr.collection import _segmentation_band
+
+    # BSI rises with degradation (LANDTRENDR_DIST_DIR = +1), so it is NOT negated.
+    comp = ee_session.Image.constant([0.1, 0.3, 0.5, 0.25]).rename(
+        ["BLUE", "RED", "NIR", "SWIR1"]
+    )
+    seg = _segmentation_band(comp, "BSI")
+    assert seg.bandNames().getInfo() == ["BSI"]
+    num = (0.25 + 0.30) - (0.50 + 0.10)
+    den = (0.25 + 0.30) + (0.50 + 0.10)
+    assert first_value(seg, "BSI") == pytest.approx(num / den)
 
 
 # --------------------------------------------------------------------------- #

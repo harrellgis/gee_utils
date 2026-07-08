@@ -10,8 +10,9 @@ Supported sources: **Sentinel-2 SR**, **Landsat 5/7/8/9 C2 L2 SR**, **NASA HLS**
 (L30/S30), **MODIS** MCD15A3H LAI/FPAR, **CHIRPS** precipitation,
 **ESA WorldCover**, **Sentinel-1 SAR GRD**, **OPERA DSWx** surface water,
 **Dynamic World** LULC, **Copernicus DEM**/terrain, **Hansen** Global Forest
-Change, **BII** (Biodiversity Intactness Index), and **WDPA** protected-area
-vectors. It also includes a **LandTrendr** temporal-segmentation method
+Change, **BII** (Biodiversity Intactness Index), **WDPA** protected-area
+vectors, and **Google Satellite Embedding V1** (AlphaEarth Foundations) annual
+64-D embeddings. It also includes a **LandTrendr** temporal-segmentation method
 subpackage built on the harmonized Landsat builders.
 
 ## Requirements

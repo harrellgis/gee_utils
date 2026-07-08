@@ -626,6 +626,78 @@ def calc_osavi(
     ).rename(output_band)
 
 
+def calc_msavi2(
+    image: ee.Image,
+    nir_band: str,
+    red_band: str,
+    output_band: str = "MSAVI2",
+) -> ee.Image:
+    """Calculate the second Modified Soil-Adjusted Vegetation Index (MSAVI2), a self-
+    adjusting soil-robust greenness index for sparse-vegetation / high-soil-background
+    scenes.
+
+    MSAVI2 = (2*NIR + 1 - sqrt((2*NIR + 1)^2 - 8*(NIR - RED))) / 2.
+
+    Unlike SAVI it needs no tunable L — the soil-adjustment is derived inductively — which
+    suits mixed grassland/bare-soil conditions where a fixed L is hard to choose. Uses
+    .expression() (a square root over band sums, not a normalized difference).
+
+    Args:
+        image: ee.Image containing at least nir_band and red_band.
+        nir_band: Name of the near-infrared reflectance band.
+        red_band: Name of the red reflectance band.
+        output_band: Name of the output MSAVI2 band (default 'MSAVI2').
+
+    Returns:
+        ee.Image with a single band named output_band containing MSAVI2 values.
+
+    ASI: MSAVI — ASI's short_name for this Qi et al. 1994 self-adjusting form
+        (doi:10.1016/0034-4257(94)90134-1); eetools keeps the band name 'MSAVI2'.
+    """
+    return image.expression(
+        "(2 * nir + 1 - sqrt((2 * nir + 1) ** 2 - 8 * (nir - red))) / 2",
+        {
+            "nir": image.select(nir_band),
+            "red": image.select(red_band),
+        },
+    ).rename(output_band)
+
+
+def calc_ci_red_edge(
+    image: ee.Image,
+    nir_band: str,
+    red_edge_band: str,
+    output_band: str = "CIred_edge",
+) -> ee.Image:
+    """Calculate the red-edge Chlorophyll Index (CIred_edge), a canopy-chlorophyll / vigor
+    proxy from the NIR / red-edge ratio.
+
+    CIred_edge = (NIR / RE1) - 1.
+
+    Uses .expression() (a band ratio, not a normalized difference) and, like NDRE, needs a
+    red-edge band, so it computes only where the band map has 'red_edge' (Sentinel-2, HLS S30).
+
+    Args:
+        image: ee.Image containing at least nir_band and red_edge_band.
+        nir_band: Name of the near-infrared reflectance band.
+        red_edge_band: Name of the red-edge (RE1) reflectance band.
+        output_band: Name of the output CIred_edge band (default 'CIred_edge').
+
+    Returns:
+        ee.Image with a single band named output_band containing CIred_edge values.
+
+    ASI: CIRE — the Chlorophyll Index Red Edge (doi:10.1078/0176-1617-00887); eetools keeps
+        the band name 'CIred_edge'.
+    """
+    return image.expression(
+        "(nir / re1) - 1",
+        {
+            "nir": image.select(nir_band),
+            "re1": image.select(red_edge_band),
+        },
+    ).rename(output_band)
+
+
 # Moisture
 def calc_gvmi(
     image: ee.Image,
@@ -1054,6 +1126,9 @@ INDEX_REGISTRY: dict[str, IndexSpec] = {
     "SAVI": IndexSpec(
         "SAVI", "vegetation", calc_savi, {"nir_band": "nir", "red_band": "red"}
     ),
+    "MSAVI2": IndexSpec(
+        "MSAVI2", "vegetation", calc_msavi2, {"nir_band": "nir", "red_band": "red"}
+    ),
     "NIRv": IndexSpec(
         "NIRv", "vegetation", calc_nirv, {"nir_band": "nir", "red_band": "red"}
     ),
@@ -1061,6 +1136,12 @@ INDEX_REGISTRY: dict[str, IndexSpec] = {
         "NDRE",
         "vegetation",
         calc_ndre,
+        {"nir_band": "nir", "red_edge_band": "red_edge"},
+    ),
+    "CIred_edge": IndexSpec(
+        "CIred_edge",
+        "vegetation",
+        calc_ci_red_edge,
         {"nir_band": "nir", "red_edge_band": "red_edge"},
     ),
     "MTCI": IndexSpec(

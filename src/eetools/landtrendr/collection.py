@@ -3,19 +3,22 @@ import ee
 from eetools.constants import (
     LANDSAT_C2_ADD_OFFSET,
     LANDSAT_C2_SCALE_FACTOR,
+    LANDTRENDR_BAND_MAP,
     LANDTRENDR_COMMON_BANDS,
-    LANDTRENDR_NORMALIZED_INDICES,
+    LANDTRENDR_DEFAULT_DIST_DIR,
+    LANDTRENDR_DIST_DIR,
     LANDTRENDR_SENSORS,
     ROY_OLI_TO_ETM_INTERCEPTS,
     ROY_OLI_TO_ETM_SLOPES,
 )
-from eetools.sensors.indices import calc_nbr, calc_ndmi, calc_ndvi
+from eetools.sensors.indices import INDEX_REGISTRY, resolve_index_names
 from eetools.sensors.landsat.masking import build_cloudfree_landsat_col
 
-# Loss-positive orientation factor for the supported (normalized) segmentation indices:
-# vegetation loss is a NEGATIVE delta for NBR/NDVI/NDMI, so multiply by -1 so that
-# loss = POSITIVE delta as LandTrendr requires.
-DIST_DIR = -1
+# Default loss-positive orientation factor: greenness/moisture indices fall with vegetation
+# loss (a NEGATIVE delta), so multiply by -1 so that loss = POSITIVE delta as LandTrendr
+# requires. Per-index overrides (e.g. +1 for bare-soil indices) live in LANDTRENDR_DIST_DIR.
+# Retained as a module symbol because the output parsers default to it (see outputs.py).
+DIST_DIR = LANDTRENDR_DEFAULT_DIST_DIR
 
 
 def medoid_composite(collection: ee.ImageCollection, bands: list[str]) -> ee.Image:
@@ -109,46 +112,49 @@ def _growing_season_range(
     return start, end
 
 
-def _segmentation_band(composite: ee.Image, index: str) -> ee.Image:
-    """Compute the loss-positive segmentation band from a common-band composite.
+def _natural_index(composite: ee.Image, index: str) -> ee.Image:
+    """Compute a natural-signed index band on a common-band composite (no loss orientation).
+
+    Drives the generic INDEX_REGISTRY via LANDTRENDR_BAND_MAP, so any registered index whose
+    bands the Landsat common-band composite provides can be used (for FTV bands).
 
     Args:
         composite: ee.Image with LANDTRENDR_COMMON_BANDS.
-        index: Segmentation index code (one of LANDTRENDR_NORMALIZED_INDICES).
+        index: Any INDEX_REGISTRY name computable from the common bands (see LANDTRENDR_BAND_MAP).
+
+    Returns:
+        ee.Image single band named ``index``, in its natural sign.
+
+    Raises:
+        ValueError: If ``index`` is unknown or requires band_map keys the common bands lack
+            (e.g. a red-edge index such as NDRE/CIred_edge, which Landsat cannot provide).
+    """
+    # Validate the index is known and computable from the common bands (raises otherwise).
+    resolve_index_names(LANDTRENDR_BAND_MAP, indices=[index])
+    return INDEX_REGISTRY[index].compute(composite, LANDTRENDR_BAND_MAP)
+
+
+def _segmentation_band(composite: ee.Image, index: str) -> ee.Image:
+    """Compute the loss-positive segmentation band from a common-band composite.
+
+    Orients the index so vegetation loss / disturbance is a POSITIVE delta, as LandTrendr
+    requires: greenness/moisture indices (dist_dir -1) are negated, while bare-soil /
+    burned-area indices (dist_dir +1, per LANDTRENDR_DIST_DIR) are used as-is.
+
+    Args:
+        composite: ee.Image with LANDTRENDR_COMMON_BANDS.
+        index: Any INDEX_REGISTRY name computable from the common bands (see LANDTRENDR_BAND_MAP).
 
     Returns:
         ee.Image single band named ``index``, oriented so vegetation loss is positive.
 
     Raises:
-        ValueError: If index is not a supported segmentation index.
+        ValueError: If ``index`` is unknown or requires band_map keys the common bands lack.
     """
-    if index == "NBR":
-        band = calc_nbr(composite, nir_band="NIR", swir2_band="SWIR2")
-    elif index == "NDVI":
-        band = calc_ndvi(composite, nir_band="NIR", red_band="RED")
-    elif index == "NDMI":
-        band = calc_ndmi(composite, nir_band="NIR", swir1_band="SWIR1")
-    else:
-        raise ValueError(
-            f"Unsupported segmentation index {index!r}; choose one of "
-            f"{list(LANDTRENDR_NORMALIZED_INDICES)}."
-        )
-    # Orient loss-positive (DIST_DIR = -1) so LandTrendr sees vegetation loss as a rise.
-    return band.multiply(DIST_DIR).rename(index)
-
-
-def _natural_index(composite: ee.Image, index: str) -> ee.Image:
-    """Compute a natural-signed index band (for FTV bands; no loss orientation)."""
-    if index == "NBR":
-        return calc_nbr(composite, nir_band="NIR", swir2_band="SWIR2")
-    if index == "NDVI":
-        return calc_ndvi(composite, nir_band="NIR", red_band="RED")
-    if index == "NDMI":
-        return calc_ndmi(composite, nir_band="NIR", swir1_band="SWIR1")
-    raise ValueError(
-        f"Unsupported FTV index {index!r}; choose one of "
-        f"{list(LANDTRENDR_NORMALIZED_INDICES)}."
-    )
+    band = _natural_index(composite, index)
+    dist_dir = LANDTRENDR_DIST_DIR.get(index, LANDTRENDR_DEFAULT_DIST_DIR)
+    # Orient loss-positive so LandTrendr sees vegetation loss / degradation as a rise.
+    return band.multiply(dist_dir).rename(index)
 
 
 def build_annual_composite(
@@ -213,8 +219,12 @@ def build_landtrendr_collection(
         aoi: Area of interest as ee.Geometry.
         start_year: First composite year (inclusive).
         end_year: Last composite year (inclusive).
-        segmentation_index: Index LandTrendr segments on; one of LANDTRENDR_NORMALIZED_INDICES (default 'NBR').
-        ftv_indices: Additional indices to carry as FTV bands; must differ from segmentation_index. Default none.
+        segmentation_index: Index LandTrendr segments on; any INDEX_REGISTRY index computable
+            from the Landsat common bands (see LANDTRENDR_BAND_MAP), oriented loss-positive via
+            LANDTRENDR_DIST_DIR (default 'NBR').
+        ftv_indices: Additional indices to carry as natural-signed FTV bands; each any
+            INDEX_REGISTRY index computable from the common bands, and different from
+            segmentation_index. Default none.
         start_day: Growing-season window start as 'MM-DD' (default full year).
         end_day: Growing-season window end as 'MM-DD' (crosses the new year if before start_day).
         sensors: Landsat sensors to fuse (default all of L5/L7/L8/L9).
@@ -223,7 +233,8 @@ def build_landtrendr_collection(
         ee.ImageCollection of one image per year, band order [segmentation_index, *ftv_indices], sorted by time.
 
     Raises:
-        ValueError: If start_year > end_year, or an FTV index duplicates the segmentation index.
+        ValueError: If start_year > end_year, an FTV index duplicates the segmentation index,
+            or any requested index is unknown or not computable from the Landsat common bands.
     """
     if start_year > end_year:
         raise ValueError(

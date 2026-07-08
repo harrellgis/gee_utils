@@ -69,6 +69,41 @@ def test_calc_nirv_value(synthetic_reflectance_image, first_value):
     assert first_value(out, "NIRv") == pytest.approx(0.50 * 0.25)
 
 
+def test_calc_msavi2_value(synthetic_reflectance_image, first_value):
+    import math
+
+    from eetools.sensors.indices import calc_msavi2
+
+    # (2*nir + 1 - sqrt((2*nir + 1)^2 - 8*(nir - red))) / 2
+    out = calc_msavi2(synthetic_reflectance_image, nir_band="nir", red_band="red")
+    expected = (2 * 0.50 + 1 - math.sqrt((2 * 0.50 + 1) ** 2 - 8 * (0.50 - 0.30))) / 2
+    assert first_value(out, "MSAVI2") == pytest.approx(expected)
+
+
+def test_calc_ci_red_edge_value(synthetic_reflectance_image, first_value):
+    from eetools.sensors.indices import calc_ci_red_edge
+
+    # (nir / red_edge) - 1 = (0.50 / 0.40) - 1
+    out = calc_ci_red_edge(
+        synthetic_reflectance_image, nir_band="nir", red_edge_band="red_edge"
+    )
+    assert first_value(out, "CIred_edge") == pytest.approx(0.50 / 0.40 - 1)
+
+
+def test_calc_ci_red_edge_skipped_without_red_edge(
+    synthetic_reflectance_image, reflectance_band_map
+):
+    from eetools.sensors.indices import calc_indices
+
+    # Like NDRE, CIred_edge needs 'red_edge' and is skipped by a domain sweep on a band
+    # map lacking it, rather than erroring.
+    no_re = {k: v for k, v in reflectance_band_map.items() if k != "red_edge"}
+    out = calc_indices(
+        synthetic_reflectance_image, band_map=no_re, domains=["vegetation"]
+    )
+    assert "CIred_edge" not in out.bandNames().getInfo()
+
+
 def test_calc_bsi_value(synthetic_reflectance_image, first_value):
     from eetools.sensors.indices import calc_bsi
 

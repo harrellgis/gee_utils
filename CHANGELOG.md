@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Two spectral indices in `sensors.indices` / `INDEX_REGISTRY`, selectable by name or via
+  the `vegetation` domain: **MSAVI2** (`calc_msavi2`, self-adjusting soil-robust greenness
+  for sparse-vegetation / bare-soil backgrounds; needs no tunable L) and **CIred_edge**
+  (`calc_ci_red_edge`, red-edge chlorophyll / canopy-vigor `(NIR / RE1) - 1`; computes only
+  where the band map has `red_edge`, i.e. Sentinel-2 / HLS S30, like NDRE).
+- `sensors.satellite_embedding.preprocessing` module wrapping **Google Satellite
+  Embedding V1** (AlphaEarth Foundations, `GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL`): annual
+  10 m analysis-ready 64-D embedding vectors (bands `A00`–`A63`). `get_satellite_embedding_collection(aoi, start_date, end_date)`
+  returns the full 64-band stack with no scale factor, masking, or spectral indexing (a
+  foundation-model output, not spectral data), and `embedding_similarity(image_a, image_b)`
+  computes per-pixel cosine similarity (dot product of the unit-length vectors) for
+  cross-year change detection. Collection ID, band list, and scale live in `constants.py`.
+
+### Changed
+- LandTrendr's segmentation and fit-to-vertices (FTV) bands now accept **any
+  `INDEX_REGISTRY` index computable from the Landsat common bands**, not just the former
+  NBR/NDVI/NDMI allowlist. `landtrendr.collection._segmentation_band` / `_natural_index`
+  drive the generic index registry through the new `constants.LANDTRENDR_BAND_MAP`, and the
+  loss-positive orientation is taken per index from `constants.LANDTRENDR_DIST_DIR`
+  (default −1 for greenness/moisture indices; +1 for bare-soil / burned-area indices such as
+  BSI, so degradation stays a rising edge). Unknown or non-computable indices (e.g. red-edge
+  indices, which Landsat lacks) raise `ValueError`.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

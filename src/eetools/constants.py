@@ -401,6 +401,23 @@ DW_CLASSES = {
 }
 DW_SCALE = 10
 
+#################### GOOGLE SATELLITE EMBEDDING V1 (AlphaEarth Foundations) ##########################
+# Annual, analysis-ready 10 m embeddings: each pixel is a 64-D unit-length vector
+# (bands A00-A63) summarizing one calendar year of multi-sensor (optical+radar+LiDAR)
+# surface trajectories, from the AlphaEarth Foundations model (Brown et al. 2025). A
+# foundation-model OUTPUT, not spectral data: NO scale factor, cloud masking, or
+# spectral indexing. The 64 bands are ONE coordinate — use them together; never compute
+# per-band indices or select a subset for analysis (only for RGB visualization). Vectors
+# are unit-length (no normalization); the space is consistent across years, so the dot
+# product of two years' vectors is their cosine similarity (change detection). Each image
+# is in its LOCAL UTM zone (UTM_ZONE property) — handle CRS for multi-zone AOIs; annual
+# cadence (system:time_start = Jan 1). CC-BY-4.0 with REQUIRED attribution to Google +
+# Google DeepMind. Pin DATASET_VERSION + MODEL_VERSION for reproducible deliverables.
+SATELLITE_EMBEDDING_COLLECTION = "GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL"
+# The 64 embedding axes, named A00..A63 (zero-padded two digits).
+SATELLITE_EMBEDDING_BANDS = [f"A{i:02d}" for i in range(64)]
+SATELLITE_EMBEDDING_SCALE = 10
+
 #################### WDPA (World Database on Protected Areas) ##########################
 # Vector FeatureCollection of protected-area polygons (UNEP-WCMC / IUCN), updated monthly.
 # `current` always resolves to the newest monthly release; pin a YYYYMM snapshot
@@ -453,9 +470,42 @@ LANDTRENDR_SENSORS = {
     "L9": (L9_SR_COLLECTION, L9_BANDS, True),
 }
 
-# Normalized indices supported as the segmentation index. Loss = NEGATIVE delta for these,
-# so they are multiplied by -1 to make loss-positive for segmentation (dist_dir = -1).
+# Normalized greenness/moisture indices historically offered as the segmentation index.
+# Loss = NEGATIVE delta for these, so they are multiplied by -1 to make loss-positive for
+# segmentation (dist_dir = -1). The segmentation/FTV builders are no longer limited to this
+# tuple: any INDEX_REGISTRY index computable from LANDTRENDR_BAND_MAP is accepted, with its
+# loss orientation taken from LANDTRENDR_DIST_DIR (default LANDTRENDR_DEFAULT_DIST_DIR).
 LANDTRENDR_NORMALIZED_INDICES = ("NBR", "NDVI", "NDMI")
+
+# Logical band-map keys -> LandTrendr common band names, so ANY INDEX_REGISTRY index can be
+# computed on a common-band medoid composite via the generic index registry. There are no
+# red-edge keys (Landsat has no red edge), so red-edge indices (NDRE, CIred_edge, MTCI, ...)
+# are correctly reported as non-computable for LandTrendr rather than silently mis-banded.
+LANDTRENDR_BAND_MAP = {
+    "blue": "BLUE",
+    "green": "GREEN",
+    "red": "RED",
+    "nir": "NIR",
+    "swir1": "SWIR1",
+    "swir2": "SWIR2",
+}
+
+# Disturbance orientation per segmentation index. LandTrendr requires the segmentation band
+# to be LOSS-POSITIVE (disturbance = a rising edge). Greenness/moisture indices fall with
+# degradation, so they are multiplied by -1 (the default); bare-soil / burned-area indices
+# rise with degradation, so they are used as-is (+1). Indices not listed here fall back to
+# LANDTRENDR_DEFAULT_DIST_DIR.
+LANDTRENDR_DEFAULT_DIST_DIR = -1
+LANDTRENDR_DIST_DIR = {
+    "BSI": 1,
+    "MBI": 1,
+    "EMBI": 1,
+    "DBSI": 1,
+    "NDBI": 1,
+    "UI": 1,
+    "BAI": 1,
+    "BAIS2": 1,
+}
 
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
