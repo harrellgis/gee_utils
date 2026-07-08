@@ -22,13 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-year change detection. Collection ID, band list, and scale live in `constants.py`.
 
 ### Fixed
-- `landtrendr.collection.medoid_composite` no longer crashes (`Image.select: Band pattern
-  'BLUE' was applied to an Image with no bands`) when a LandTrendr year has zero source
-  scenes after date/sensor filtering. An empty input collection now returns a fully-masked
-  double image with the requested band names (guarded by `ee.Algorithms.If` on collection
+- `landtrendr.collection.medoid_composite` no longer crashes on an empty year
+  (`Image.select: Band pattern 'BLUE' was applied to an Image with no bands`). A LandTrendr
+  year with zero source scenes after date/sensor filtering now returns a fully-masked
+  float32 image with the requested band names (guarded by `ee.Algorithms.If` on collection
   size, mirroring `compositing.build_period_composites`), so that year contributes only
   masked pixels to the time series — the behavior LandTrendr's `minObservationsNeeded`
   already expects — instead of producing a bandless image.
+- `landtrendr.collection.medoid_composite` no longer raises `Expected a homogeneous image
+  collection … Mismatched type for band 'BLUE'` on multi-sensor years. Roy-harmonized OLI
+  (L8/L9) scenes carry a different bounded float type than the TM/ETM+ (L5/L7) baseline for
+  the same band, which the `median()` / `qualityMosaic` reductions rejected; every scene is
+  now cast to a uniform float32 before reducing.
 
 ### Changed
 - LandTrendr's segmentation and fit-to-vertices (FTV) bands now accept **any

@@ -114,6 +114,31 @@ def test_medoid_composite_empty_collection_returns_masked_bands(ee_session):
 
 
 @pytest.mark.ee
+def test_medoid_composite_tolerates_mismatched_band_types(ee_session, first_value):
+    from eetools.constants import LANDTRENDR_COMMON_BANDS
+    from eetools.landtrendr.collection import medoid_composite
+
+    # Reproduce the multi-sensor case: the same band carries DIFFERENT bounded float types
+    # across scenes (a TM/ETM+ scaled scene vs a Roy-harmonized OLI scene), which makes the
+    # median()/qualityMosaic reductions reject the collection as non-homogeneous unless
+    # medoid_composite casts to a uniform type first.
+    raw = (
+        ee_session.Image.constant([1000, 2000, 3000, 4000, 5000, 6000])
+        .toInt16()
+        .rename(LANDTRENDR_COMMON_BANDS)
+    )
+    tm = raw.multiply(0.0000275).add(-0.2)  # scaled reflectance (one bounded range)
+    oli = tm.subtract(-0.0095).divide(0.9785)  # Roy-like transform (a different range)
+    col = ee_session.ImageCollection([tm, oli])
+
+    out = medoid_composite(col, LANDTRENDR_COMMON_BANDS)
+    assert out.bandNames().getInfo() == LANDTRENDR_COMMON_BANDS
+    # Evaluating forces the reduction that used to raise the homogeneity error.
+    blue = first_value(out, "BLUE")
+    assert blue is not None
+
+
+@pytest.mark.ee
 def test_harmonize_oli_to_etm_matches_roy_formula(ee_session, first_value):
     from eetools.constants import (
         LANDTRENDR_COMMON_BANDS,
