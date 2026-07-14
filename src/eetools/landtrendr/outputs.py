@@ -1,5 +1,6 @@
 import ee
 
+from eetools.constants import LANDTRENDR_SEGMENTATION_SELF_BAND
 from eetools.landtrendr.collection import DIST_DIR
 
 # Default getChangeMap parameters. Magnitudes/values are in NATIVE index units (e.g. an
@@ -84,7 +85,11 @@ def get_segment_count(segment_data: ee.Image) -> ee.Image:
 
 def _row_to_band(segment: ee.Image, row: int, name: str) -> ee.Image:
     """Flatten one attribute row of a single-segment array to a scalar band."""
-    return segment.arraySlice(0, row, row + 1).arrayProject([1]).arrayFlatten([[name]])
+    return (
+        segment.arraySlice(0, row, row + 1)
+        .arrayProject([1])
+        .arrayFlatten([[name]])
+    )
 
 
 def _apply_operator(band: ee.Image, spec: dict) -> ee.Image:
@@ -173,7 +178,9 @@ def get_change_map(
     if params["dur"]["checked"]:
         keep = keep.And(_apply_operator(change.select("dur"), params["dur"]))
     if params["preval"]["checked"]:
-        keep = keep.And(_apply_operator(change.select("preval"), params["preval"]))
+        keep = keep.And(
+            _apply_operator(change.select("preval"), params["preval"])
+        )
     if params["year"]["checked"]:
         keep = keep.And(change.select("yod").gte(params["year"]["start"])).And(
             change.select("yod").lte(params["year"]["end"])
@@ -199,28 +206,31 @@ def get_fitted_stack(
     start_year: int,
     end_year: int,
     index: str | None = None,
-    dist_dir: int = DIST_DIR,
+    dist_dir: int = DIST_DIR,  # retained for signature compatibility; unused below
 ) -> ee.Image:
     """Flatten a fit-to-vertices series to an annual band stack (one band per year).
 
-    When ``index`` is None the fitted segmentation index is taken from the LandTrendr array
-    (its fitted row, re-oriented to natural sign) — no FTV band is required. Otherwise the
-    ``<index>_fit`` FTV band is flattened (natural-signed already).
+    When ``index`` is None, the segmentation index's own dense fitted trajectory is
+    returned via the internal LANDTRENDR_SEGMENTATION_SELF_BAND FTV band that
+    build_landtrendr_collection always adds — NOT the raw "LandTrendr" band's fitted-value
+    row, which EE only populates for years a given pixel had a valid (unmasked) input
+    observation and is therefore genuinely ragged per pixel (its column count varies by
+    pixel and does not reliably match ``len(year_names)``, causing arrayFlatten to throw).
+    Otherwise the ``<index>_fit`` FTV band is flattened. Both paths use EE's FTV mechanism,
+    which re-evaluates the piecewise-linear fit at every requested year by construction and
+    is therefore always dense regardless of input masking; both are natural-signed already,
+    so ``dist_dir`` is unused here (it remains only for get_segment_data/get_change_map).
 
     Args:
         lt: LandTrendr output image.
         start_year: First year in the series (must match the run window).
         end_year: Last year in the series (inclusive).
         index: FTV index name to flatten; None flattens the fitted segmentation index.
-        dist_dir: Orientation factor used to restore the segmentation index's natural sign (only used when index is None).
+        dist_dir: Unused here; retained for signature compatibility.
 
     Returns:
         ee.Image with one band per year ('yr_<year>'), gap-filled along the fitted segments.
     """
     year_names = [f"yr_{year}" for year in range(start_year, end_year + 1)]
-
-    if index is None:
-        fitted = lt.select("LandTrendr").arraySlice(0, 2, 3).multiply(dist_dir)
-        return fitted.arrayProject([1]).arrayFlatten([year_names])
-
-    return lt.select(f"{index}_fit").arrayFlatten([year_names])
+    band = LANDTRENDR_SEGMENTATION_SELF_BAND if index is None else index
+    return lt.select(f"{band}_fit").arrayFlatten([year_names])

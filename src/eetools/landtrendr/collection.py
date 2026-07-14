@@ -7,6 +7,7 @@ from eetools.constants import (
     LANDTRENDR_COMMON_BANDS,
     LANDTRENDR_DEFAULT_DIST_DIR,
     LANDTRENDR_DIST_DIR,
+    LANDTRENDR_SEGMENTATION_SELF_BAND,
     LANDTRENDR_SENSORS,
     ROY_OLI_TO_ETM_INTERCEPTS,
     ROY_OLI_TO_ETM_SLOPES,
@@ -21,7 +22,9 @@ from eetools.sensors.landsat.masking import build_cloudfree_landsat_col
 DIST_DIR = LANDTRENDR_DEFAULT_DIST_DIR
 
 
-def medoid_composite(collection: ee.ImageCollection, bands: list[str]) -> ee.Image:
+def medoid_composite(
+    collection: ee.ImageCollection, bands: list[str]
+) -> ee.Image:
     """Reduce a collection to a per-pixel medoid composite (best single observation).
 
     The medoid is the observation whose multiband value is closest (smallest summed
@@ -53,14 +56,25 @@ def medoid_composite(collection: ee.ImageCollection, bands: list[str]) -> ee.Ima
         median = cast.median()
 
         def _add_distance(image: ee.Image) -> ee.Image:
-            diff = image.select(bands).subtract(median).pow(2).reduce(ee.Reducer.sum())
+            diff = (
+                image.select(bands)
+                .subtract(median)
+                .pow(2)
+                .reduce(ee.Reducer.sum())
+            )
             # Negate so qualityMosaic (keeps the MAXIMUM) selects the SMALLEST distance.
             return image.addBands(diff.multiply(-1).rename("medoid_distance"))
 
-        return cast.map(_add_distance).qualityMosaic("medoid_distance").select(bands)
+        return (
+            cast.map(_add_distance)
+            .qualityMosaic("medoid_distance")
+            .select(bands)
+        )
 
     # Both ee.Algorithms.If branches must share one type: float32, matching the cast above.
-    empty = ee.Image.constant([0] * len(bands)).rename(bands).toFloat().selfMask()
+    empty = (
+        ee.Image.constant([0] * len(bands)).rename(bands).toFloat().selfMask()
+    )
     return ee.Image(ee.Algorithms.If(has_images, _real_medoid(), empty))
 
 
@@ -77,14 +91,22 @@ def _harmonize_oli_to_etm(image: ee.Image) -> ee.Image:
     Returns:
         ee.Image of harmonized reflectance with the same common band names.
     """
-    slopes = ee.Image.constant(ROY_OLI_TO_ETM_SLOPES).rename(LANDTRENDR_COMMON_BANDS)
+    slopes = ee.Image.constant(ROY_OLI_TO_ETM_SLOPES).rename(
+        LANDTRENDR_COMMON_BANDS
+    )
     intercepts = ee.Image.constant(ROY_OLI_TO_ETM_INTERCEPTS).rename(
         LANDTRENDR_COMMON_BANDS
     )
-    return image.select(LANDTRENDR_COMMON_BANDS).subtract(intercepts).divide(slopes)
+    return (
+        image.select(LANDTRENDR_COMMON_BANDS)
+        .subtract(intercepts)
+        .divide(slopes)
+    )
 
 
-def _prep_scene(image: ee.Image, source_bands: list[str], is_oli: bool) -> ee.Image:
+def _prep_scene(
+    image: ee.Image, source_bands: list[str], is_oli: bool
+) -> ee.Image:
     """Scale a cloud-masked Landsat scene, rename to common bands, and harmonize OLI.
 
     Args:
@@ -204,12 +226,16 @@ def build_annual_composite(
     prepped = None
     for sensor in sensors:
         collection_id, source_bands, is_oli = LANDTRENDR_SENSORS[sensor]
-        scenes = build_cloudfree_landsat_col(aoi, start, end, collection_id).map(
+        scenes = build_cloudfree_landsat_col(
+            aoi, start, end, collection_id
+        ).map(
             lambda img, sb=source_bands, oli=is_oli: _prep_scene(img, sb, oli)
         )
         prepped = scenes if prepped is None else prepped.merge(scenes)
 
-    composite = medoid_composite(ee.ImageCollection(prepped), LANDTRENDR_COMMON_BANDS)
+    composite = medoid_composite(
+        ee.ImageCollection(prepped), LANDTRENDR_COMMON_BANDS
+    )
     return ee.Image(
         composite.set("system:time_start", ee.Date.fromYMD(year, 8, 1).millis())
     )
@@ -229,10 +255,13 @@ def build_landtrendr_collection(
 
     For each year in ``[start_year, end_year]`` it builds a multi-sensor harmonized medoid
     composite, then assembles the LandTrendr input image: band 1 is the loss-positive
-    ``segmentation_index`` (the band LandTrendr segments) followed by any natural-signed
-    fit-to-vertices (FTV) index bands. FTV bands let you recover a smoothed annual series
-    of OTHER indices; the fitted segmentation index itself is recoverable from the run
-    output without an FTV band (see outputs.get_fitted_stack).
+    ``segmentation_index`` (the band LandTrendr segments), band 2 is an internal
+    natural-signed duplicate of the segmentation index (LANDTRENDR_SEGMENTATION_SELF_BAND),
+    followed by any natural-signed fit-to-vertices (FTV) index bands. The self-duplicate
+    exists purely so get_fitted_stack(index=None) can recover the segmentation index's own
+    DENSE annual fitted trajectory via the FTV mechanism, instead of the raw "LandTrendr"
+    band's fitted-value row, which is only populated for years a pixel had a valid
+    (unmasked) observation and is therefore genuinely ragged per pixel.
 
     Args:
         aoi: Area of interest as ee.Geometry.
@@ -249,7 +278,8 @@ def build_landtrendr_collection(
         sensors: Landsat sensors to fuse (default all of L5/L7/L8/L9).
 
     Returns:
-        ee.ImageCollection of one image per year, band order [segmentation_index, *ftv_indices], sorted by time.
+        ee.ImageCollection of one image per year, band order
+        [segmentation_index, LANDTRENDR_SEGMENTATION_SELF_BAND, *ftv_indices], sorted by time.
 
     Raises:
         ValueError: If start_year > end_year, an FTV index duplicates the segmentation index,
@@ -267,10 +297,17 @@ def build_landtrendr_collection(
         )
 
     def _annual_lt_image(year: int) -> ee.Image:
-        composite = build_annual_composite(aoi, year, start_day, end_day, sensors)
+        composite = build_annual_composite(
+            aoi, year, start_day, end_day, sensors
+        )
         seg = _segmentation_band(composite, segmentation_index)
-        bands = [seg] + [_natural_index(composite, idx) for idx in ftv]
-        stack = ee.Image.cat(bands) if len(bands) > 1 else seg
+        seg_self = _natural_index(composite, segmentation_index).rename(
+            LANDTRENDR_SEGMENTATION_SELF_BAND
+        )
+        bands = [seg, seg_self] + [
+            _natural_index(composite, idx) for idx in ftv
+        ]
+        stack = ee.Image.cat(bands)
         return ee.Image(
             stack.set("system:time_start", composite.get("system:time_start"))
         )

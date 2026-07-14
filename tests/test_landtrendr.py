@@ -196,6 +196,31 @@ def test_segmentation_band_bsi_used_as_is(ee_session, first_value):
     assert first_value(seg, "BSI") == pytest.approx(num / den)
 
 
+@pytest.mark.ee
+def test_get_fitted_stack_index_none_is_dense(ee_session, first_value):
+    from eetools.constants import LANDTRENDR_SEGMENTATION_SELF_BAND
+    from eetools.landtrendr.outputs import get_fitted_stack
+
+    # Regression test for the ragged-array bug: get_fitted_stack(index=None) must read the
+    # internal LANDTRENDR_SEGMENTATION_SELF_BAND FTV band, which (like every FTV band) is
+    # guaranteed dense (exactly one value per requested year) regardless of input masking —
+    # unlike the raw "LandTrendr" band's fitted-value row, which is only as long as a given
+    # pixel's count of valid (unmasked) input observations. Hand-build a fake LandTrendr
+    # output with just that one FTV band (one value per year, via .toArray()) to exercise
+    # the dense path without needing a real masked scenario.
+    values = [0.10, 0.20, 0.30]
+    fake_lt = (
+        ee_session.Image.constant(values)
+        .rename(["y2010", "y2011", "y2012"])
+        .toArray()
+        .rename(f"{LANDTRENDR_SEGMENTATION_SELF_BAND}_fit")
+    )
+
+    stack = get_fitted_stack(fake_lt, 2010, 2012, index=None)
+    assert stack.bandNames().getInfo() == ["yr_2010", "yr_2011", "yr_2012"]
+    assert first_value(stack, "yr_2011") == pytest.approx(0.20)
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end against the real Landsat archive
 # --------------------------------------------------------------------------- #
@@ -207,7 +232,9 @@ def test_build_landtrendr_collection_real(ee_session, small_aoi):
     col = build_landtrendr_collection(small_aoi, 2008, 2017, segmentation_index="NBR")
     assert isinstance(col, ee_session.ImageCollection)
     assert col.size().getInfo() == 10  # one image per year, inclusive
-    assert col.first().bandNames().getInfo() == ["NBR"]
+    # Band 2 is always the internal natural-signed self-duplicate FTV band (see
+    # LANDTRENDR_SEGMENTATION_SELF_BAND) that makes get_fitted_stack(index=None) dense.
+    assert col.first().bandNames().getInfo() == ["NBR", "segmentation_self"]
 
 
 @pytest.mark.ee
