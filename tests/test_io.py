@@ -36,8 +36,11 @@ def test_export_image_to_drive_builds_request_and_starts(mock_ee):
         crs="EPSG:32736",
     )
 
-    # nodata is unmasked to -9999 before export.
-    image.unmask.assert_called_once_with(-9999)
+    # nodata is unmasked to -9999 before export, with sameFootprint=False so the
+    # fill extends past a .clip(aoi) polygon's true boundary to the full export
+    # region -- otherwise EE's exporter silently fills that fringe with a
+    # hard-coded literal 0 instead of the registered NoData value.
+    image.unmask.assert_called_once_with(-9999, sameFootprint=False)
 
     _, kwargs = mock_ee.batch.Export.image.toDrive.call_args
     assert kwargs["image"] is unmasked
@@ -52,6 +55,31 @@ def test_export_image_to_drive_builds_request_and_starts(mock_ee):
 
     task.start.assert_called_once()
     assert result is task
+
+
+def test_export_image_to_drive_unmask_extends_past_clip_footprint(mock_ee):
+    """Regression test: sameFootprint=False must be passed to unmask().
+
+    Without it, Image.unmask() only fills masked-but-in-footprint pixels --
+    pixels outside a .clip(aoi) polygon but inside the export's rectangular
+    region are left with no computed value, and Earth Engine's exporter then
+    silently fills that fringe with a hard-coded literal 0 instead of the
+    registered NoData value (bypassing formatOptions.noData entirely).
+    """
+    image = MagicMock(name="image")
+
+    io.export_image_to_drive(
+        image=image,
+        aoi="AOI",
+        description="desc",
+        folder="folder",
+        file_prefix="prefix",
+        scale=10,
+    )
+
+    args, kwargs = image.unmask.call_args
+    assert args == (-9999,)
+    assert kwargs == {"sameFootprint": False}
 
 
 def test_export_image_to_drive_default_crs(mock_ee):

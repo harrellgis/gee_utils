@@ -32,7 +32,7 @@ def export_image_to_drive(
         ee.batch.Task. Starts the export task and returns the running task object.
     """
     no_data_value = -9999
-    image = image.unmask(no_data_value)
+    image = image.unmask(no_data_value, sameFootprint=False)
 
     task = ee.batch.Export.image.toDrive(
         image=image,
