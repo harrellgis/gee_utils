@@ -12,7 +12,9 @@ from shapely.geometry import mapping
 # --------------------------------------------------------------------------- #
 
 
-def _read_vector_gdf(path: str | Path, layer: str | None = None) -> gpd.GeoDataFrame:
+def _read_vector_gdf(
+    path: str | Path, layer: str | None = None
+) -> gpd.GeoDataFrame:
     """Read a local vector file into a WGS84 GeoDataFrame, validating it is non-empty
     and has a CRS.
 
@@ -72,7 +74,7 @@ def vector_file_to_ee_geometry(
     in WGS84.
 
     Accepts any format geopandas can read (GeoPackage, GeoJSON, Shapefile, ...). All
-    valid features are unioned into one geometry. Use :func:`vector_file_to_features`
+    valid features are unioned into one geometry. Use `vector_file_to_features`
     instead when you need each record (and its attributes) preserved individually.
 
     Args:
@@ -171,7 +173,9 @@ def vector_files_to_feature_collection(
         raise ValueError("No files provided to build a FeatureCollection.")
 
     features = [
-        load_site_feature(path, site_id=site_id, site_name=site_name, layer=layer)
+        load_site_feature(
+            path, site_id=site_id, site_name=site_name, layer=layer
+        )
         for path, site_id, site_name in sites
     ]
     return ee.FeatureCollection(features)

@@ -19,8 +19,9 @@ MODIS_LAI_FPAR_COLLECTION = "MODIS/061/MCD15A3H"
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
-# Copernicus DEM GLO-30 — canonical elevation source for all terrain work
-COPERNICUS_DEM_COLLECTION = "COPERNICUS/DEM/GLO30"
+# Copernicus DEM GLO-30 (2024_1) — canonical elevation source for all terrain work.
+# COPERNICUS/DEM/GLO30 was deprecated in favor of this dataset.
+COPERNICUS_DEM_COLLECTION = "COPERNICUS/DEM/GLO30_2024_1"
 
 # Biodiversity Intactness Index (BII) — sub-Saharan Africa (bii4africa, sat-io)
 _BII_ROOT = (

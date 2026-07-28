@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now cast to a uniform float32 before reducing.
 
 ### Changed
+- `sensors.dem` now sources the Copernicus DEM GLO-30 from `COPERNICUS/DEM/GLO30_2024_1`
+  instead of the deprecated `COPERNICUS/DEM/GLO30`. Same schema (tiled `ee.ImageCollection`,
+  `DEM`/`EDM`/`FLM`/`HEM`/`WBM` bands, EGM2008 vertical datum), so `get_copernicus_dem` /
+  `get_terrain` are unaffected beyond the new `constants.COPERNICUS_DEM_COLLECTION` value.
 - LandTrendr's segmentation and fit-to-vertices (FTV) bands now accept **any
   `INDEX_REGISTRY` index computable from the Landsat common bands**, not just the former
   NBR/NDVI/NDMI allowlist. `landtrendr.collection._segmentation_band` / `_natural_index`
