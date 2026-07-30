@@ -79,17 +79,23 @@ def test_process_s2_image_scales_and_adds_indices(ee_session, first_value):
 
     raw = (
         ee_session.Image.constant(
-            [1000, 2000, 3000, 4000, 4500, 5000, 5000, 5200, 2500, 1500, 4]
+            [800, 1000, 2000, 3000, 4000, 4500, 5000, 5000, 5200, 2500, 1500, 4]
         )
-        .rename(["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "SCL"])
+        .rename(
+            ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "SCL"]
+        )
         .set("system:time_start", ee_session.Date("2021-06-01").millis())
     )
     out = ee_session.Image(process_s2_image(raw))
     names = out.bandNames().getInfo()
     assert "NDVI" in names
     assert "NDRE" in names  # NDRE auto-included: the S2 band map has a red edge
+    assert (
+        "B1" in names
+    )  # coastal aerosol carried through even though unused by indices
     # Reflectance is scaled by S2_SCALE_FACTOR.
     assert first_value(out, "B4") == pytest.approx(3000 * S2_SCALE_FACTOR)
+    assert first_value(out, "B1") == pytest.approx(800 * S2_SCALE_FACTOR)
     assert out.get("system:time_start").getInfo() is not None
 
 

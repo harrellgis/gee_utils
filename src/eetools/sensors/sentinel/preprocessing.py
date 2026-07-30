@@ -43,7 +43,7 @@ def process_s2_image(
     spectral indices.
 
     Args:
-        image: Raw Sentinel-2 SR ee.Image with original band names (B2, B3, B4, B5, B6, B7, B8, B8A, B11, B12, SCL).
+        image: Raw Sentinel-2 SR ee.Image with original band names (B1, B2, B3, B4, B5, B6, B7, B8, B8A, B11, B12, SCL).
         indices: Explicit index names to append, or None for the default harmonized core.
         domains: Index domains to append (e.g. ['vegetation', 'burn']), or None. See eetools.sensors.indices.calc_indices.
 
@@ -54,6 +54,7 @@ def process_s2_image(
     image = select_base_bands(
         source,
         input_bands=[
+            "B1",
             "B2",
             "B3",
             "B4",

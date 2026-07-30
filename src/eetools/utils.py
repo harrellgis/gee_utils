@@ -13,6 +13,89 @@ def _clip_and_mask_image(image: ee.Image, geometry: ee.Geometry) -> ee.Image:
 
 
 # --------------------------------------------------------------------------- #
+# Date windows                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def get_date_window(
+    year_start: int,
+    year_end: int,
+    season: str,
+    season_months: dict[str, tuple[int, int]] | None = None,
+) -> tuple[ee.Date, ee.Date]:
+    """Compute a season's (start, end) ee.Date window spanning a year range.
+
+    Callers own the meaning of each season (e.g. 'wet' = March-June) via
+    ``season_months``; this function only does the year/season -> date arithmetic,
+    so it stays agnostic to what a given AOI's seasons are.
+
+    Args:
+        year_start: First calendar year of the window (inclusive).
+        year_end: Last calendar year of the window (inclusive); may equal year_start.
+        season: Season key. 'annual' is always accepted; any other value must be a key in season_months.
+        season_months: Mapping of season name to (start_month, end_month), e.g. {'wet': (3, 6), 'dry': (7, 11)}. Not required when season='annual'.
+
+    Returns:
+        tuple of (start_date, end_date) as ee.Date. For 'annual', this is Jan 1 of
+        year_start through Jan 1 of year_end + 1. Otherwise, it is the season's
+        start_month of year_start through the season's end_month of year_end.
+
+    Raises:
+        ValueError: If season is not 'annual' and not present in season_months.
+    """
+    if season == "annual":
+        return ee.Date.fromYMD(year_start, 1, 1), ee.Date.fromYMD(year_end + 1, 1, 1)
+
+    if season_months is None or season not in season_months:
+        raise ValueError(
+            f"Unknown season '{season}': must be 'annual' or a key in season_months."
+        )
+
+    start_month, end_month = season_months[season]
+    return (
+        ee.Date.fromYMD(year_start, start_month, 1),
+        ee.Date.fromYMD(year_end, end_month, 1),
+    )
+
+
+def get_available_window(
+    collection_ids: str | list[str],
+    aoi: ee.Geometry,
+    sensor_label: str = "imagery",
+) -> tuple[ee.Date, ee.Date]:
+    """Get the actual first/last acquisition dates of a collection (or merged
+    collections) over an AOI.
+
+    Args:
+        collection_ids: EE collection asset ID string, or list of IDs that are merged before checking.
+        aoi: Area of interest as ee.Geometry used to filter the collection(s).
+        sensor_label: Human-readable sensor name used in the error message (default 'imagery').
+
+    Returns:
+        tuple of (earliest_date, latest_date) as ee.Date, from system:time_start over the AOI.
+
+    Raises:
+        ValueError: If no images are found for the given AOI.
+    """
+    if isinstance(collection_ids, str):
+        col = ee.ImageCollection(collection_ids).filterBounds(aoi)
+    else:
+        cols = [ee.ImageCollection(c).filterBounds(aoi) for c in collection_ids]
+        col = cols[0]
+        for c in cols[1:]:
+            col = col.merge(c)
+
+    if col.size().getInfo() == 0:
+        raise ValueError(f"No {sensor_label} found for the provided AOI.")
+
+    # getInfo() is typed Optional; in this branch the collection is non-empty so
+    # the aggregates are real numbers — cast for the ee.Date constructor.
+    min_ts = cast(int, col.aggregate_min("system:time_start").getInfo())
+    max_ts = cast(int, col.aggregate_max("system:time_start").getInfo())
+    return ee.Date(min_ts), ee.Date(max_ts)
+
+
+# --------------------------------------------------------------------------- #
 # Validation                                                                   #
 # --------------------------------------------------------------------------- #
 
@@ -37,23 +120,14 @@ def validate_collection_date_range(
     Returns:
         None. Raises ValueError if the date range is invalid or outside the available data extent.
     """
-    if isinstance(collection_id, str):
-        col = ee.ImageCollection(collection_id).filterBounds(aoi)
-    else:
-        cols = [ee.ImageCollection(c).filterBounds(aoi) for c in collection_id]
-        col = cols[0]
-        for c in cols[1:]:
-            col = col.merge(c)
+    min_date, max_date = get_available_window(collection_id, aoi, sensor_label)
 
-    if col.size().getInfo() == 0:
-        raise ValueError(f"No {sensor_label} found for the provided AOI.")
-
-    # getInfo() is typed Optional; in this branch the collection is non-empty so
-    # the aggregates/millis are real numbers — cast for the numeric comparisons.
-    min_ts = cast(int, col.aggregate_min("system:time_start").getInfo())
-    max_ts = cast(int, col.aggregate_max("system:time_start").getInfo())
-    min_str = ee.Date(min_ts).format("YYYY-MM-dd").getInfo()
-    max_str = ee.Date(max_ts).format("YYYY-MM-dd").getInfo()
+    # getInfo() is typed Optional; get_available_window already raised if the
+    # collection were empty, so these are real numbers — cast for the comparisons.
+    min_ts = cast(int, min_date.millis().getInfo())
+    max_ts = cast(int, max_date.millis().getInfo())
+    min_str = min_date.format("YYYY-MM-dd").getInfo()
+    max_str = max_date.format("YYYY-MM-dd").getInfo()
 
     s_ms = cast(int, start_date.millis().getInfo())
     e_ms = cast(int, end_date.millis().getInfo())

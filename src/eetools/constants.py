@@ -24,9 +24,7 @@ ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 COPERNICUS_DEM_COLLECTION = "COPERNICUS/DEM/GLO30_2024_1"
 
 # Biodiversity Intactness Index (BII) — sub-Saharan Africa (bii4africa, sat-io)
-_BII_ROOT = (
-    "projects/earthengine-legacy/assets/projects/sat-io/open-datasets/BII"
-)
+_BII_ROOT = "projects/earthengine-legacy/assets/projects/sat-io/open-datasets/BII"
 BII_1KM_COLLECTION = f"{_BII_ROOT}/BII_1km"
 BII_8KM_COLLECTION = f"{_BII_ROOT}/BII_8km"
 BII_MASK_ASSET = f"{_BII_ROOT}/BII_Mask"
@@ -48,8 +46,9 @@ ASI_BAND_LETTERS = {
 }
 
 #################### SENTINEL-2 ##########################
-S2_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
+S2_BANDS = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
 S2_ALL_BANDS = [
+    "B1",  # AEROSOL
     "B2",  # BLUE
     "B3",  # GREEN
     "B4",  # RED
@@ -105,9 +104,7 @@ S2_SCALE = 10
 # Sentinel-2 cloud masking parameters
 CLOUD_FILTER = 50  # % max CLOUDY_PIXEL_PERCENTAGE per image
 CLD_PRB_THRESH = 40  # % s2cloudless probability threshold
-NIR_DRK_THRESH = (
-    0.15  # reflectance threshold for dark (shadow candidate) pixels
-)
+NIR_DRK_THRESH = 0.15  # reflectance threshold for dark (shadow candidate) pixels
 CLD_PRJ_DIST_KM = 1.0  # max shadow search distance in km
 BUFFER_M = 50  # dilation buffer for cloud+shadow mask in metres
 ERODE_RADIUS_M = 40  # erosion radius to denoise speckle in metres
@@ -167,9 +164,7 @@ HLS_BAND_MAP = {
 HLS_CLOUD_FILTER = 50
 HLS_MASK_ADJACENT = True
 HLS_MASK_SNOW = True
-HLS_MASK_WATER_IN_QA = (
-    False  # keep False to use separate spectral water masking
-)
+HLS_MASK_WATER_IN_QA = False  # keep False to use separate spectral water masking
 HLS_MASK_MODERATE_AEROSOL = False
 HLS_MASK_HIGH_AEROSOL = True
 
@@ -211,15 +206,11 @@ L8_SCALE = 30
 #################### LANDSAT 5 / 7 / 9 (C2 L2 SR) ##########################
 # All Landsat Collection 2 Level-2 SR share the same scaling, offset, default cloud
 # filter, QA_PIXEL/QA_RADSAT cloud masking, and 30 m resolution as Landsat 8.
-L9_SR_COLLECTION = (
-    "LANDSAT/LC09/C02/T1_L2"  # OLI-2; schema-identical to Landsat 8
-)
+L9_SR_COLLECTION = "LANDSAT/LC09/C02/T1_L2"  # OLI-2; schema-identical to Landsat 8
 L7_SR_COLLECTION = "LANDSAT/LE07/C02/T1_L2"  # ETM+ (SLC-off after 2003-05-31)
 L5_SR_COLLECTION = "LANDSAT/LT05/C02/T1_L2"  # TM (archive 1984-2012)
 
-LANDSAT_C2_SCALE_FACTOR = (
-    L8_SCALE_FACTOR  # 2.75e-05, shared by all Landsat C2 L2 SR
-)
+LANDSAT_C2_SCALE_FACTOR = L8_SCALE_FACTOR  # 2.75e-05, shared by all Landsat C2 L2 SR
 LANDSAT_C2_ADD_OFFSET = L8_ADD_OFFSET  # -0.2 (non-zero offset!)
 LANDSAT_C2_CLOUD_FILTER = L8_CLOUD_FILTER  # 50% max CLOUD_COVER per image
 LANDSAT_SCALE = L8_SCALE  # 30 m
@@ -333,9 +324,7 @@ HANSEN_GFC_COLLECTION = "UMD/hansen/global_forest_change_2025_v1_13"
 HANSEN_TREECOVER_BAND = "treecover2000"  # canopy cover % for year 2000 (0-100)
 HANSEN_LOSS_BAND = "loss"  # binary stand-replacement loss over the study period
 HANSEN_GAIN_BAND = "gain"  # binary non-forest -> forest gain (2000-2012 only)
-HANSEN_LOSSYEAR_BAND = (
-    "lossyear"  # year of loss, encoded 1-25 (see epoch below)
-)
+HANSEN_LOSSYEAR_BAND = "lossyear"  # year of loss, encoded 1-25 (see epoch below)
 # Default canopy-cover % threshold defining "forest" when masking loss products.
 HANSEN_TREE_COVER_THRESHOLD = 10
 # lossyear encodes 1-25 for 2001-2025; absolute year = HANSEN_LOSSYEAR_EPOCH + value.
@@ -352,9 +341,7 @@ S1_GRD_COLLECTION = "COPERNICUS/S1_GRD"
 # Common IW land configuration: dual cross-pol VV+VH. Cross-pol (VH) is the most
 # informative for vegetation/water discrimination.
 S1_DEFAULT_POLARIZATIONS = ["VV", "VH"]
-S1_DEFAULT_INSTRUMENT_MODE = (
-    "IW"  # Interferometric Wide — the standard land mode
-)
+S1_DEFAULT_INSTRUMENT_MODE = "IW"  # Interferometric Wide — the standard land mode
 # ASCENDING and DESCENDING look geometries differ and must never be mixed in a
 # time series; the builder pins one pass (override per analysis).
 S1_DEFAULT_ORBIT_PASS = "DESCENDING"
@@ -369,24 +356,16 @@ S1_SCALE = 10
 # Pre-classified surface-water products (no spectral indexing). Shared
 # WTR/BWTR/CONF/DIAG band schema on a 30 m MGRS grid; HLS (optical) and S1 (radar)
 # differ in their invalid/mask class codes — see the per-product valid-max below.
-DSWX_HLS_COLLECTION = (
-    "OPERA/DSWX/L3_V1/HLS"  # optical (Harmonized Landsat/Sentinel-2)
-)
-DSWX_S1_COLLECTION = (
-    "OPERA/DSWX/L3_V1/S1"  # radar (Sentinel-1), cloud-independent
-)
+DSWX_HLS_COLLECTION = "OPERA/DSWX/L3_V1/HLS"  # optical (Harmonized Landsat/Sentinel-2)
+DSWX_S1_COLLECTION = "OPERA/DSWX/L3_V1/S1"  # radar (Sentinel-1), cloud-independent
 DSWX_WTR_BAND = "WTR_Water_classification"  # primary water classification
 DSWX_BWTR_BAND = "BWTR_Binary_water"  # binary water (1) / not-water (0)
 DSWX_CONF_BAND = "CONF_Confidence"
 DSWX_DIAG_BAND = "DIAG_diagnostic"
 # Shared water-class codes.
 DSWX_OPEN_WATER = 1
-DSWX_PARTIAL_SURFACE_WATER = (
-    2  # HLS only — subpixel inundation (wetlands/coastline)
-)
-DSWX_INUNDATED_VEGETATION = (
-    3  # S1 only — high dual-pol ratio + wetland land cover
-)
+DSWX_PARTIAL_SURFACE_WATER = 2  # HLS only — subpixel inundation (wetlands/coastline)
+DSWX_INUNDATED_VEGETATION = 3  # S1 only — high dual-pol ratio + wetland land cover
 # First invalid class code per product; pixels with WTR >= this are sensor masks,
 # not water. HLS: 252 snow / 253 cloud / 254 ocean. S1: 250 HAND / 251
 # layover-shadow / 254 ocean (the catalog sample code wrongly reuses 252 for S1).
@@ -452,9 +431,7 @@ SATELLITE_EMBEDDING_SCALE = 10
 # any for-profit OR revenue-generating use, incl. by non-profits), and attribution is
 # mandatory — flag for any paid/client deliverable.
 WDPA_POLYGONS_COLLECTION = "WCMC/WDPA/current/polygons"
-WDPA_COUNTRY_FIELD = (
-    "ISO3"  # ISO 3166-3 alpha-3 country code (e.g. "BWA", "KEN")
-)
+WDPA_COUNTRY_FIELD = "ISO3"  # ISO 3166-3 alpha-3 country code (e.g. "BWA", "KEN")
 WDPA_ID_FIELD = (
     "SITE_ID"  # whole-site id in the live `current` asset (= WDPAID in older
 )
@@ -468,9 +445,7 @@ WDPA_GIS_AREA_FIELD = (
 # loss-positive segmentation index, subsequent bands fit-to-vertices (FTV). All sensors
 # are harmonized to a common band naming and the OLI family (L8/L9) is brought onto the
 # TM/ETM+ (L5/L7) reflectance baseline before indexing.
-LANDTRENDR_COMMON_BANDS = (
-    HLS_COMMON_BANDS  # BLUE, GREEN, RED, NIR, SWIR1, SWIR2
-)
+LANDTRENDR_COMMON_BANDS = HLS_COMMON_BANDS  # BLUE, GREEN, RED, NIR, SWIR1, SWIR2
 
 # Roy et al. 2016 OLI -> ETM+ harmonization, per common band (BLUE,GREEN,RED,NIR,SWIR1,
 # SWIR2), replicated from the emaprlab LandTrendr.js `harmonizationRoy`. Applied in C2

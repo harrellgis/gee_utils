@@ -120,6 +120,49 @@ def test_clip_image_to_fc_sets_site_name(ee_session):
     assert out.first().get("site_name").getInfo() == "A"
 
 
+def test_get_date_window_annual(ee_session):
+    from eetools.utils import get_date_window
+
+    start, end = get_date_window(year_start=2015, year_end=2018, season="annual")
+    assert start.format("YYYY-MM-dd").getInfo() == "2015-01-01"
+    assert end.format("YYYY-MM-dd").getInfo() == "2019-01-01"
+
+
+def test_get_date_window_season_from_mapping(ee_session):
+    from eetools.utils import get_date_window
+
+    season_months = {"wet": (3, 6), "dry": (7, 11)}
+    start, end = get_date_window(
+        year_start=2020, year_end=2022, season="wet", season_months=season_months
+    )
+    assert start.format("YYYY-MM-dd").getInfo() == "2020-03-01"
+    assert end.format("YYYY-MM-dd").getInfo() == "2022-06-01"
+
+
+def test_get_date_window_unknown_season_raises(ee_session):
+    from eetools.utils import get_date_window
+
+    with pytest.raises(ValueError, match="Unknown season"):
+        get_date_window(year_start=2020, year_end=2020, season="spring")
+
+
+def test_get_available_window_returns_extent(ee_session):
+    from eetools.utils import get_available_window
+
+    aoi = ee_session.Geometry.Rectangle([39.2, -4.3, 39.25, -4.25])
+    start, end = get_available_window("UCSB-CHC/CHIRPS/V3/DAILY_RNL", aoi)
+    assert start.millis().getInfo() < end.millis().getInfo()
+
+
+def test_get_available_window_no_images_raises(ee_session):
+    from eetools.utils import get_available_window
+
+    # NAIP only covers the continental US, so an East Africa AOI has no footprint.
+    non_us_aoi = ee_session.Geometry.Rectangle([39.2, -4.3, 39.25, -4.25])
+    with pytest.raises(ValueError, match="No imagery found"):
+        get_available_window("USDA/NAIP/DOQQ", non_us_aoi)
+
+
 def test_validate_collection_date_range_rejects_inverted_range(ee_session):
     from eetools.utils import validate_collection_date_range
 
