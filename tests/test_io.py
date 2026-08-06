@@ -279,3 +279,140 @@ def test_check_ee_task_status_returns_none_when_absent(mock_ee):
     mock_ee.batch.Task.list.return_value = [other]
 
     assert io.check_ee_task_status("MISSING") is None
+
+
+@pytest.fixture
+def mock_storage():
+    """Patch ``eetools.io.storage`` with a MagicMock for the duration of a test."""
+    with patch.object(io, "storage") as mock:
+        yield mock
+
+
+def test_upload_geotiff_to_asset_rejects_non_tif(mock_ee, mock_storage, tmp_path):
+    bad_file = tmp_path / "raster.png"
+    bad_file.write_bytes(b"data")
+
+    with pytest.raises(ValueError, match=r"\.tif"):
+        io.upload_geotiff_to_asset(
+            str(bad_file), asset_id="projects/p/assets/foo", bucket="bucket"
+        )
+
+    mock_storage.Client.assert_not_called()
+
+
+def test_upload_geotiff_to_asset_uploads_and_ingests(mock_ee, mock_storage, tmp_path):
+    tif_file = tmp_path / "raster.tif"
+    tif_file.write_bytes(b"data")
+
+    mock_ee.data.newTaskId.return_value = ["req-1"]
+    mock_ee.data.startIngestion.return_value = {"id": "TASK1"}
+
+    result = io.upload_geotiff_to_asset(
+        str(tif_file),
+        asset_id="projects/p/assets/foo",
+        bucket="my-bucket",
+        gcs_folder="folder",
+        project_id="explicit-project",
+    )
+
+    # Staged to GCS with EE's own persistent credentials, under the expected blob path.
+    mock_storage.Client.assert_called_once_with(
+        project="explicit-project",
+        credentials=mock_ee.data.get_persistent_credentials.return_value,
+    )
+    blob = mock_storage.Client.return_value.bucket.return_value.blob
+    blob.assert_called_once_with("folder/raster.tif")
+    blob.return_value.upload_from_filename.assert_called_once_with(str(tif_file))
+
+    # Ingestion request references the uploaded gs:// URI.
+    args, kwargs = mock_ee.data.startIngestion.call_args
+    assert args[0] == "req-1"
+    manifest = args[1]
+    assert manifest["name"] == "projects/p/assets/foo"
+    assert manifest["tilesets"] == [
+        {"sources": [{"uris": ["gs://my-bucket/folder/raster.tif"]}]}
+    ]
+    assert kwargs["allow_overwrite"] is False
+    assert result == {"id": "TASK1"}
+
+
+def test_upload_geotiff_to_asset_falls_back_to_configured_project(
+    mock_ee, mock_storage, tmp_path
+):
+    tif_file = tmp_path / "raster.tif"
+    tif_file.write_bytes(b"data")
+
+    with patch.object(io, "get_project", return_value="configured-project") as gp:
+        io.upload_geotiff_to_asset(
+            str(tif_file), asset_id="projects/p/assets/foo", bucket="bucket"
+        )
+
+    gp.assert_called_once()
+    assert mock_storage.Client.call_args.kwargs["project"] == "configured-project"
+
+
+def test_upload_shapefile_to_asset_rejects_non_shp(mock_ee, mock_storage, tmp_path):
+    bad_file = tmp_path / "vector.geojson"
+    bad_file.write_text("{}")
+
+    with pytest.raises(ValueError, match=r"\.shp"):
+        io.upload_shapefile_to_asset(
+            str(bad_file), asset_id="projects/p/assets/foo", bucket="bucket"
+        )
+
+    mock_storage.Client.assert_not_called()
+
+
+def test_upload_shapefile_to_asset_requires_sidecars(mock_ee, mock_storage, tmp_path):
+    shp_file = tmp_path / "vector.shp"
+    shp_file.write_bytes(b"data")
+    # No .shx/.dbf sidecar files written alongside it.
+
+    with pytest.raises(ValueError, match="sidecar"):
+        io.upload_shapefile_to_asset(
+            str(shp_file), asset_id="projects/p/assets/foo", bucket="bucket"
+        )
+
+    mock_storage.Client.assert_not_called()
+
+
+def test_upload_shapefile_to_asset_uploads_shp_and_sidecars(
+    mock_ee, mock_storage, tmp_path
+):
+    shp_file = tmp_path / "vector.shp"
+    shp_file.write_bytes(b"data")
+    (tmp_path / "vector.shx").write_bytes(b"data")
+    (tmp_path / "vector.dbf").write_bytes(b"data")
+    (tmp_path / "vector.prj").write_text("PROJCS")
+    # An unlisted sidecar extension must be ignored, not uploaded.
+    (tmp_path / "vector.xml").write_text("<xml/>")
+
+    mock_ee.data.newTaskId.return_value = ["req-1"]
+    mock_ee.data.startTableIngestion.return_value = {"id": "TASK2"}
+
+    result = io.upload_shapefile_to_asset(
+        str(shp_file),
+        asset_id="projects/p/assets/foo",
+        bucket="my-bucket",
+        gcs_folder="folder",
+        project_id="explicit-project",
+    )
+
+    blob = mock_storage.Client.return_value.bucket.return_value.blob
+    uploaded_names = {call.args[0] for call in blob.call_args_list}
+    assert uploaded_names == {
+        "folder/vector.shp",
+        "folder/vector.shx",
+        "folder/vector.dbf",
+        "folder/vector.prj",
+    }
+
+    # Only the .shp URI is passed to the table manifest -- EE resolves sidecars
+    # automatically from files sharing its GCS location.
+    args, kwargs = mock_ee.data.startTableIngestion.call_args
+    assert args[0] == "req-1"
+    manifest = args[1]
+    assert manifest["name"] == "projects/p/assets/foo"
+    assert manifest["sources"] == [{"uris": ["gs://my-bucket/folder/vector.shp"]}]
+    assert kwargs["allow_overwrite"] is False
+    assert result == {"id": "TASK2"}

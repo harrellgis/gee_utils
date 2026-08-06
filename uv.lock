@@ -724,6 +724,7 @@ source = { editable = "." }
 dependencies = [
     { name = "earthengine-api" },
     { name = "geopandas" },
+    { name = "google-cloud-storage" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -753,6 +754,7 @@ requires-dist = [
     { name = "earthengine-api", specifier = ">=0.1.370" },
     { name = "geemap", marker = "extra == 'notebook'", specifier = ">=0.37.2" },
     { name = "geopandas", specifier = ">=0.14.0" },
+    { name = "google-cloud-storage", specifier = ">=2.0.0" },
     { name = "matplotlib", specifier = ">=3.8.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pandas", specifier = ">=2.0.0" },

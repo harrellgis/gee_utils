@@ -1,11 +1,17 @@
 import logging
+from pathlib import Path
 from typing import cast
 
 import ee
+from google.cloud import storage
 
 from eetools._config import get_project
 
 logger = logging.getLogger(__name__)
+
+# Required and optional shapefile sidecar extensions, keyed off the .shp basename.
+_SHAPEFILE_REQUIRED_SIDECARS = (".shx", ".dbf")
+_SHAPEFILE_OPTIONAL_SIDECARS = (".prj", ".cpg", ".sbn", ".sbx")
 
 
 def export_image_to_drive(
@@ -327,3 +333,152 @@ def check_ee_task_status(task_id: str) -> dict | None:
 
     logger.warning("Task ID not found: %s", task_id)
     return None
+
+
+def _upload_file_to_gcs(
+    local_path: Path, bucket: str, blob_name: str, project_id: str | None
+) -> str:
+    """Upload a single local file to a GCS bucket, reusing EE's own credentials.
+
+    Args:
+        local_path: Local file to upload.
+        bucket: Destination GCS bucket name.
+        blob_name: Destination object name (path) within the bucket.
+        project_id: GCP project to bill/authorize the upload against; falls back to credential-derived project if None.
+
+    Returns:
+        The uploaded object's gs:// URI.
+    """
+    client = storage.Client(
+        project=project_id, credentials=ee.data.get_persistent_credentials()
+    )
+    client.bucket(bucket).blob(blob_name).upload_from_filename(str(local_path))
+    return f"gs://{bucket}/{blob_name}"
+
+
+def upload_geotiff_to_asset(
+    local_path: str,
+    asset_id: str,
+    bucket: str,
+    gcs_folder: str = "eetools_uploads",
+    project_id: str | None = None,
+    overwrite: bool = False,
+) -> dict:
+    """Upload a local GeoTIFF and ingest it as an Earth Engine image asset.
+
+    Earth Engine can only ingest assets from Cloud Storage, not local disk, so the
+    file is first staged in `bucket` (via the same persistent credentials EE
+    authorized with — no separate GCS auth needed) and then ingested from there
+    with `ee.data.startIngestion`.
+
+    Args:
+        local_path: Path to the local .tif/.tiff file to upload.
+        asset_id: Full EE asset path for the output (e.g. projects/my-project/assets/foo).
+        bucket: Name of the GCS bucket to stage the file in; must already exist and be writable by the EE-authorized account.
+        gcs_folder: GCS folder (blob prefix) within the bucket to stage the upload under.
+        project_id: GEE/GCS project ID; falls back to the globally configured project if None.
+        overwrite: Whether the ingestion may overwrite an existing asset at asset_id.
+
+    Returns:
+        dict with the started ingestion task's info, including the EE task id under 'id'.
+
+    Raises:
+        ValueError: If local_path does not have a .tif/.tiff extension.
+    """
+    path = Path(local_path)
+    if path.suffix.lower() not in (".tif", ".tiff"):
+        raise ValueError(f"Expected a .tif/.tiff file, got: {local_path}")
+
+    if project_id is None:
+        project_id = get_project()
+
+    gcs_uri = _upload_file_to_gcs(
+        path,
+        bucket=bucket,
+        blob_name=f"{gcs_folder}/{path.name}",
+        project_id=project_id,
+    )
+
+    request_id = ee.data.newTaskId()[0]
+    manifest = {"name": asset_id, "tilesets": [{"sources": [{"uris": [gcs_uri]}]}]}
+    result = ee.data.startIngestion(request_id, manifest, allow_overwrite=overwrite)
+    logger.info("Image ingestion started: %s", result)
+    return result
+
+
+def upload_shapefile_to_asset(
+    local_path: str,
+    asset_id: str,
+    bucket: str,
+    gcs_folder: str = "eetools_uploads",
+    project_id: str | None = None,
+    overwrite: bool = False,
+) -> dict:
+    """Upload a local shapefile (and its sidecar files) and ingest it as an Earth
+    Engine table asset.
+
+    Earth Engine can only ingest assets from Cloud Storage, not local disk, so the
+    .shp and its sidecar files (.shx, .dbf, and any of .prj/.cpg/.sbn/.sbx present)
+    are staged together in `bucket` (via the same persistent credentials EE
+    authorized with — no separate GCS auth needed); EE resolves the sidecar files
+    automatically from the .shp object's GCS location, so only the .shp URI is
+    passed to `ee.data.startTableIngestion`.
+
+    Args:
+        local_path: Path to the local .shp file; sibling sidecar files sharing its basename are uploaded alongside it.
+        asset_id: Full EE asset path for the output (e.g. projects/my-project/assets/foo).
+        bucket: Name of the GCS bucket to stage the files in; must already exist and be writable by the EE-authorized account.
+        gcs_folder: GCS folder (blob prefix) within the bucket to stage the upload under.
+        project_id: GEE/GCS project ID; falls back to the globally configured project if None.
+        overwrite: Whether the ingestion may overwrite an existing asset at asset_id.
+
+    Returns:
+        dict with the started ingestion task's info, including the EE task id under 'id'.
+
+    Raises:
+        ValueError: If local_path does not have a .shp extension, or a required .shx/.dbf sidecar file is missing next to it.
+    """
+    path = Path(local_path)
+    if path.suffix.lower() != ".shp":
+        raise ValueError(f"Expected a .shp file, got: {local_path}")
+
+    missing = [
+        ext
+        for ext in _SHAPEFILE_REQUIRED_SIDECARS
+        if not path.with_suffix(ext).exists()
+    ]
+    if missing:
+        raise ValueError(
+            f"Missing required shapefile sidecar file(s) {missing} next to {local_path}"
+        )
+
+    sidecar_paths = [
+        sidecar_path
+        for ext in _SHAPEFILE_REQUIRED_SIDECARS + _SHAPEFILE_OPTIONAL_SIDECARS
+        if (sidecar_path := path.with_suffix(ext)).exists()
+    ]
+
+    if project_id is None:
+        project_id = get_project()
+
+    gcs_shp_uri = _upload_file_to_gcs(
+        path,
+        bucket=bucket,
+        blob_name=f"{gcs_folder}/{path.name}",
+        project_id=project_id,
+    )
+    for sidecar_path in sidecar_paths:
+        _upload_file_to_gcs(
+            sidecar_path,
+            bucket=bucket,
+            blob_name=f"{gcs_folder}/{sidecar_path.name}",
+            project_id=project_id,
+        )
+
+    request_id = ee.data.newTaskId()[0]
+    manifest = {"name": asset_id, "sources": [{"uris": [gcs_shp_uri]}]}
+    result = ee.data.startTableIngestion(
+        request_id, manifest, allow_overwrite=overwrite
+    )
+    logger.info("Table ingestion started: %s", result)
+    return result

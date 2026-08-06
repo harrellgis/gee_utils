@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dynamic = ["version"]
 dependencies = [
     "earthengine-api>=0.1.370",
+    "google-cloud-storage>=2.0.0",
     "geopandas>=0.14.0",
     "shapely>=2.0.0",
     "pandas>=2.0.0",
@@ -69,7 +70,7 @@ no_implicit_optional = true
 # imports resolve to Any. Exempt them rather than littering the code with
 # per-line ignores; our own annotations are still checked.
 [[tool.mypy.overrides]]
-module = ["ee.*", "geopandas.*", "shapely.*", "seaborn.*", "pandas.*"]
+module = ["ee.*", "geopandas.*", "shapely.*", "seaborn.*", "pandas.*", "google.cloud.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
