@@ -252,6 +252,20 @@ LAI_STDDEV_SCALE_FACTOR = 0.1
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"
+# WorldCover v200 class codes -> clean lowercase names, for area-by-class summaries.
+ESA_CLASS_MAP = {
+    "tree_cover": 10,
+    "shrubland": 20,
+    "grassland": 30,
+    "cropland": 40,
+    "built_up": 50,
+    "bare_sparse_vegetation": 60,
+    "snow_ice": 70,
+    "permanent_water_bodies": 80,
+    "herbaceous_wetland": 90,
+    "mangroves": 95,
+    "moss_lichen": 100,
+}
 
 #################### Copernicus DEM GLO-30 ##########################
 # Canonical elevation datasource for all Earth Engine terrain work. The GLO30
@@ -330,6 +344,23 @@ HANSEN_TREE_COVER_THRESHOLD = 10
 # lossyear encodes 1-25 for 2001-2025; absolute year = HANSEN_LOSSYEAR_EPOCH + value.
 HANSEN_LOSSYEAR_EPOCH = 2000
 HANSEN_LOSSYEAR_MAX = 25  # highest lossyear code in v1.13 (-> 2025)
+
+#################### iSDA Africa Total Soil Carbon ##########################
+# Single static multiband ee.Image (30m, Africa-only). "mean_0_20"/"mean_20_50" are
+# predicted total carbon at 0-20cm/20-50cm depth; "stdev_*" are the paired uncertainty
+# bands. Baseline assessments use the topsoil (0-20cm) mean band.
+ISDA_CARBON_COLLECTION = "ISDASOIL/Africa/v1/carbon_total"
+ISDA_CARBON_TOPSOIL_BAND = "mean_0_20"
+
+#################### Meta/WRI 1m Global Canopy Height ##########################
+# Tiled ee.ImageCollection (sat-io); mosaic() for wall-to-wall coverage. Single band,
+# canopy height in whole metres (confirmed via .first().bandNames() -- undocumented in
+# the catalog entry). Fused 2009-2020 baseline (~80% 2018-2020 imagery), not a dated
+# annual layer -- do not difference against another epoch to infer change.
+META_CANOPY_HEIGHT_COLLECTION = (
+    "projects/sat-io/open-datasets/facebook/meta-canopy-height"
+)
+META_CANOPY_HEIGHT_BAND = "cover_code"
 
 #################### SENTINEL-1 SAR GRD ##########################
 # C-band dual-pol Ground Range Detected, log-scaled to dB. Heterogeneous time
@@ -527,6 +558,35 @@ LANDTRENDR_DIST_DIR = {
 # (per-pixel-variable column count) rather than a fixed-length array matching the requested
 # year range.
 LANDTRENDR_SEGMENTATION_SELF_BAND = "segmentation_self"
+
+#################### Baseline Assessment (workflows.run_baseline_assessment) ####
+# Layer keys used by build_baseline_layers / export_baseline_layers, in canonical order.
+BASELINE_LAYER_NAMES = [
+    "dem",
+    "slope",
+    "hillshade",
+    "canopy_height",
+    "land_cover",
+    "soil_carbon",
+    "bii_all",
+    "forest_2000",
+    "forest_loss",
+]
+# Continuous (non-categorical) layers combined into one stack for per-site
+# mean/median/min/max/stdDev summaries. land_cover is summarized separately by
+# class area (see ESA_CLASS_MAP); forest_2000/forest_loss are left out of the
+# continuous summary, matching the source TGBS_Kwale baseline notebook.
+BASELINE_CONTINUOUS_LAYERS = [
+    "dem",
+    "slope",
+    "hillshade",
+    "canopy_height",
+    "soil_carbon",
+    "bii_all",
+]
+# Default per-layer raster export scale (m) -- uniform 30m, including canopy_height
+# downsampled from its native 1m, so every baseline layer shares one output grid.
+DEFAULT_BASELINE_EXPORT_SCALE = {name: 30 for name in BASELINE_LAYER_NAMES}
 
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma

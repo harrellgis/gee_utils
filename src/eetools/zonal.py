@@ -187,6 +187,62 @@ def image_collection_to_sample_fc(
 
 
 # --------------------------------------------------------------------------- #
+# Categorical class-area summaries                                             #
+# --------------------------------------------------------------------------- #
+
+
+def summarize_class_areas(
+    regions_fc: ee.FeatureCollection,
+    classified_image: ee.Image,
+    class_map: dict[str, int],
+    scale: int,
+    crs: str = "EPSG:4326",
+    tile_scale: int = 4,
+    unmask_value: int = -9999,
+) -> ee.FeatureCollection:
+    """Sum per-class pixel area (m^2) by region for a single-band categorical image.
+
+    Builds one area band per class (pixel area where the image equals that class's
+    code, zero elsewhere) and sums each over every region, extending each input
+    feature with one ``<class_name>_area_m2`` property per class map entry. Chain
+    onto the output of :func:`image_collection_to_region_stats_fc` or a prior call
+    to this function (or ``reduceRegions``) to add class areas alongside other
+    per-region statistics without a separate join.
+
+    Args:
+        regions_fc: ee.FeatureCollection of polygon regions to sum area over.
+        classified_image: Single-band ee.Image of categorical class codes (e.g. ESA WorldCover 'land_cover'); only its first band is used.
+        class_map: Mapping of clean class name -> integer class code (e.g. ``constants.ESA_CLASS_MAP``).
+        scale: Pixel scale in metres for the reduceRegions call.
+        crs: Coordinate reference system for the reduction (default EPSG:4326).
+        tile_scale: EE tileScale parameter to avoid memory limits (default 4).
+        unmask_value: Value substituted for masked pixels before comparison, chosen to not collide with any real class code (default -9999).
+
+    Returns:
+        ee.FeatureCollection with each input feature extended by one
+        ``<class_name>_area_m2`` property (summed pixel area in square metres) per
+        entry in class_map, alongside all of the region's original properties.
+    """
+    band = ee.Image(classified_image).select(0).unmask(unmask_value)
+
+    class_area_bands = [
+        ee.Image.pixelArea()
+        .multiply(band.eq(class_value))
+        .rename(f"{class_name}_area_m2")
+        for class_name, class_value in class_map.items()
+    ]
+    area_stack = ee.Image.cat(class_area_bands)
+
+    return area_stack.reduceRegions(
+        collection=regions_fc,
+        reducer=ee.Reducer.sum(),
+        scale=scale,
+        crs=crs,
+        tileScale=tile_scale,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Histograms                                                                   #
 # --------------------------------------------------------------------------- #
 

@@ -9,6 +9,13 @@ import pytest
 pytestmark = [pytest.mark.ee, pytest.mark.slow]
 
 
+def test_get_land_cover_band(ee_session, small_aoi):
+    from eetools.sensors.esa.preprocessing import get_land_cover
+
+    img = get_land_cover(aoi=small_aoi)
+    assert img.bandNames().getInfo() == ["land_cover"]
+
+
 def test_get_esa_land_mask_band(ee_session):
     from eetools.sensors.esa.preprocessing import get_esa_land_mask
 

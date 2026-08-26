@@ -6,9 +6,22 @@ from eetools.compositing import (
     build_period_composites,
     build_seasonal_composites,
 )
-from eetools.io import export_table_to_drive
+from eetools.constants import (
+    BASELINE_CONTINUOUS_LAYERS,
+    BASELINE_LAYER_NAMES,
+    DEFAULT_BASELINE_EXPORT_SCALE,
+    DEFAULT_CRS,
+    ESA_CLASS_MAP,
+)
+from eetools.io import export_image_list_to_drive, export_table_to_drive
+from eetools.sensors.bii.preprocessing import get_bii
+from eetools.sensors.canopy_height.preprocessing import get_canopy_height
+from eetools.sensors.dem.preprocessing import get_terrain
+from eetools.sensors.esa.preprocessing import get_land_cover
+from eetools.sensors.hansen.preprocessing import get_forest_2000, get_forest_loss_image
+from eetools.sensors.isda.preprocessing import get_soil_carbon
 from eetools.vectors import get_sites_geometry
-from eetools.zonal import image_collection_to_region_stats_fc
+from eetools.zonal import image_collection_to_region_stats_fc, summarize_class_areas
 
 
 def run_site_timeseries(
@@ -120,6 +133,252 @@ def run_site_timeseries(
         fileNamePrefix=file_prefix,
     )
     return stats_fc
+
+
+# --------------------------------------------------------------------------- #
+# Baseline assessment                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def build_baseline_layers(aoi: ee.Geometry) -> dict[str, ee.Image]:
+    """Build the static baseline layer stack for an AOI: terrain, canopy height,
+    land cover, soil carbon, biodiversity intactness, and Hansen forest-change.
+
+    Mirrors the TGBS_Kwale baseline notebook's ``build_baseline_layers``: a fixed
+    set of single-purpose static datasets, each clipped to the AOI and returned
+    under a stable key so callers can summarize or export any subset. See
+    :func:`run_baseline_assessment` for the full build -> summarize -> export
+    workflow.
+
+    Args:
+        aoi: Area of interest as ee.Geometry; every layer is clipped to it.
+
+    Returns:
+        dict mapping BASELINE_LAYER_NAMES keys ('dem', 'slope', 'hillshade',
+        'canopy_height', 'land_cover', 'soil_carbon', 'bii_all', 'forest_2000',
+        'forest_loss') to single-band ee.Images.
+    """
+    terrain = get_terrain(aoi=aoi)
+    return {
+        "dem": terrain.select("elevation"),
+        "slope": terrain.select("slope"),
+        "hillshade": terrain.select("hillshade"),
+        "canopy_height": get_canopy_height(aoi=aoi),
+        "land_cover": get_land_cover(aoi=aoi),
+        "soil_carbon": get_soil_carbon(aoi=aoi),
+        "bii_all": get_bii(aoi, "BII All", "1km"),
+        "forest_2000": get_forest_2000(aoi),
+        "forest_loss": get_forest_loss_image(aoi),
+    }
+
+
+def summarize_baseline_layers(
+    sites_fc: ee.FeatureCollection,
+    layers: dict[str, ee.Image],
+    scale_continuous: int = 30,
+    scale_landcover: int = 10,
+    crs: str = DEFAULT_CRS,
+    tile_scale: int = 4,
+    include_landcover_areas: bool = True,
+) -> ee.FeatureCollection:
+    """Summarize baseline layers per site: continuous-layer stats plus optional
+    land-cover class areas.
+
+    Reduces the continuous layers (BASELINE_CONTINUOUS_LAYERS) over each site
+    polygon with mean/median/min/max/stdDev, then — when requested — chains a
+    second reduction that sums per-class land-cover area (m^2) onto the same
+    features. No property-based join is needed: reduceRegions already extends
+    each input feature's existing properties, so passing its own output back in
+    as the next reduceRegions call's collection accumulates properties across
+    both passes.
+
+    Args:
+        sites_fc: ee.FeatureCollection of site polygons to summarize over.
+        layers: Layer dict as returned by :func:`build_baseline_layers`; must
+            contain every key in BASELINE_CONTINUOUS_LAYERS, plus 'land_cover'
+            when include_landcover_areas is True.
+        scale_continuous: Pixel scale in metres for the continuous-layer
+            reduction (default 30).
+        scale_landcover: Pixel scale in metres for the land-cover class-area
+            reduction (default 10, matching ESA WorldCover's native resolution).
+        crs: Coordinate reference system for both reductions (default
+            DEFAULT_CRS).
+        tile_scale: EE tileScale parameter to avoid memory limits (default 4).
+        include_landcover_areas: If True (default), chain a
+            summarize_class_areas call (ESA_CLASS_MAP) onto the continuous
+            stats.
+
+    Returns:
+        ee.FeatureCollection with one feature per site, carrying its original
+        properties plus one mean/median/min/max/stdDev property per continuous
+        layer and, when requested, one '<class>_area_m2' property per
+        ESA_CLASS_MAP entry.
+    """
+    continuous_stack = ee.Image.cat(
+        [layers[name].rename(name) for name in BASELINE_CONTINUOUS_LAYERS]
+    )
+    reducer = (
+        ee.Reducer.mean()
+        .combine(ee.Reducer.median(), sharedInputs=True)
+        .combine(ee.Reducer.minMax(), sharedInputs=True)
+        .combine(ee.Reducer.stdDev(), sharedInputs=True)
+    )
+    stats_fc = continuous_stack.reduceRegions(
+        collection=sites_fc,
+        reducer=reducer,
+        scale=scale_continuous,
+        crs=crs,
+        tileScale=tile_scale,
+    )
+
+    if include_landcover_areas:
+        stats_fc = summarize_class_areas(
+            regions_fc=stats_fc,
+            classified_image=layers["land_cover"],
+            class_map=ESA_CLASS_MAP,
+            scale=scale_landcover,
+            crs=crs,
+            tile_scale=tile_scale,
+        )
+
+    return stats_fc
+
+
+def export_baseline_layers(
+    layers: dict[str, ee.Image],
+    aoi: ee.Geometry,
+    export_folder: str,
+    layer_names: list[str] | None = None,
+    scale_dict: dict[str, int] | None = None,
+    crs: str = DEFAULT_CRS,
+) -> dict:
+    """Export a selected subset of baseline layers to Drive as individual GeoTIFFs.
+
+    Args:
+        layers: Layer dict as returned by :func:`build_baseline_layers`.
+        aoi: Export region as ee.Geometry, shared by every layer.
+        export_folder: Google Drive folder name to write all files into.
+        layer_names: Layer keys to export; defaults to every key in
+            BASELINE_LAYER_NAMES (all baseline layers).
+        scale_dict: Per-layer export scale in metres, keyed by layer name;
+            defaults to DEFAULT_BASELINE_EXPORT_SCALE (uniform 30m).
+        crs: Coordinate reference system applied to every export (default
+            DEFAULT_CRS).
+
+    Returns:
+        dict mapping each exported layer name to its started ee.batch.Task.
+
+    Raises:
+        ValueError: If layer_names or scale_dict names a layer not present in
+            layers.
+    """
+    layer_names = layer_names if layer_names is not None else list(BASELINE_LAYER_NAMES)
+    scale_dict = scale_dict if scale_dict is not None else DEFAULT_BASELINE_EXPORT_SCALE
+
+    missing_layers = [name for name in layer_names if name not in layers]
+    if missing_layers:
+        raise ValueError(f"Layer(s) not found in layers dict: {missing_layers}")
+    missing_scales = [name for name in layer_names if name not in scale_dict]
+    if missing_scales:
+        raise ValueError(f"Layer(s) not found in scale_dict: {missing_scales}")
+
+    images = [(layers[name], name, scale_dict[name]) for name in layer_names]
+    tasks = export_image_list_to_drive(
+        images=images, aoi=aoi, folder=export_folder, crs=crs
+    )
+    return dict(zip(layer_names, tasks))
+
+
+def run_baseline_assessment(
+    sites_fc: ee.FeatureCollection,
+    export_folder: str,
+    layer_names: list[str] | None = None,
+    scale_dict: dict[str, int] | None = None,
+    crs: str = DEFAULT_CRS,
+    scale_continuous: int = 30,
+    scale_landcover: int = 10,
+    tile_scale: int = 4,
+    include_landcover_areas: bool = True,
+    export_summary: bool = True,
+    summary_file_prefix: str = "baseline_site_summaries",
+) -> tuple[dict[str, ee.Image], ee.FeatureCollection]:
+    """Run the full static baseline assessment workflow for a site FeatureCollection.
+
+    Reproduces the TGBS_Kwale baseline notebook end-to-end: derives the AOI from
+    ``sites_fc``, builds the static baseline layer stack (terrain, canopy
+    height, land cover, soil carbon, BII, Hansen forest-change — see
+    :func:`build_baseline_layers`), summarizes it per site (continuous stats
+    plus optional land-cover class areas — see :func:`summarize_baseline_layers`),
+    exports the requested layers to Drive as individual GeoTIFFs (see
+    :func:`export_baseline_layers`), and — by default — exports the summary
+    table to the same Drive folder as a CSV.
+
+    Args:
+        sites_fc: ee.FeatureCollection of site polygon features; the combined
+            geometry is used as the AOI for every layer.
+        export_folder: Google Drive folder name to write all rasters (and the
+            summary CSV, when exported) into.
+        layer_names: Layer keys to export as rasters; defaults to every key in
+            BASELINE_LAYER_NAMES (all baseline layers). The returned layers dict
+            and summary table always cover the full baseline stack regardless
+            of this filter.
+        scale_dict: Per-layer raster export scale in metres, keyed by layer
+            name; defaults to DEFAULT_BASELINE_EXPORT_SCALE (uniform 30m,
+            including canopy_height downsampled from its native 1m).
+        crs: Coordinate reference system for both the raster and summary
+            exports (default DEFAULT_CRS).
+        scale_continuous: Pixel scale in metres for the per-site
+            continuous-layer summary (default 30).
+        scale_landcover: Pixel scale in metres for the per-site land-cover
+            class-area summary (default 10).
+        tile_scale: EE tileScale parameter for both summary reductions
+            (default 4).
+        include_landcover_areas: If True (default), the summary table includes
+            one '<class>_area_m2' property per ESA_CLASS_MAP entry.
+        export_summary: If True (default), export the per-site summary table
+            to export_folder as a CSV.
+        summary_file_prefix: Filename prefix (without extension) and EE task
+            description for the summary CSV export (default
+            'baseline_site_summaries').
+
+    Returns:
+        tuple of (layers, summary_fc): the full baseline layers dict (as built
+        by build_baseline_layers) and the per-site summary
+        ee.FeatureCollection (as built by summarize_baseline_layers). Raster
+        export tasks (and the summary table export task, when requested) are
+        started as a side effect.
+    """
+    aoi = get_sites_geometry(sites_fc)
+    layers = build_baseline_layers(aoi)
+
+    summary_fc = summarize_baseline_layers(
+        sites_fc=sites_fc,
+        layers=layers,
+        scale_continuous=scale_continuous,
+        scale_landcover=scale_landcover,
+        crs=crs,
+        tile_scale=tile_scale,
+        include_landcover_areas=include_landcover_areas,
+    )
+
+    export_baseline_layers(
+        layers=layers,
+        aoi=aoi,
+        export_folder=export_folder,
+        layer_names=layer_names,
+        scale_dict=scale_dict,
+        crs=crs,
+    )
+
+    if export_summary:
+        export_table_to_drive(
+            collection=summary_fc,
+            description=summary_file_prefix,
+            folder=export_folder,
+            fileNamePrefix=summary_file_prefix,
+        )
+
+    return layers, summary_fc
 
 
 def run_seasonal_site_timeseries(

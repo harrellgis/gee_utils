@@ -183,3 +183,46 @@ def test_reduce_image_over_region_no_spurious_none_props(ee_session, small_aoi):
     props = feat.toDictionary().getInfo()
     assert set(props.keys()) == {"year", "b"}
     assert props["b"] == pytest.approx(0.3)
+
+
+# --------------------------------------------------------------------------- #
+# summarize_class_areas
+# --------------------------------------------------------------------------- #
+@pytest.mark.ee
+def test_summarize_class_areas_sums_only_matching_class(ee_session, small_aoi):
+    from eetools.zonal import summarize_class_areas
+
+    classified = (
+        ee_session.Image.constant(10).toInt().rename("land_cover").clip(small_aoi)
+    )
+    regions = ee_session.FeatureCollection(
+        [ee_session.Feature(small_aoi, {"site_name": "A"})]
+    )
+    class_map = {"tree_cover": 10, "shrubland": 20}
+
+    fc = summarize_class_areas(regions, classified, class_map, scale=1000)
+    props = fc.first().toDictionary().getInfo()
+
+    assert props["site_name"] == "A"
+    assert props["tree_cover_area_m2"] > 0
+    assert props["shrubland_area_m2"] == 0
+
+
+@pytest.mark.ee
+def test_summarize_class_areas_chains_onto_prior_reduceregions(ee_session, small_aoi):
+    from eetools.zonal import summarize_class_areas
+
+    classified = (
+        ee_session.Image.constant(20).toInt().rename("land_cover").clip(small_aoi)
+    )
+    regions = ee_session.FeatureCollection(
+        [ee_session.Feature(small_aoi, {"existing_stat": 1.5})]
+    )
+    class_map = {"tree_cover": 10, "shrubland": 20}
+
+    fc = summarize_class_areas(regions, classified, class_map, scale=1000)
+    props = fc.first().toDictionary().getInfo()
+
+    # Prior properties on the input collection survive the chained reduceRegions.
+    assert props["existing_stat"] == pytest.approx(1.5)
+    assert props["shrubland_area_m2"] > 0
