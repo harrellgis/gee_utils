@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
+- `utils.get_date_window` (a season's start/end `ee.Date` window spanning a year range) and
+  `utils.get_available_window` (actual first/last acquisition dates of a collection, or of
+  merged collections).
+- `io.upload_geotiff_to_asset` and `io.upload_shapefile_to_asset`: stage a local `.tif`, or a
+  `.shp` plus its sidecar files, to Google Cloud Storage and ingest it as an Earth Engine
+  asset. Adds `google-cloud-storage` as a runtime dependency.
+- Baseline-layer datasets: `sensors.canopy_height.preprocessing.get_canopy_height` (Meta
+  canopy height), `sensors.isda.preprocessing.get_soil_carbon` (iSDA Africa topsoil total
+  carbon), and `sensors.esa.preprocessing.get_land_cover`, with their collection IDs, bands,
+  and the ESA class map in `constants.py`.
+- Baseline-assessment workflow in `workflows`: `build_baseline_layers`,
+  `summarize_baseline_layers`, `export_baseline_layers`, and `run_baseline_assessment`, plus
+  `zonal.summarize_class_areas` for per-class area sums.
 - Two spectral indices in `sensors.indices` / `INDEX_REGISTRY`, selectable by name or via
   the `vegetation` domain: **MSAVI2** (`calc_msavi2`, self-adjusting soil-robust greenness
   for sparse-vegetation / bare-soil backgrounds; needs no tunable L) and **CIred_edge**
@@ -34,8 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (L8/L9) scenes carry a different bounded float type than the TM/ETM+ (L5/L7) baseline for
   the same band, which the `median()` / `qualityMosaic` reductions rejected; every scene is
   now cast to a uniform float32 before reducing.
+- `io.export_image_to_drive` now unmasks with `sameFootprint=False`, so fringe pixels outside
+  the AOI are written as the -9999 nodata value instead of Earth Engine's fallback of 0.
 
 ### Changed
+- Sentinel-2 preprocessing now keeps band `B1` (coastal aerosol); `constants.S2_BANDS`
+  includes it, so S2 outputs carry one more band than in 0.2.0.
 - `sensors.dem` now sources the Copernicus DEM GLO-30 from `COPERNICUS/DEM/GLO30_2024_1`
   instead of the deprecated `COPERNICUS/DEM/GLO30`. Same schema (tiled `ee.ImageCollection`,
   `DEM`/`EDM`/`FLM`/`HEM`/`WBM` bands, EGM2008 vertical datum), so `get_copernicus_dem` /
