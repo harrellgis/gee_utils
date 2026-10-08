@@ -7,7 +7,8 @@ a harmonized set of spectral indices, reduce over time, export to Drive or Earth
 Engine assets, and summarize/visualize the results.
 
 Supported sources: **Sentinel-2 SR**, **Landsat 5/7/8/9 C2 L2 SR**, **NASA HLS**
-(L30/S30), **MODIS** MCD15A3H LAI/FPAR, **CHIRPS** precipitation,
+(L30/S30), **MODIS** (MCD15A3H LAI/FPAR, MOD13Q1 NDVI/EVI, MCD64A1 burned area,
+MOD17A3HGF NPP, MOD44B vegetation continuous fields), **CHIRPS** precipitation,
 **ESA WorldCover**, **Sentinel-1 SAR GRD**, **OPERA DSWx** surface water,
 **Dynamic World** LULC, **Copernicus DEM**/terrain, **Hansen** Global Forest
 Change, **BII** (Biodiversity Intactness Index), **WDPA** protected-area

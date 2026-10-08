@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Four MODIS products in `sensors.modis`, each with a `get_*_collection(aoi, start_date, end_date, ...)`
+  builder that validates the date range against the collection:
+  - **MOD13Q1** (`get_modis_vi_collection`): 250 m 16-day NDVI/EVI plus red/NIR/blue/SWIR2
+    reflectance, scaled by 0.0001 and masked by `SummaryQA` (default keeps good + marginal,
+    tunable via `max_summary_qa`).
+  - **MCD64A1** (`get_modis_burned_area_collection`): 500 m monthly burned area with a derived
+    0/1 `burned` band. GEE masks `BurnDate` over unburned land, so the flag unmasks it to 0 and
+    restricts to valid land observations (QA bits 0 and 1), keeping "unburned" distinct from
+    "no data".
+  - **MOD17A3HGF** (`get_modis_npp_collection`): 500 m annual gap-filled NPP/GPP in
+    kg C/m²/yr, with fill codes (e.g. `Gpp` 65534 over water, which GEE leaves unmasked) masked.
+  - **MOD44B** (`get_modis_vcf_collection`): 250 m annual percent tree / non-tree vegetation /
+    non-vegetated cover, with water (200) and fill (253) codes masked.
+- New `sensors.modis.masking` module holding the per-product QA/fill masks. Collection IDs,
+  band lists, scale factors, and valid-range thresholds live in `constants.py`.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

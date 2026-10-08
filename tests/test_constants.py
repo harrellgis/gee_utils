@@ -47,6 +47,8 @@ def test_sentinel_band_map_has_swir2_and_red_edge():
         C.HLS_SCALE_FACTOR,
         C.FPAR_SCALE_FACTOR,
         C.LAI_SCALE_FACTOR,
+        C.MODIS_VI_SCALE_FACTOR,
+        C.MODIS_NPP_SCALE_FACTOR,
     ],
 )
 def test_scale_factors_are_positive(scale_factor):
@@ -63,6 +65,10 @@ def test_scale_factors_are_positive(scale_factor):
         C.HLS_L30_COLLECTION,
         C.HLS_S30_COLLECTION,
         C.MODIS_LAI_FPAR_COLLECTION,
+        C.MODIS_VI_COLLECTION,
+        C.MODIS_BURNED_AREA_COLLECTION,
+        C.MODIS_NPP_COLLECTION,
+        C.MODIS_VCF_COLLECTION,
         C.ESA_WC_COLLECTION,
     ],
 )

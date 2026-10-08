@@ -24,7 +24,7 @@ At the start of every session, load context in this order:
 
 ## What This Repo Does
 
-`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS LAI/Fpar, CHIRPS precipitation, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
+`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), CHIRPS precipitation, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
 
 ---
 
@@ -119,7 +119,7 @@ gee_utils/
 │   │   ├── hansen/          # Global Forest Change preprocessing
 │   │   ├── hls/             # masking + preprocessing
 │   │   ├── landsat/         # masking + preprocessing
-│   │   ├── modis/           # preprocessing
+│   │   ├── modis/           # masking (QA/fill masks) + preprocessing (LAI/Fpar, VI, burned area, NPP, VCF)
 │   │   ├── satellite_embedding/  # Google Satellite Embedding V1 (AlphaEarth) preprocessing + cosine-similarity change
 │   │   ├── sentinel/        # Sentinel-2 SR masking + preprocessing
 │   │   ├── sentinel1/       # Sentinel-1 SAR GRD masking (edge + speckle) + preprocessing
