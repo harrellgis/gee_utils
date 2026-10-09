@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     kg C/m²/yr, with fill codes (e.g. `Gpp` 65534 over water, which GEE leaves unmasked) masked.
   - **MOD44B** (`get_modis_vcf_collection`): 250 m annual percent tree / non-tree vegetation /
     non-vegetated cover, with water (200) and fill (253) codes masked.
+- `sensors.smap.preprocessing` module wrapping **NASA SMAP L4** global soil moisture
+  (`NASA/SMAP/SPL4SMGP/008`, ~9 km, 3-hourly). `get_smap_collection(aoi, start_date, end_date,
+  bands=None, daily=True)` returns surface / rootzone / profile volumetric soil moisture
+  (m³/m³) and the matching 0-1 wetness bands by default (any SPL4SMGP band can be selected),
+  averaged to one image per UTC day with `year`/`month`/`day`/`image_count` properties, or
+  the native 3-hourly timesteps with `daily=False`. No scale factor or masking is applied —
+  the product is already in physical units, water-masked, and has no per-pixel QA band.
 - New `sensors.modis.masking` module holding the per-product QA/fill masks. Collection IDs,
   band lists, scale factors, and valid-range thresholds live in `constants.py`.
 

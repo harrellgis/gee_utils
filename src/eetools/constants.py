@@ -22,6 +22,9 @@ MODIS_BURNED_AREA_COLLECTION = "MODIS/061/MCD64A1"  # 500 m, monthly
 MODIS_NPP_COLLECTION = "MODIS/061/MOD17A3HGF"  # 500 m, annual (gap-filled)
 MODIS_VCF_COLLECTION = "MODIS/061/MOD44B"  # 250 m, annual
 
+# NASA SMAP L4 Global 3-hourly 9 km soil moisture (model-assimilated)
+SMAP_L4_COLLECTION = "NASA/SMAP/SPL4SMGP/008"
+
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
@@ -297,6 +300,21 @@ MODIS_VCF_BANDS = [
 ]
 # Cover bands are percentages; 200 = water and 253 = fill are masked out.
 MODIS_VCF_VALID_MAX = 100
+
+#################### NASA SMAP L4 Soil Moisture ##########################
+# SPL4SMGP is 3-hourly (8 images/day), ~9 km (EASE-Grid 2.0 M09, served in EPSG:4326),
+# already in physical units (no scale factor) and masked over open water. It has
+# no per-pixel QA band. Volumetric moisture is m^3/m^3; wetness is the fraction
+# of saturation (0-1). Surface = 0-5 cm, rootzone = 0-100 cm, profile = surface to
+# bedrock.
+SMAP_SM_BANDS = [
+    "sm_surface",
+    "sm_rootzone",
+    "sm_profile",
+    "sm_surface_wetness",
+    "sm_rootzone_wetness",
+    "sm_profile_wetness",
+]
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"

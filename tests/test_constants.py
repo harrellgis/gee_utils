@@ -69,6 +69,7 @@ def test_scale_factors_are_positive(scale_factor):
         C.MODIS_BURNED_AREA_COLLECTION,
         C.MODIS_NPP_COLLECTION,
         C.MODIS_VCF_COLLECTION,
+        C.SMAP_L4_COLLECTION,
         C.ESA_WC_COLLECTION,
     ],
 )
