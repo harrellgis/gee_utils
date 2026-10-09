@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   averaged to one image per UTC day with `year`/`month`/`day`/`image_count` properties, or
   the native 3-hourly timesteps with `daily=False`. No scale factor or masking is applied —
   the product is already in physical units, water-masked, and has no per-pixel QA band.
+- `sensors.sm2rain.preprocessing` module wrapping the **OpenLandMap SM2RAIN** monthly
+  precipitation climatology (`OpenLandMap/CLM/CLM_PRECIPITATION_SM2RAIN_M/v01`, 1 km).
+  The source is a single 12-band image of 2007-2018 mean mm/month (an ensemble of
+  SM2RAIN-ASCAT, GPM IMERG, WorldClim v2, and CHELSA), not a time series.
+  `get_sm2rain_climatology(months=None)` returns one image per requested calendar month with
+  a `precipitation` band (matching CHIRPS) and `month` / `month_name` properties.
 - New `sensors.modis.masking` module holding the per-product QA/fill masks. Collection IDs,
   band lists, scale factors, and valid-range thresholds live in `constants.py`.
 

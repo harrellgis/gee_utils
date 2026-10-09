@@ -25,6 +25,9 @@ MODIS_VCF_COLLECTION = "MODIS/061/MOD44B"  # 250 m, annual
 # NASA SMAP L4 Global 3-hourly 9 km soil moisture (model-assimilated)
 SMAP_L4_COLLECTION = "NASA/SMAP/SPL4SMGP/008"
 
+# OpenLandMap SM2RAIN-based monthly precipitation climatology (single ee.Image)
+SM2RAIN_CLIMATOLOGY_IMAGE = "OpenLandMap/CLM/CLM_PRECIPITATION_SM2RAIN_M/v01"
+
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
@@ -315,6 +318,26 @@ SMAP_SM_BANDS = [
     "sm_rootzone_wetness",
     "sm_profile_wetness",
 ]
+
+#################### OpenLandMap SM2RAIN Precipitation Climatology ##########################
+# Long-term (2007-2018) mean monthly precipitation in mm/month at 1 km, from an
+# ensemble of SM2RAIN-ASCAT, GPM IMERG, WorldClim v2, and CHELSA. One band per
+# calendar month (no time series, no scale factor, water not masked).
+SM2RAIN_MONTH_BANDS = [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+]
+SM2RAIN_PRECIP_BAND = "precipitation"  # matches CHIRPS_PRECIP_BAND
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"

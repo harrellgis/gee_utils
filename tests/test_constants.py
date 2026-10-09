@@ -70,6 +70,7 @@ def test_scale_factors_are_positive(scale_factor):
         C.MODIS_NPP_COLLECTION,
         C.MODIS_VCF_COLLECTION,
         C.SMAP_L4_COLLECTION,
+        C.SM2RAIN_CLIMATOLOGY_IMAGE,
         C.ESA_WC_COLLECTION,
     ],
 )
