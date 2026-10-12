@@ -16,6 +16,22 @@ HLS_S30_COLLECTION = "NASA/HLS/HLSS30/v002"  # Sentinel MSI
 # MODIS LAI / Fpar
 MODIS_LAI_FPAR_COLLECTION = "MODIS/061/MCD15A3H"
 
+# MODIS vegetation indices, burned area, NPP, and vegetation continuous fields
+MODIS_VI_COLLECTION = "MODIS/061/MOD13Q1"  # 250 m, 16-day NDVI/EVI
+MODIS_BURNED_AREA_COLLECTION = "MODIS/061/MCD64A1"  # 500 m, monthly
+MODIS_NPP_COLLECTION = "MODIS/061/MOD17A3HGF"  # 500 m, annual (gap-filled)
+MODIS_VCF_COLLECTION = "MODIS/061/MOD44B"  # 250 m, annual
+
+# NASA SMAP L4 Global 3-hourly 9 km soil moisture (model-assimilated)
+SMAP_L4_COLLECTION = "NASA/SMAP/SPL4SMGP/008"
+
+# OpenLandMap SM2RAIN-based monthly precipitation climatology (single ee.Image)
+SM2RAIN_CLIMATOLOGY_IMAGE = "OpenLandMap/CLM/CLM_PRECIPITATION_SM2RAIN_M/v01"
+
+# NASA Black Marble VIIRS VNP46A2 v002 daily nighttime lights. Supersedes the
+# NOAA/VIIRS/001/VNP46A1 / VNP46A2 v001 copies, which stopped updating in Jan 2025.
+VIIRS_NTL_COLLECTION = "NASA/VIIRS/002/VNP46A2"
+
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
@@ -249,6 +265,103 @@ FPAR_SCALE_FACTOR = 0.01
 LAI_SCALE_FACTOR = 0.1
 FPAR_STDDEV_SCALE_FACTOR = 0.01
 LAI_STDDEV_SCALE_FACTOR = 0.1
+
+#################### MODIS MOD13Q1 Vegetation Indices ##########################
+# NDVI/EVI already carry the eetools index band names, so no rename is needed.
+MODIS_VI_SCALED_BANDS = [
+    "NDVI",
+    "EVI",
+    "sur_refl_b01",  # red
+    "sur_refl_b02",  # nir
+    "sur_refl_b03",  # blue
+    "sur_refl_b07",  # swir2 (2130 nm)
+]
+MODIS_VI_QA_BANDS = ["SummaryQA", "DetailedQA"]
+MODIS_VI_BANDS = MODIS_VI_SCALED_BANDS + MODIS_VI_QA_BANDS
+MODIS_VI_SCALE_FACTOR = 0.0001
+# SummaryQA pixel reliability: 0 good, 1 marginal, 2 snow/ice, 3 cloudy (-1 fill).
+# Keeping <= 1 retains good + marginal retrievals.
+MODIS_VI_MAX_SUMMARY_QA = 1
+
+#################### MODIS MCD64A1 Burned Area ##########################
+# BurnDate is the burn day-of-year (1-366); GEE masks it over unburned land.
+MODIS_BURNED_AREA_BANDS = ["BurnDate", "Uncertainty", "QA", "FirstDay", "LastDay"]
+MODIS_BURN_DATE_BAND = "BurnDate"
+MODIS_BURNED_BAND = "burned"  # derived 0/1 flag
+# QA bit 0 = land, bit 1 = valid data; both must be set for a usable observation.
+MODIS_BURNED_AREA_VALID_QA_BITS = 0b11
+
+#################### MODIS MOD17A3HGF Annual NPP ##########################
+MODIS_NPP_BANDS = ["Npp", "Gpp", "Npp_QC"]
+MODIS_NPP_SCALED_BANDS = ["Npp", "Gpp"]
+MODIS_NPP_SCALE_FACTOR = 0.0001  # -> kg C / m^2 / year
+# Upper valid-range limits; values above are fill codes (e.g. Gpp 65534 = water).
+MODIS_NPP_VALID_MAX = 32700
+MODIS_GPP_VALID_MAX = 30000
+
+#################### MODIS MOD44B Vegetation Continuous Fields ##########################
+MODIS_VCF_BANDS = [
+    "Percent_Tree_Cover",
+    "Percent_NonTree_Vegetation",
+    "Percent_NonVegetated",
+]
+# Cover bands are percentages; 200 = water and 253 = fill are masked out.
+MODIS_VCF_VALID_MAX = 100
+
+#################### NASA SMAP L4 Soil Moisture ##########################
+# SPL4SMGP is 3-hourly (8 images/day), ~9 km (EASE-Grid 2.0 M09, served in EPSG:4326),
+# already in physical units (no scale factor) and masked over open water. It has
+# no per-pixel QA band. Volumetric moisture is m^3/m^3; wetness is the fraction
+# of saturation (0-1). Surface = 0-5 cm, rootzone = 0-100 cm, profile = surface to
+# bedrock.
+SMAP_SM_BANDS = [
+    "sm_surface",
+    "sm_rootzone",
+    "sm_profile",
+    "sm_surface_wetness",
+    "sm_rootzone_wetness",
+    "sm_profile_wetness",
+]
+
+#################### OpenLandMap SM2RAIN Precipitation Climatology ##########################
+# Long-term (2007-2018) mean monthly precipitation in mm/month at 1 km, from an
+# ensemble of SM2RAIN-ASCAT, GPM IMERG, WorldClim v2, and CHELSA. One band per
+# calendar month (no time series, no scale factor, water not masked).
+SM2RAIN_MONTH_BANDS = [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+]
+SM2RAIN_PRECIP_BAND = "precipitation"  # matches CHIRPS_PRECIP_BAND
+
+#################### NASA Black Marble VIIRS VNP46A2 Nighttime Lights ##########################
+# Daily, 15 arc-second (~500 m), already in physical units (nW/cm^2/sr; no scale
+# factor). The BRDF/lunar-corrected NTL band is masked by GEE where the retrieval
+# is poor/cloudy; the gap-filled band fills those pixels from the latest
+# high-quality retrieval, whose age in days is Latest_High_Quality_Retrieval.
+VIIRS_NTL_BAND = "DNB_BRDF_Corrected_NTL"
+VIIRS_NTL_GAP_FILLED_BAND = "Gap_Filled_DNB_BRDF_Corrected_NTL"
+VIIRS_NTL_BANDS = [
+    VIIRS_NTL_BAND,
+    VIIRS_NTL_GAP_FILLED_BAND,
+    "Latest_High_Quality_Retrieval",
+    "Mandatory_Quality_Flag",
+    "Snow_Flag",
+    "QF_Cloud_Mask",
+]
+# Mandatory_Quality_Flag: 0 high-quality persistent, 1 high-quality ephemeral
+# (e.g. fires, gas flares), 2 poor quality, 255 fill. <= 1 keeps both high-quality
+# classes.
+VIIRS_NTL_MAX_QUALITY_FLAG = 1
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"
