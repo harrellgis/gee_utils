@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SM2RAIN-ASCAT, GPM IMERG, WorldClim v2, and CHELSA), not a time series.
   `get_sm2rain_climatology(months=None)` returns one image per requested calendar month with
   a `precipitation` band (matching CHIRPS) and `month` / `month_name` properties.
+- `sensors.viirs` package wrapping **NASA Black Marble VIIRS VNP46A2 v002** daily ~500 m
+  nighttime lights (`NASA/VIIRS/002/VNP46A2`), which supersedes the `NOAA/VIIRS/001`
+  VNP46A1/VNP46A2 copies that stopped updating in January 2025.
+  `get_viirs_ntl_collection(aoi, start_date, end_date, ...)` returns the BRDF/lunar-corrected
+  and gap-filled radiance bands (nW/cm²/sr, no scale factor) plus quality/snow/cloud flags;
+  `masking.mask_viirs_ntl_qa` masks the corrected band to high-quality (`Mandatory_Quality_Flag`
+  ≤ 1, tunable) snow-free retrievals while leaving the gap-filled band untouched.
 - New `sensors.modis.masking` module holding the per-product QA/fill masks. Collection IDs,
   band lists, scale factors, and valid-range thresholds live in `constants.py`.
 

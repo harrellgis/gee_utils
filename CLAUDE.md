@@ -24,7 +24,7 @@ At the start of every session, load context in this order:
 
 ## What This Repo Does
 
-`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), NASA SMAP L4 soil moisture, CHIRPS precipitation, OpenLandMap SM2RAIN precipitation climatology, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
+`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), NASA SMAP L4 soil moisture, CHIRPS precipitation, OpenLandMap SM2RAIN precipitation climatology, NASA Black Marble VIIRS VNP46A2 nighttime lights, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
 
 ---
 
@@ -125,6 +125,7 @@ gee_utils/
 │   │   ├── sentinel1/       # Sentinel-1 SAR GRD masking (edge + speckle) + preprocessing
 │   │   ├── sm2rain/         # OpenLandMap SM2RAIN monthly precipitation climatology (static 12-month image)
 │   │   ├── smap/            # NASA SMAP L4 soil moisture preprocessing (3-hourly -> daily means)
+│   │   ├── viirs/           # NASA Black Marble VNP46A2 nighttime lights masking (quality/snow) + preprocessing
 │   │   └── wdpa/            # World Database on Protected Areas (vector) preprocessing + Drive export
 │   ├── landtrendr/          # METHOD subpackage (not a sensor): LandTrendr temporal segmentation
 │   │   ├── collection.py    # medoid composite + multi-sensor (Roy-harmonized) annual builder

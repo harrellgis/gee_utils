@@ -28,6 +28,10 @@ SMAP_L4_COLLECTION = "NASA/SMAP/SPL4SMGP/008"
 # OpenLandMap SM2RAIN-based monthly precipitation climatology (single ee.Image)
 SM2RAIN_CLIMATOLOGY_IMAGE = "OpenLandMap/CLM/CLM_PRECIPITATION_SM2RAIN_M/v01"
 
+# NASA Black Marble VIIRS VNP46A2 v002 daily nighttime lights. Supersedes the
+# NOAA/VIIRS/001/VNP46A1 / VNP46A2 v001 copies, which stopped updating in Jan 2025.
+VIIRS_NTL_COLLECTION = "NASA/VIIRS/002/VNP46A2"
+
 # ESA WorldCover
 ESA_WC_COLLECTION = "ESA/WorldCover/v200"
 
@@ -338,6 +342,26 @@ SM2RAIN_MONTH_BANDS = [
     "dec",
 ]
 SM2RAIN_PRECIP_BAND = "precipitation"  # matches CHIRPS_PRECIP_BAND
+
+#################### NASA Black Marble VIIRS VNP46A2 Nighttime Lights ##########################
+# Daily, 15 arc-second (~500 m), already in physical units (nW/cm^2/sr; no scale
+# factor). The BRDF/lunar-corrected NTL band is masked by GEE where the retrieval
+# is poor/cloudy; the gap-filled band fills those pixels from the latest
+# high-quality retrieval, whose age in days is Latest_High_Quality_Retrieval.
+VIIRS_NTL_BAND = "DNB_BRDF_Corrected_NTL"
+VIIRS_NTL_GAP_FILLED_BAND = "Gap_Filled_DNB_BRDF_Corrected_NTL"
+VIIRS_NTL_BANDS = [
+    VIIRS_NTL_BAND,
+    VIIRS_NTL_GAP_FILLED_BAND,
+    "Latest_High_Quality_Retrieval",
+    "Mandatory_Quality_Flag",
+    "Snow_Flag",
+    "QF_Cloud_Mask",
+]
+# Mandatory_Quality_Flag: 0 high-quality persistent, 1 high-quality ephemeral
+# (e.g. fires, gas flares), 2 poor quality, 255 fill. <= 1 keeps both high-quality
+# classes.
+VIIRS_NTL_MAX_QUALITY_FLAG = 1
 
 #################### ESA WorldCover ##########################
 ESA_BAND = "Map"
