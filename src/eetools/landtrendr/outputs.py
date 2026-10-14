@@ -85,11 +85,7 @@ def get_segment_count(segment_data: ee.Image) -> ee.Image:
 
 def _row_to_band(segment: ee.Image, row: int, name: str) -> ee.Image:
     """Flatten one attribute row of a single-segment array to a scalar band."""
-    return (
-        segment.arraySlice(0, row, row + 1)
-        .arrayProject([1])
-        .arrayFlatten([[name]])
-    )
+    return segment.arraySlice(0, row, row + 1).arrayProject([1]).arrayFlatten([[name]])
 
 
 def _apply_operator(band: ee.Image, spec: dict) -> ee.Image:
@@ -178,9 +174,7 @@ def get_change_map(
     if params["dur"]["checked"]:
         keep = keep.And(_apply_operator(change.select("dur"), params["dur"]))
     if params["preval"]["checked"]:
-        keep = keep.And(
-            _apply_operator(change.select("preval"), params["preval"])
-        )
+        keep = keep.And(_apply_operator(change.select("preval"), params["preval"]))
     if params["year"]["checked"]:
         keep = keep.And(change.select("yod").gte(params["year"]["start"])).And(
             change.select("yod").lte(params["year"]["end"])
