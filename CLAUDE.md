@@ -24,7 +24,7 @@ At the start of every session, load context in this order:
 
 ## What This Repo Does
 
-`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), NASA SMAP L4 soil moisture, CHIRPS precipitation, OpenLandMap SM2RAIN precipitation climatology, NASA Black Marble VIIRS VNP46A2 nighttime lights, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
+`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), NASA SMAP L4 soil moisture, CHIRPS precipitation, OpenLandMap SM2RAIN precipitation climatology, NASA Black Marble VIIRS VNP46A2 nighttime lights, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, Meta/WRI canopy height, iSDA soil carbon, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, summarize over site polygons (zonal stats, end-to-end site workflows), export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
 
 ---
 
@@ -104,14 +104,19 @@ gee_utils/
 ├── src/eetools/
 │   ├── __init__.py          # initialize() entry point + re-exports configure/get_project
 │   ├── _config.py           # module-level project_id state: configure() / get_project()
-│   ├── constants.py         # ALL collection IDs, band lists, band maps, scale factors, mask thresholds
-│   ├── io.py                # Export to Drive / EE assets; task status helpers
-│   ├── utils.py             # date-range validation, AOI/GPKG → ee.Geometry, clipping, joins, temporal reducers, resampling
+│   ├── constants.py         # ALL collection IDs, band lists, band maps, scale factors, mask thresholds, seasons
+│   ├── compositing.py       # build_composite / build_period_composites (annual|monthly) / build_seasonal_composites
+│   ├── io.py                # Export to Drive / EE assets; task status helpers; GeoTIFF/shapefile → asset upload (GCS-staged)
+│   ├── utils.py             # date-range validation/windows, clipping, joins, temporal reducers, diffs, min/max, resampling
+│   ├── vectors.py           # local vector files (gpkg/geojson/shp) → ee.Geometry / site Features + FC property helpers
+│   ├── zonal.py             # reduce/sample images & collections over regions; class areas; histograms
+│   ├── workflows.py         # end-to-end site timeseries (annual/monthly/seasonal) + static baseline assessment
 │   ├── sensors/
 │   │   ├── indices.py       # all spectral-index functions + calc_indices()/calc_veg_indices() multi-index builders
 │   │   ├── masking.py       # shared cloud/water mask helpers used by the optical sensors
 │   │   ├── texture.py       # sensor-agnostic GLCM + first-order texture (fixed-range quantize → glcmTexture; calc_texture entry point)
 │   │   ├── bii/             # Biodiversity Intactness Index preprocessing
+│   │   ├── canopy_height/   # Meta/WRI 1 m global canopy height (static mosaic; not a dated epoch)
 │   │   ├── chirps/          # precipitation preprocessing (+ monthly/annual rainfall table export)
 │   │   ├── dem/             # Copernicus DEM / terrain preprocessing
 │   │   ├── dswx/            # OPERA DSWx surface water (HLS + S1) masking + preprocessing
@@ -119,6 +124,7 @@ gee_utils/
 │   │   ├── esa/             # WorldCover preprocessing
 │   │   ├── hansen/          # Global Forest Change preprocessing
 │   │   ├── hls/             # masking + preprocessing
+│   │   ├── isda/            # iSDA Africa topsoil (0-20 cm) total soil carbon (static image)
 │   │   ├── landsat/         # masking + preprocessing
 │   │   ├── modis/           # masking (QA/fill masks) + preprocessing (LAI/Fpar, VI, burned area, NPP, VCF)
 │   │   ├── satellite_embedding/  # Google Satellite Embedding V1 (AlphaEarth) preprocessing + cosine-similarity change
@@ -132,7 +138,7 @@ gee_utils/
 │   │   ├── collection.py    # medoid composite + multi-sensor (Roy-harmonized) annual builder
 │   │   ├── segmentation.py  # run-param defaults + run_landtrendr / run_landtrendr_from_aoi
 │   │   └── outputs.py       # get_change_map / get_fitted_stack / get_segment_data (array-image parsers)
-│   └── visualization/       # plots.py, summaries.py, tables.py (matplotlib/seaborn/pandas)
+│   └── visualization/       # plots.py, tables.py (matplotlib/seaborn/pandas)
 │                            # + vis_params.py (ready-made EE/geemap visParams presets)
 └── tests/                   # one test_*.py per source module; conftest.py holds shared
                              # fixtures + the ee_session fixture (see "Testing")
