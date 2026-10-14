@@ -701,6 +701,58 @@ BASELINE_CONTINUOUS_LAYERS = [
 # downsampled from its native 1m, so every baseline layer shares one output grid.
 DEFAULT_BASELINE_EXPORT_SCALE = {name: 30 for name in BASELINE_LAYER_NAMES}
 
+#################### IMAGE TEXTURE (sensors/texture.py) ##########################
+# Metric suffixes ee.Image.glcmTexture emits (output band = <band>_<metric>).
+GLCM_METRICS = (
+    "asm",
+    "contrast",
+    "corr",
+    "var",
+    "idm",
+    "savg",
+    "svar",
+    "sent",
+    "ent",
+    "dvar",
+    "dent",
+    "imcorr1",
+    "imcorr2",
+    "diss",
+    "inertia",
+    "shade",
+    "prom",
+)
+# Emitted by glcmTexture but always 0 ("not computed" per the API doc; confirmed 2026-10-14).
+GLCM_UNCOMPUTED_METRICS = ("maxcorr",)
+# Same quantity (bit-identical in GEE); never request both.
+GLCM_EQUIVALENT_METRICS = (("contrast", "inertia"),)
+DEFAULT_GLCM_METRICS = ("idm", "ent")  # homogeneity + entropy (Silveira et al. 2026)
+# ent1 = first-order (histogram) entropy, distinct from the GLCM "ent".
+FIRST_ORDER_STATS = ("mean", "sd", "ent1")
+
+# Hall-Beyer 2017 / Silveira et al. 2026: bit depth barely matters (r 0.90-1.00); keep >= ~24
+# levels; beyond 128 only compute cost rises. 256 = 8-bit -> toUint8.
+TEXTURE_QUANT_LEVELS = 256
+TEXTURE_MIN_QUANT_LEVELS = 24
+TEXTURE_MAX_QUANT_LEVELS = 256
+
+# FIXED stretch ranges shared by every site/date (quantization must not be per-image).
+# Callers may override per band via value_ranges.
+TEXTURE_VALUE_RANGES: dict[str, tuple[float, float]] = {
+    "NDVI": (0.0, 1.0),
+    "EVI": (0.0, 1.0),
+    "SAVI": (0.0, 1.0),
+    "MSAVI2": (0.0, 1.0),
+    "kNDVI": (0.0, 1.0),
+    "VV": (
+        -25.0,
+        0.0,
+    ),  # dB; provisional -- not yet checked against East African histograms
+    "VH": (-30.0, -5.0),  # dB; provisional
+}
+
+TEXTURE_MAX_RADIUS = 50  # 101x101 px, the largest window Silveira et al. tested
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 

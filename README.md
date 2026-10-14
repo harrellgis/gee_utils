@@ -155,6 +155,37 @@ builder (`get_l8_sr_collection`, `get_hls_merged_collection`,
 `get_chirps_collection`, `get_modis_lai_fpar_col`, …) that validates the date
 range, applies scale factors, and appends indices via the sensor's band map.
 
+### Texture
+
+`eetools.sensors.texture` computes GLCM (Haralick) and first-order texture on any band,
+typically a vegetation index on a same-season composite. Bands are quantized against a
+fixed value range (`TEXTURE_VALUE_RANGES`, overridable per band), because `glcmTexture`
+only accepts integers. Output bands are named `<band>_<metric>_r<radius>`.
+
+```python
+from eetools.sensors.texture import calc_texture
+
+s2 = get_s2_sr_collection(aoi.buffer(1000), start, end, indices=["EVI"])  # buffer >= window half-width
+evi = s2.select("EVI").median()
+
+# Habitat-heterogeneity covariates: homogeneity + entropy at two ground windows
+tex = calc_texture(evi, ["EVI"], window_m=[50, 250], scale_m=10, mask=habitat_mask)
+# -> EVI_idm_r2, EVI_ent_r2, EVI_idm_r12, EVI_ent_r12
+
+# Extra classification features
+feats = stack.addBands(
+    calc_texture(evi, ["EVI"], window_m=50, scale_m=10,
+                 glcm_metrics=("idm", "contrast"), first_order=("sd",))
+)
+tex = tex.clip(aoi)  # clip AFTER texturing
+```
+
+The window is `radius` pixels of the *requested* scale, so export or sample at
+`scale_m`. To view or sample at another scale, pass `pin_scale=True, crs=...`. This
+reprojects the output so the window keeps its ground size, but costs about 55% more
+compute. Texture within `radius` px of a masked area is computed from fewer pixels, so
+treat it with care.
+
 ## Project layout
 
 ```
@@ -163,7 +194,7 @@ src/eetools/
 ├── constants.py      # collection IDs, band maps, scale factors, mask thresholds
 ├── io.py             # exports to Drive / EE assets, task status helpers
 ├── utils.py          # geometry/GPKG helpers, date validation, reducers, resampling
-├── sensors/          # per-sensor masking.py + preprocessing.py, plus indices.py
+├── sensors/          # per-sensor masking.py + preprocessing.py, plus indices.py and texture.py
 ├── landtrendr/       # LandTrendr temporal-segmentation method (collection/segmentation/outputs)
 └── visualization/    # plots.py, summaries.py, tables.py, vis_params.py
 ```

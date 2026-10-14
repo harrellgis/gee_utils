@@ -110,6 +110,7 @@ gee_utils/
 │   ├── sensors/
 │   │   ├── indices.py       # all spectral-index functions + calc_indices()/calc_veg_indices() multi-index builders
 │   │   ├── masking.py       # shared cloud/water mask helpers used by the optical sensors
+│   │   ├── texture.py       # sensor-agnostic GLCM + first-order texture (fixed-range quantize → glcmTexture; calc_texture entry point)
 │   │   ├── bii/             # Biodiversity Intactness Index preprocessing
 │   │   ├── chirps/          # precipitation preprocessing (+ monthly/annual rainfall table export)
 │   │   ├── dem/             # Copernicus DEM / terrain preprocessing
@@ -147,6 +148,7 @@ Non-optical sensors deviate where appropriate: `sentinel1` (SAR backscatter) and
 
 - **All collection IDs, band names, band maps, scale factors, offsets, and mask thresholds live in `constants.py`** — never hardcode them in sensor modules. Each sensor has a `*_BAND_MAP` dict (`{"nir": ..., "red": ...}`) that drives the generic index functions, so indices stay sensor-agnostic.
 - Index functions in `indices.py` are generic (take explicit band-name args); sensor preprocessing wires them up via the band map. Add new indices there, then wire into `calc_indices`/`calc_veg_indices`.
+- Texture (`sensors/texture.py`) is applied by the caller to a composite, not wired into any `get_<sensor>_collection`. `glcmTexture` needs integer input, so bands are quantized against FIXED ranges (`TEXTURE_VALUE_RANGES`), never per-image. Output bands are always `<band>_<metric>_r<radius>`. The input is never reprojected: the window is `radius` px of the *requested* scale, so export at `scale_m` or pass `pin_scale=True`, which reprojects the output.
 - Public functions are fully type-hinted and carry Google-style docstrings with `Args:`/`Returns:` (including what is raised and what the EE return type is). Match this for new functions.
 - Always call `eetools.initialize(project=...)` first; functions that need the project ID read it via `get_project()` and accept a `project_id` override.
 - Export filenames are derived from per-image date/year properties; preserve `system:time_start` through `copyProperties` in any new map function.
