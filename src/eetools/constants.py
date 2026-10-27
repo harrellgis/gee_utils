@@ -495,6 +495,23 @@ S1_EDGE_THRESHOLD_DB = -30.0
 # Focal-median speckle-filter neighbourhood radius (median is unbiased in dB).
 S1_SPECKLE_RADIUS_M = 50
 S1_SCALE = 10
+# Timescan: per-pixel temporal statistics over a (seasonal) VV+VH stack. Each input
+# band is reduced with every statistic, giving "<band>_<stat>" output bands.
+# VVVH_ratio / VVVH_ND_ratio are per-image VV/VH and (VV-VH)/(VV+VH) in linear power.
+S1_TIMESCAN_INPUT_BANDS = ["VV", "VH", "VVVH_ratio", "VVVH_ND_ratio"]
+S1_TIMESCAN_STATS = ["min", "max", "mean", "stdDev", "median"]
+# Full timescan band set and order (matches the GEE book A3.2 mangrove timescans):
+# the per-band statistics, then median VV-vs-VH comparisons (dB), then the
+# coefficients of variation (linear power) and their normalized difference.
+S1_TIMESCAN_BANDS = [
+    f"{band}_{stat}" for band in S1_TIMESCAN_INPUT_BANDS for stat in S1_TIMESCAN_STATS
+] + [
+    "VV_median_VH_median_nat",  # VV_median - VH_median (dB)
+    "VV_median_VH_median_db",  # VV_median / VH_median (dB)
+    "VV_CV",  # stdDev / mean of VV in linear power
+    "VH_CV",  # stdDev / mean of VH in linear power
+    "NDCV",  # (VV_CV - VH_CV) / (VV_CV + VH_CV)
+]
 
 #################### OPERA DSWx (Dynamic Surface Water Extent) ##########################
 # Pre-classified surface-water products (no spectral indexing). Shared
