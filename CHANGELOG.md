@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `sensors.sentinel1.timescan` module for multi-temporal Sentinel-1 summaries (the band set
+  used by the GEE book A3.2 mangrove timescans), with the band list in
+  `constants.S1_TIMESCAN_BANDS`:
+  - `build_s1_timescan(collection)` reduces a VV+VH dB collection to 25 bands: min / max /
+    mean / stdDev / median of VV, VH, `VVVH_ratio`, and `VVVH_ND_ratio` (per-image ratios in
+    linear power), `VV_median_VH_median_nat` / `_db` (median difference / quotient in dB),
+    `VV_CV` / `VH_CV` (stdDev / mean in linear power), and `NDCV`. An empty collection yields
+    the same bands, fully masked.
+  - `build_seasonal_s1_timescan(collection, year, season_months, season_name)` filters to one
+    season (e.g. `SEASON_WET` / `SEASON_DRY`), suffixes every band with `_<season_name>`, and
+    sets `year` / `season` / `season_months` / `image_count` properties.
+  - `db_to_linear` and `add_polarization_ratios` helpers.
 - Four MODIS products in `sensors.modis`, each with a `get_*_collection(aoi, start_date, end_date, ...)`
   builder that validates the date range against the collection:
   - **MOD13Q1** (`get_modis_vi_collection`): 250 m 16-day NDVI/EVI plus red/NIR/blue/SWIR2
