@@ -53,7 +53,7 @@ def run_site_timeseries(
     .. code-block:: python
 
         from functools import partial
-        from eetools.sensors.sentinel import get_s2_sr_collection
+        from eetools.sensors.sentinel.preprocessing import get_s2_sr_collection
         from eetools.workflows import run_site_timeseries
 
         builder = partial(
