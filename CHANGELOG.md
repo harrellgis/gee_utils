@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `thresholding` module for adaptive (per-scene) thresholds with Otsu's method, as an
+  alternative to fixed index thresholds (e.g. surface water from NDWI/MNDWI or Sentinel-1 dB,
+  burn scars from dNBR, change maps):
+  - `otsu_threshold(histogram)` splits an `ee.Reducer.histogram` output at the maximum
+    between-class sum of squares; `otsu_threshold_image(image, region, scale)` applies it to all
+    valid pixels.
+  - `edge_otsu_threshold(image, region, scale, ...)` (Donchyts et al. 2016) builds the histogram
+    only from pixels near Canny edges, so both classes are balanced; supports `min_value` and a
+    `fallback` used when no edges are found.
+  - `canny_edges` / `canny_edge_buffer` expose the edge layer and the edge-sampled image for
+    mapping and histogram plots.
+  - Defaults `OTSU_HISTOGRAM_BUCKETS`, `CANNY_THRESHOLD`, `CANNY_SIGMA` in `constants.py`.
 - `sensors.sentinel1.timescan` module for multi-temporal Sentinel-1 summaries (the band set
   used by the GEE book A3.2 mangrove timescans), with the band list in
   `constants.S1_TIMESCAN_BANDS`:
