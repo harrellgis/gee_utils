@@ -770,6 +770,14 @@ TEXTURE_VALUE_RANGES: dict[str, tuple[float, float]] = {
 
 TEXTURE_MAX_RADIUS = 50  # 101x101 px, the largest window Silveira et al. tested
 
+#################### OTSU THRESHOLDING ##########################
+# Adaptive (per-scene) thresholds for bimodal bands such as NDWI/MNDWI or SAR dB
+# (see thresholding.py). Edge-based Otsu samples only pixels near Canny edges so
+# both classes are roughly balanced in the histogram (Donchyts et al. 2016).
+OTSU_HISTOGRAM_BUCKETS = 100
+CANNY_THRESHOLD = 0.9  # gradient magnitude threshold for CannyEdgeDetector
+CANNY_SIGMA = 1.0  # Gaussian smoothing sigma (pixels) before edge detection
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 

@@ -110,6 +110,7 @@ gee_utils/
 │   ├── utils.py             # date-range validation/windows, clipping, joins, temporal reducers, diffs, min/max, resampling
 │   ├── vectors.py           # local vector files (gpkg/geojson/shp) → ee.Geometry / site Features + FC property helpers
 │   ├── zonal.py             # reduce/sample images & collections over regions; class areas; histograms
+│   ├── thresholding.py      # adaptive Otsu thresholds: otsu_threshold / otsu_threshold_image / edge-based (Canny) edge_otsu_threshold
 │   ├── workflows.py         # end-to-end site timeseries (annual/monthly/seasonal) + static baseline assessment
 │   ├── sensors/
 │   │   ├── indices.py       # all spectral-index functions + calc_indices()/calc_veg_indices() multi-index builders
@@ -154,6 +155,7 @@ Non-optical sensors deviate where appropriate: `sentinel1` (SAR backscatter; `ti
 ### Key Conventions
 
 - **All collection IDs, band names, band maps, scale factors, offsets, and mask thresholds live in `constants.py`** — never hardcode them in sensor modules. Each sensor has a `*_BAND_MAP` dict (`{"nir": ..., "red": ...}`) that drives the generic index functions, so indices stay sensor-agnostic.
+- The built-in water masks (`build_non_water_mask`) use fixed spectral thresholds; for a per-scene split of a bimodal band (NDWI/MNDWI, SAR dB, dNBR, index differences) use `thresholding.edge_otsu_threshold`. Its Canny defaults (`CANNY_THRESHOLD`, `CANNY_SIGMA`) are in the band's units and tuned for normalized-difference indices; set `fallback` per index (returned when no edges are found).
 - Index functions in `indices.py` are generic (take explicit band-name args); sensor preprocessing wires them up via the band map. Add new indices there, then wire into `calc_indices`/`calc_veg_indices`.
 - Texture (`sensors/texture.py`) is applied by the caller to a composite, not wired into any `get_<sensor>_collection`. `glcmTexture` needs integer input, so bands are quantized against FIXED ranges (`TEXTURE_VALUE_RANGES`), never per-image. Output bands are always `<band>_<metric>_r<radius>`. The input is never reprojected: the window is `radius` px of the *requested* scale, so export at `scale_m` or pass `pin_scale=True`, which reprojects the output.
 - Public functions are fully type-hinted and carry Google-style docstrings with `Args:`/`Returns:` (including what is raised and what the EE return type is). Match this for new functions.
