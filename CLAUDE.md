@@ -8,17 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 At the start of every session, load context in this order:
 
-1. **Vault overview** — `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\context\agent-onboarding.md`
-2. **Coding conventions** — `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\context\conventions.md`
+1. **Vault overview** — `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\context\agent-onboarding.md`
+2. **Coding conventions** — `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\context\conventions.md`
 3. **Tool references** — read the wiki pages for the sensors this repo wraps:
    - `wiki/tools/google-earth-engine.md` (core API patterns and gotchas)
    - `wiki/tools/sentinel-2-sr.md`, `wiki/tools/sentinel-2-cloud-probability.md`
    - `wiki/tools/landsat-c2-sr.md`
    - `wiki/tools/hls-hlsl30.md`, `wiki/tools/hls-hlss30.md`
    - `wiki/tools/chirps.md`, `wiki/tools/dynamic-world.md`
-   - (all under `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\`)
-4. **Decisions registry** — `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\context\decisions-registry.md`
-5. **Tag cluster** — `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\context\tags.md` (read the **Optical EO & Cloud Masking** section only)
+   - (all under `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\`)
+4. **Decisions registry** — `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\context\decisions-registry.md`
+5. **Tag cluster** — `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\context\tags.md` (read the **Optical EO & Cloud Masking** section only)
 
 ---
 
@@ -188,4 +188,4 @@ affected_files: src/eetools/...
 ---
 ```
 
-Path: `C:\Users\harre\Obsidian_Vaults\01_Work_Projects_Vault\raw\notes\`
+Path: `C:\Users\harre\Repos\Obsidian\01_Work_Projects_Vault\raw\notes\`
