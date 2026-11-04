@@ -67,6 +67,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ≤ 1, tunable) snow-free retrievals while leaving the gap-filled band untouched.
 - New `sensors.modis.masking` module holding the per-product QA/fill masks. Collection IDs,
   band lists, scale factors, and valid-range thresholds live in `constants.py`.
+- `zonal.check_region_pixel_coverage(regions, scale, ...)` issues a `UserWarning` when a
+  region covers fewer than `min_pixels_per_region` (default 4,
+  `constants.DEFAULT_MIN_PIXELS_PER_REGION`) pixels at the chosen scale, naming the smallest
+  region and suggesting a scale. It uses one `getInfo()` round trip. Its pure-Python core is
+  `zonal.small_region_warning_message`.
+
+### Changed
+- **Breaking:** `scale` is now a required keyword-only argument (it was `5566`, the CHIRPS
+  native resolution) in `workflows.run_site_timeseries`,
+  `workflows.run_seasonal_site_timeseries`, `zonal.reduce_image_over_region`, and
+  `zonal.collection_to_region_timeseries`. At 5566 m a typical focal site fits inside one pixel,
+  so per-site stats came mostly from outside the site and nearby sites got near-identical
+  series. Callers that relied on the default must now pass `scale=` explicitly. `image_properties`
+  and `tile_scale` in the two workflows are now keyword-only as well. CHIRPS
+  `export_total_rainfall_table` keeps its 5566 default.
+- `run_site_timeseries`, `run_seasonal_site_timeseries`, and `collection_to_region_timeseries`
+  run the small-region check before reducing (new `min_pixels_per_region` argument; `None`
+  skips it). `reduce_image_over_region` does not, because it is often called inside `.map()`.
 
 ## [0.3.0] - 2026-10-01
 

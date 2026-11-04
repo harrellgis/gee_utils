@@ -1,6 +1,157 @@
+import math
+import warnings
 from typing import cast
 
 import ee
+
+from eetools.constants import (
+    DEFAULT_MAX_PIXELS,
+    DEFAULT_MIN_PIXELS_PER_REGION,
+    REGION_AREA_MAX_ERROR_M,
+)
+
+# --------------------------------------------------------------------------- #
+# Region size vs. scale check                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _validate_positive(name: str, value: float) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
+def small_region_warning_message(
+    areas_m2: list[float],
+    names: list[str],
+    scale: float,
+    min_pixels_per_region: float = DEFAULT_MIN_PIXELS_PER_REGION,
+) -> str | None:
+    """Build the small-region warning text from client-side region areas.
+
+    Pure-Python core of :func:`check_region_pixel_coverage` (no Earth Engine
+    calls), so it can be tested, and reused when areas are already known locally.
+
+    Args:
+        areas_m2: Region areas in square metres.
+        names: Region labels, aligned with ``areas_m2``.
+        scale: Pixel scale in metres that the reduction will use.
+        min_pixels_per_region: Minimum number of ``scale``-sized pixels each region
+            should cover (default 4).
+
+    Returns:
+        The warning message naming the smallest region and a suggested scale, or
+        None when every region covers at least ``min_pixels_per_region`` pixels
+        (or ``areas_m2`` is empty).
+
+    Raises:
+        ValueError: If ``scale`` or ``min_pixels_per_region`` is not positive, or
+            if ``areas_m2`` and ``names`` differ in length.
+    """
+    _validate_positive("scale", scale)
+    _validate_positive("min_pixels_per_region", min_pixels_per_region)
+    if len(areas_m2) != len(names):
+        raise ValueError("areas_m2 and names must have the same length")
+
+    pixel_area = float(scale) ** 2
+    small = [
+        (area, name)
+        for area, name in zip(areas_m2, names, strict=True)
+        if area < min_pixels_per_region * pixel_area
+    ]
+    if not small:
+        return None
+
+    min_area, min_name = min(small, key=lambda pair: pair[0])
+    suggested = max(1, math.floor(math.sqrt(min_area / min_pixels_per_region)))
+    return (
+        f"{len(small)} of {len(areas_m2)} region(s) cover fewer than "
+        f"{min_pixels_per_region:g} pixels at scale={scale:g} m. Smallest: "
+        f"{min_name!r} ({min_area / 1e4:.2f} ha, ~{min_area / pixel_area:.2g} "
+        f"pixels). Its statistics come mostly from outside the region, and nearby "
+        f"regions may get near-identical values. Use scale <= {suggested} m if the "
+        f"input's native resolution allows it (e.g. 10 m Sentinel-2, 30 m "
+        f"HLS/Landsat)."
+    )
+
+
+def check_region_pixel_coverage(
+    regions: ee.Geometry | ee.Feature | ee.FeatureCollection,
+    scale: float,
+    min_pixels_per_region: float = DEFAULT_MIN_PIXELS_PER_REGION,
+    name_field: str = "site_name",
+    stacklevel: int = 2,
+) -> str | None:
+    """Warn when a region covers fewer than a few pixels at the chosen scale.
+
+    At a scale coarser than the region, Earth Engine reads a coarse pyramid level,
+    so the region's statistics are a mean over a footprint that is mostly outside
+    it. The reduction still succeeds, so this check makes the problem visible.
+
+    Computes every region's geodesic area server-side and fetches the areas in one
+    ``getInfo()`` round trip. Call it from client-side code only, never inside a
+    ``.map()``.
+
+    Args:
+        regions: A single region (ee.Geometry or ee.Feature) or an
+            ee.FeatureCollection of regions.
+        scale: Pixel scale in metres that the reduction will use.
+        min_pixels_per_region: Minimum number of ``scale``-sized pixels each region
+            should cover (default 4).
+        name_field: Feature property used to name regions in the message (default
+            'site_name'); features without it are named by ``system:index``.
+        stacklevel: ``stacklevel`` passed to ``warnings.warn`` (default 2, the
+            caller of this function).
+
+    Returns:
+        The warning message if a ``UserWarning`` was issued, else None.
+
+    Raises:
+        ValueError: If ``scale`` or ``min_pixels_per_region`` is not positive.
+        ee.EEException: If the region areas cannot be computed.
+    """
+    _validate_positive("scale", scale)
+    _validate_positive("min_pixels_per_region", min_pixels_per_region)
+
+    if isinstance(regions, ee.FeatureCollection):
+
+        def _area_feature(feature: ee.Feature) -> ee.Feature:
+            feature = ee.Feature(feature)
+            name = ee.Algorithms.If(
+                feature.propertyNames().contains(name_field),
+                feature.get(name_field),
+                feature.get("system:index"),
+            )
+            return ee.Feature(
+                None,
+                {
+                    "area": feature.geometry().area(REGION_AREA_MAX_ERROR_M),
+                    "name": name,
+                },
+            )
+
+        area_fc = regions.map(_area_feature)
+        info = cast(
+            dict,
+            ee.Dictionary(
+                {
+                    "areas": area_fc.aggregate_array("area"),
+                    "names": area_fc.aggregate_array("name"),
+                }
+            ).getInfo(),
+        )
+        areas = [float(a) for a in info["areas"]]
+        names = [str(n) for n in info["names"]]
+    else:
+        geometry = regions.geometry() if isinstance(regions, ee.Feature) else regions
+        area = ee.Geometry(geometry).area(REGION_AREA_MAX_ERROR_M).getInfo()
+        areas = [float(cast(float, area))]
+        names = ["region"]
+
+    message = small_region_warning_message(areas, names, scale, min_pixels_per_region)
+    if message is not None:
+        warnings.warn(message, UserWarning, stacklevel=stacklevel)
+    return message
+
 
 # --------------------------------------------------------------------------- #
 # Zonal reduction — single region                                             #
@@ -12,18 +163,24 @@ def reduce_image_over_region(
     region: ee.Geometry,
     bands: list[str],
     reducer: ee.Reducer | None = None,
-    scale: int = 5566,
+    *,
+    scale: int,
     tile_scale: int = 4,
 ) -> ee.Feature:
     """Reduce a single image over a region geometry and return a Feature with band
     statistics and image properties.
+
+    Unlike :func:`collection_to_region_timeseries`, this function does not check
+    region size against ``scale`` (it is often called inside a ``.map()``, where
+    the check's ``getInfo()`` is not allowed). Call
+    :func:`check_region_pixel_coverage` yourself from client-side code if needed.
 
     Args:
         image: ee.Image to reduce; all scalar (non-system) properties are carried through to the output feature automatically.
         region: Region geometry as ee.Geometry.
         bands: List of band names to include in the reduction.
         reducer: ee.Reducer to apply; defaults to ee.Reducer.mean().
-        scale: Pixel scale in metres for the reduceRegion call (default 5566).
+        scale: Required keyword. Pixel scale in metres for the reduceRegion call. Use the input's native scale for site-scale work (10 m Sentinel-2, 30 m HLS/Landsat, 250-500 m MODIS), or one step coarser (e.g. 60 m for HLS) to save EECU; 100-250 m suits large-region summaries.
         tile_scale: EE tileScale parameter to avoid memory limits (default 4).
 
     Returns:
@@ -36,7 +193,7 @@ def reduce_image_over_region(
         reducer=reducer,
         geometry=region,
         scale=scale,
-        maxPixels=int(1e13),
+        maxPixels=int(DEFAULT_MAX_PIXELS),
         tileScale=tile_scale,
     )
 
@@ -50,8 +207,10 @@ def collection_to_region_timeseries(
     region: ee.Geometry,
     bands: list[str],
     reducer: ee.Reducer | None = None,
-    scale: int = 5566,
+    *,
+    scale: int,
     tile_scale: int = 4,
+    min_pixels_per_region: float | None = DEFAULT_MIN_PIXELS_PER_REGION,
 ) -> ee.FeatureCollection:
     """Reduce every image in a collection over a region and return a long-format
     FeatureCollection timeseries.
@@ -61,12 +220,19 @@ def collection_to_region_timeseries(
         region: Region geometry as ee.Geometry.
         bands: List of band names to include in each reduction.
         reducer: ee.Reducer to apply per image; defaults to ee.Reducer.mean().
-        scale: Pixel scale in metres for each reduceRegion call (default 5566).
+        scale: Required keyword. Pixel scale in metres for each reduceRegion call. Use the input's native scale for site-scale work (10 m Sentinel-2, 30 m HLS/Landsat, 250-500 m MODIS), or one step coarser (e.g. 60 m for HLS) to save EECU; 100-250 m suits large-region summaries.
         tile_scale: EE tileScale parameter to avoid memory limits (default 4).
+        min_pixels_per_region: Warn (``UserWarning``) if the region covers fewer than this many ``scale``-sized pixels (default 4). The check costs one ``getInfo()`` round trip; pass None to skip it.
 
     Returns:
         ee.FeatureCollection with one feature per image, each containing temporal metadata and per-band reduction results.
+
+    Raises:
+        ValueError: If ``scale`` or ``min_pixels_per_region`` is not positive.
     """
+    if min_pixels_per_region is not None:
+        check_region_pixel_coverage(region, scale, min_pixels_per_region, stacklevel=3)
+
     collection = ee.ImageCollection(collection)
     reducer = reducer or ee.Reducer.mean()
 

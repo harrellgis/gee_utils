@@ -226,3 +226,94 @@ def test_summarize_class_areas_chains_onto_prior_reduceregions(ee_session, small
     # Prior properties on the input collection survive the chained reduceRegions.
     assert props["existing_stat"] == pytest.approx(1.5)
     assert props["shrubland_area_m2"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# scale is required + small-region warning                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_reduce_image_over_region_requires_scale_keyword():
+    from eetools.zonal import reduce_image_over_region
+
+    with pytest.raises(TypeError, match="scale"):
+        reduce_image_over_region(None, None, ["b"])
+
+
+def test_collection_to_region_timeseries_requires_scale_keyword():
+    from eetools.zonal import collection_to_region_timeseries
+
+    with pytest.raises(TypeError, match="scale"):
+        collection_to_region_timeseries(None, None, ["b"])
+
+
+def test_small_region_message_flags_site_inside_one_chirps_pixel():
+    from eetools.zonal import small_region_warning_message
+
+    # 5.8 ha (TGBS_Ecosia-sized) and 97.6 ha sites at the old 5566 m default.
+    msg = small_region_warning_message(
+        [58_000.0, 976_000.0], ["ecosia", "itf"], scale=5566
+    )
+    assert msg is not None
+    assert "2 of 2 region(s)" in msg
+    assert "'ecosia'" in msg  # names the smallest region
+    assert "5.80 ha" in msg
+    # sqrt(58000 / 4) = 120.4 -> suggest <= 120 m
+    assert "scale <= 120 m" in msg
+
+
+def test_small_region_message_none_when_regions_cover_enough_pixels():
+    from eetools.zonal import small_region_warning_message
+
+    # 5.8 ha at 30 m is ~64 pixels.
+    assert small_region_warning_message([58_000.0], ["ecosia"], scale=30) is None
+    assert small_region_warning_message([], [], scale=30) is None
+
+
+def test_small_region_message_threshold_is_configurable():
+    from eetools.zonal import small_region_warning_message
+
+    # 10 000 m^2 at 30 m = ~11 pixels: fine at 4, flagged at 20.
+    assert small_region_warning_message([10_000.0], ["a"], 30, 4) is None
+    assert small_region_warning_message([10_000.0], ["a"], 30, 20) is not None
+
+
+@pytest.mark.parametrize(("scale", "min_pixels"), [(0, 4), (-30, 4), (30, 0), (30, -1)])
+def test_small_region_message_rejects_non_positive(scale, min_pixels):
+    from eetools.zonal import small_region_warning_message
+
+    with pytest.raises(ValueError, match="must be positive"):
+        small_region_warning_message([1.0], ["a"], scale, min_pixels)
+
+
+@pytest.mark.ee
+def test_check_region_pixel_coverage_warns_for_feature_collection(
+    ee_session, small_aoi
+):
+    from eetools.zonal import check_region_pixel_coverage
+
+    # ~0.01 deg square (~1.2 km^2) inside small_aoi: ~0.04 pixels at 5566 m.
+    tiny = ee_session.Geometry.Rectangle([39.20, -4.30, 39.21, -4.29])
+    regions = ee_session.FeatureCollection(
+        [
+            ee_session.Feature(small_aoi, {"site_name": "big"}),
+            ee_session.Feature(tiny, {"site_name": "tiny"}),
+        ]
+    )
+    with pytest.warns(UserWarning, match="'tiny'"):
+        check_region_pixel_coverage(regions, scale=5566)
+
+    assert check_region_pixel_coverage(regions, scale=30) is None
+
+
+@pytest.mark.ee
+def test_collection_to_region_timeseries_warns_on_coarse_scale(
+    ee_session, timed_collection, small_aoi
+):
+    from eetools.zonal import collection_to_region_timeseries
+
+    # small_aoi is ~5.5 x 5.5 km: about one pixel at 5566 m.
+    with pytest.warns(UserWarning, match="fewer than 4 pixels"):
+        collection_to_region_timeseries(
+            timed_collection, region=small_aoi, bands=["b"], scale=5566
+        )

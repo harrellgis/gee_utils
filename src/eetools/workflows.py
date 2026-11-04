@@ -11,6 +11,7 @@ from eetools.constants import (
     BASELINE_LAYER_NAMES,
     DEFAULT_BASELINE_EXPORT_SCALE,
     DEFAULT_CRS,
+    DEFAULT_MIN_PIXELS_PER_REGION,
     ESA_CLASS_MAP,
 )
 from eetools.io import export_image_list_to_drive, export_table_to_drive
@@ -21,7 +22,11 @@ from eetools.sensors.esa.preprocessing import get_land_cover
 from eetools.sensors.hansen.preprocessing import get_forest_2000, get_forest_loss_image
 from eetools.sensors.isda.preprocessing import get_soil_carbon
 from eetools.vectors import get_sites_geometry
-from eetools.zonal import image_collection_to_region_stats_fc, summarize_class_areas
+from eetools.zonal import (
+    check_region_pixel_coverage,
+    image_collection_to_region_stats_fc,
+    summarize_class_areas,
+)
 
 
 def run_site_timeseries(
@@ -37,9 +42,11 @@ def run_site_timeseries(
     temporal_scale: str = "annual",
     composite_stat: str = "median",
     reducers: ee.Reducer | None = None,
-    scale: int = 5566,
+    *,
+    scale: int,
     image_properties: list[str] | None = None,
     tile_scale: int = 4,
+    min_pixels_per_region: float | None = DEFAULT_MIN_PIXELS_PER_REGION,
 ) -> ee.FeatureCollection:
     """Run the full site spectral timeseries workflow for annual or monthly compositing.
 
@@ -69,6 +76,7 @@ def run_site_timeseries(
             end_date="2023-01-01",
             export_folder="my_drive_folder",
             file_prefix="s2_annual_ndvi",
+            scale=10,  # Sentinel-2 native; required, no default
         )
 
     Args:
@@ -97,10 +105,20 @@ def run_site_timeseries(
         reducers: ee.Reducer applied per region per composite image; defaults to
             mean combined with stdDev and minMax (as defined in
             ``image_collection_to_region_stats_fc``).
-        scale: Pixel scale in metres for the ``reduceRegions`` call (default 5566).
+        scale: Required keyword. Pixel scale in metres for the ``reduceRegions``
+            call; there is no default because it is an accuracy/EECU trade-off that
+            depends on site size. Use the sensor's native scale for site-scale work
+            (10 m Sentinel-2, 30 m HLS/Landsat, 250-500 m MODIS), or one step
+            coarser (e.g. 60 m for HLS, ~4x fewer pixels) to save EECU while
+            keeping dozens of pixels per site; 100-250 m suits large-region
+            summaries.
         image_properties: List of image property names to copy onto each output
             feature; when None (default) all scalar image properties are copied.
         tile_scale: EE tileScale parameter to avoid memory limits (default 4).
+        min_pixels_per_region: Warn (``UserWarning``) if any site covers fewer
+            than this many ``scale``-sized pixels (default 4); the message names
+            the smallest site and suggests a scale. The check costs one
+            ``getInfo()`` round trip; pass None to skip it.
 
     Returns:
         ee.FeatureCollection of per-region statistics, one feature per site per
@@ -110,13 +128,18 @@ def run_site_timeseries(
 
     Raises:
         ValueError: If ``composite_stat`` is not 'mean', 'median', or 'sum', or if
-            ``temporal_scale`` is not 'annual' or 'monthly'.
+            ``temporal_scale`` is not 'annual' or 'monthly', or if ``scale`` or
+            ``min_pixels_per_region`` is not positive.
     """
     aoi = get_sites_geometry(sites_fc)
     collection = collection_builder(aoi, start_date, end_date)
     composites = build_period_composites(
         collection, bands, start_date, end_date, temporal_scale, composite_stat
     )
+    if min_pixels_per_region is not None:
+        check_region_pixel_coverage(
+            sites_fc, scale, min_pixels_per_region, stacklevel=3
+        )
     stats_fc = image_collection_to_region_stats_fc(
         composites,
         sites_fc,
@@ -397,9 +420,11 @@ def run_seasonal_site_timeseries(
     file_prefix: str,
     composite_stat: str = "median",
     reducers: ee.Reducer | None = None,
-    scale: int = 5566,
+    *,
+    scale: int,
     image_properties: list[str] | None = None,
     tile_scale: int = 4,
+    min_pixels_per_region: float | None = DEFAULT_MIN_PIXELS_PER_REGION,
 ) -> ee.FeatureCollection:
     """Run the full site spectral timeseries workflow for seasonal compositing.
 
@@ -433,10 +458,13 @@ def run_seasonal_site_timeseries(
         composite_stat: Statistic to combine images within each season window;
             one of 'mean', 'median', or 'sum' (default 'median').
         reducers: ee.Reducer applied per region; defaults to mean + stdDev + minMax.
-        scale: Pixel scale in metres (default 5566).
+        scale: Required keyword. Pixel scale in metres for the ``reduceRegions``
+            call; see :func:`run_site_timeseries` for guidance.
         image_properties: Image properties to copy onto each output feature; None
             copies all scalar properties.
         tile_scale: EE tileScale (default 4).
+        min_pixels_per_region: Warn if any site covers fewer than this many
+            ``scale``-sized pixels (default 4); None skips the check.
 
     Returns:
         ee.FeatureCollection of per-region per-year seasonal statistics, each
@@ -446,7 +474,8 @@ def run_seasonal_site_timeseries(
 
     Raises:
         ValueError: If ``composite_stat`` is not 'mean', 'median', or 'sum', or if
-            ``season_months`` does not satisfy ``1 ≤ start ≤ end ≤ 12``.
+            ``season_months`` does not satisfy ``1 ≤ start ≤ end ≤ 12``, or if
+            ``scale`` or ``min_pixels_per_region`` is not positive.
     """
     aoi = get_sites_geometry(sites_fc)
     collection = collection_builder(aoi, start_date, end_date)
@@ -459,6 +488,10 @@ def run_seasonal_site_timeseries(
         season_name,
         composite_stat,
     )
+    if min_pixels_per_region is not None:
+        check_region_pixel_coverage(
+            sites_fc, scale, min_pixels_per_region, stacklevel=3
+        )
     stats_fc = image_collection_to_region_stats_fc(
         composites,
         sites_fc,

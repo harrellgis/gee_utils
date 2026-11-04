@@ -37,6 +37,7 @@ def test_run_site_timeseries_wires_collaborators_and_returns_stats():
             workflows, "image_collection_to_region_stats_fc", return_value=mock_stats
         ) as reduce_fc,
         patch.object(workflows, "export_table_to_drive") as export_table,
+        patch.object(workflows, "check_region_pixel_coverage") as check_px,
     ):
         mock_builder.return_value = mock_collection
 
@@ -48,6 +49,7 @@ def test_run_site_timeseries_wires_collaborators_and_returns_stats():
             end_date="2023-01-01",
             export_folder="my_folder",
             file_prefix="s2_ndvi",
+            scale=30,
             temporal_scale="annual",
             composite_stat="median",
         )
@@ -62,8 +64,10 @@ def test_run_site_timeseries_wires_collaborators_and_returns_stats():
     )
     # zonal reduction called with composites and original sites_fc
     reduce_fc.assert_called_once_with(
-        mock_composites, mock_sites, ["NDVI", "EVI"], 5566, None, None, 4
+        mock_composites, mock_sites, ["NDVI", "EVI"], 30, None, None, 4
     )
+    # region size checked against the chosen scale before reducing
+    check_px.assert_called_once_with(mock_sites, 30, 4, stacklevel=3)
     # export started with correct folder and prefix
     export_table.assert_called_once_with(
         collection=mock_stats,
@@ -87,6 +91,7 @@ def test_run_site_timeseries_passes_through_optional_kwargs():
             workflows, "image_collection_to_region_stats_fc", return_value="stats"
         ) as reduce_fc,
         patch.object(workflows, "export_table_to_drive"),
+        patch.object(workflows, "check_region_pixel_coverage") as check_px,
     ):
         workflows.run_site_timeseries(
             sites_fc=mock_sites,
@@ -101,11 +106,62 @@ def test_run_site_timeseries_passes_through_optional_kwargs():
             scale=10,
             image_properties=["year", "date"],
             tile_scale=2,
+            min_pixels_per_region=9,
         )
 
     reduce_fc.assert_called_once_with(
         "composites", mock_sites, ["NDVI"], 10, mock_reducer, ["year", "date"], 2
     )
+    check_px.assert_called_once_with(mock_sites, 10, 9, stacklevel=3)
+
+
+def _run_site_timeseries_minimal(**kwargs):
+    return workflows.run_site_timeseries(
+        sites_fc=MagicMock(name="sites_fc"),
+        collection_builder=MagicMock(return_value="col"),
+        bands=["NDVI"],
+        start_date="2021-01-01",
+        end_date="2022-01-01",
+        export_folder="f",
+        file_prefix="p",
+        **kwargs,
+    )
+
+
+def test_run_site_timeseries_requires_scale():
+    """scale has no default: callers must choose the accuracy/EECU trade-off."""
+    with pytest.raises(TypeError, match="scale"):
+        _run_site_timeseries_minimal()
+
+
+def test_run_seasonal_site_timeseries_requires_scale():
+    with pytest.raises(TypeError, match="scale"):
+        workflows.run_seasonal_site_timeseries(
+            sites_fc=MagicMock(),
+            collection_builder=MagicMock(),
+            bands=["NDVI"],
+            start_date="2018-01-01",
+            end_date="2023-01-01",
+            start_year=2018,
+            end_year=2022,
+            season_months=(3, 5),
+            season_name="wet",
+            export_folder="f",
+            file_prefix="p",
+        )
+
+
+def test_run_site_timeseries_skips_pixel_check_when_disabled():
+    with (
+        patch.object(workflows, "get_sites_geometry", return_value="aoi"),
+        patch.object(workflows, "build_period_composites", return_value="comp"),
+        patch.object(workflows, "image_collection_to_region_stats_fc"),
+        patch.object(workflows, "export_table_to_drive"),
+        patch.object(workflows, "check_region_pixel_coverage") as check_px,
+    ):
+        _run_site_timeseries_minimal(scale=30, min_pixels_per_region=None)
+
+    check_px.assert_not_called()
 
 
 def test_run_site_timeseries_rejects_bad_composite_stat():
@@ -123,6 +179,7 @@ def test_run_site_timeseries_rejects_bad_composite_stat():
                 end_date="2023-01-01",
                 export_folder="f",
                 file_prefix="p",
+                scale=30,
                 composite_stat="max",
             )
 
@@ -151,6 +208,7 @@ def test_run_seasonal_site_timeseries_wires_collaborators_and_returns_stats():
             workflows, "image_collection_to_region_stats_fc", return_value=mock_stats
         ) as reduce_fc,
         patch.object(workflows, "export_table_to_drive") as export_table,
+        patch.object(workflows, "check_region_pixel_coverage") as check_px,
     ):
         mock_builder.return_value = mock_collection
 
@@ -166,6 +224,7 @@ def test_run_seasonal_site_timeseries_wires_collaborators_and_returns_stats():
             season_name="wet",
             export_folder="out_folder",
             file_prefix="wet_season",
+            scale=30,
             composite_stat="median",
         )
 
@@ -175,8 +234,9 @@ def test_run_seasonal_site_timeseries_wires_collaborators_and_returns_stats():
         mock_collection, ["NDVI", "NBR"], 2018, 2022, (3, 5), "wet", "median"
     )
     reduce_fc.assert_called_once_with(
-        mock_composites, mock_sites, ["NDVI", "NBR"], 5566, None, None, 4
+        mock_composites, mock_sites, ["NDVI", "NBR"], 30, None, None, 4
     )
+    check_px.assert_called_once_with(mock_sites, 30, 4, stacklevel=3)
     export_table.assert_called_once_with(
         collection=mock_stats,
         description="wet_season",
@@ -204,6 +264,7 @@ def test_run_seasonal_site_timeseries_rejects_bad_composite_stat():
                 season_name="wet",
                 export_folder="f",
                 file_prefix="p",
+                scale=30,
                 composite_stat="max",
             )
 
@@ -473,4 +534,5 @@ def test_run_seasonal_site_timeseries_rejects_bad_season_months():
                 season_name="bad",
                 export_folder="f",
                 file_prefix="p",
+                scale=30,
             )

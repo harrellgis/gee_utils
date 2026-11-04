@@ -50,6 +50,8 @@ def test_export_total_rainfall_table_wires_workflow_and_exports():
     _, reduce_kwargs = reduce_ts.call_args
     assert reduce_kwargs["region"] == "AOI"
     assert reduce_kwargs["scale"] == 5566
+    # CHIRPS is already at native scale, so the small-region check is skipped.
+    assert reduce_kwargs["min_pixels_per_region"] is None
 
     # The timeseries is exported as a CSV with the auto-derived prefix.
     _, export_kwargs = export_table.call_args

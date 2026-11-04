@@ -130,6 +130,8 @@ def export_total_rainfall_table(
         bands=[CHIRPS_PRECIP_BAND],
         reducer=reducer,
         scale=scale,
+        # 5566 m is CHIRPS' native resolution: no finer scale exists to suggest.
+        min_pixels_per_region=None,
     )
 
     export_table_to_drive(

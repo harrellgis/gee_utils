@@ -778,6 +778,14 @@ OTSU_HISTOGRAM_BUCKETS = 100
 CANNY_THRESHOLD = 0.9  # gradient magnitude threshold for CannyEdgeDetector
 CANNY_SIGMA = 1.0  # Gaussian smoothing sigma (pixels) before edge detection
 
+#################### ZONAL STATISTICS ##########################
+# Site-level zonal functions take `scale` with no default: the caller chooses the
+# accuracy/EECU trade-off. A region covering fewer than this many pixels at the
+# chosen scale triggers a warning, because its statistics then come mostly from
+# outside the region (e.g. a 6 ha site inside one 5566 m CHIRPS pixel).
+DEFAULT_MIN_PIXELS_PER_REGION = 4
+REGION_AREA_MAX_ERROR_M = 1  # maxError (m) for the geometry.area() size check
+
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma
 
