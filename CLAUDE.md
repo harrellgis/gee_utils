@@ -24,140 +24,36 @@ At the start of every session, load context in this order:
 
 ## What This Repo Does
 
-`eetools` is a reusable Python library of Google Earth Engine utilities for environmental remote sensing. It wraps multi-sensor imagery (Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS L30/S30, MODIS (LAI/Fpar, MOD13Q1 NDVI/EVI, MCD64A1 burned area, MOD17A3HGF NPP, MOD44B VCF), NASA SMAP L4 soil moisture, CHIRPS precipitation, OpenLandMap SM2RAIN precipitation climatology, NASA Black Marble VIIRS VNP46A2 nighttime lights, ESA WorldCover, Sentinel-1 SAR GRD, OPERA DSWx, Dynamic World, Google Satellite Embedding V1, plus DEM/terrain, Hansen GFC, Meta/WRI canopy height, iSDA soil carbon, BII, and WDPA vector data) behind a consistent API: build cloud- and water-masked collections, append a harmonized set of spectral indices (NDVI, kNDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, NIRv, NDRE, Fpar), reduce over time, summarize over site polygons (zonal stats, end-to-end site workflows), export to Drive or EE assets, and visualize results. It is installed as a dependency by downstream analysis projects/notebooks rather than run standalone.
+`eetools`: reusable Google Earth Engine utilities for multi-sensor environmental remote sensing (masked collections, harmonized spectral indices, temporal reduction, zonal stats/site workflows, export, visualization). Installed as a dependency by downstream analysis projects/notebooks, not run standalone.
 
 ---
 
-## Setup
+## Setup & Testing
 
-`uv`-managed package (see `uv.lock`). Requires Python ≥ 3.11.
+`uv`-managed, src-layout package. Earth Engine must be authenticated once per machine (`earthengine authenticate`); in code call `eetools.initialize(project="my-gee-project")` before any EE operation.
 
-```bash
-# Create the environment and install with dev dependencies
-uv sync
-
-# Or install editable into an existing environment
-uv pip install -e .
-```
-
-Earth Engine must be authenticated once on the machine (`earthengine authenticate`). In code, call `eetools.initialize(project="my-gee-project")` before any EE operations — this registers the project via `eetools.configure()` and calls `ee.Initialize()`.
-
----
-
-## Commands
+Tests are split by pytest marker: unmarked = pure/mock (no EE session); `@pytest.mark.ee` = real `ee.*` graph-building, mostly on synthetic `ee.Image.constant` images checked against hand-computed values; `@pytest.mark.slow` = hits real datasets. The `ee_session` fixture (`tests/conftest.py`) initializes from `EE_PROJECT` (or `GOOGLE_CLOUD_PROJECT`, or a persisted `earthengine set_project`) and **skips** — not fails — every `ee` test when no session is available.
 
 ```bash
-# Tests — see "Testing" below for the marker split
-uv run pytest                  # everything (EE tests skip without a session)
-uv run pytest -m "not ee"      # pure/mock tests only — fast, no credentials (what CI runs)
-
-# Lint (ruff: E, F, I; E501 is deferred to the formatter)
-uv run ruff check src/ tests/
-
-# Format
-uv run black src/ tests/
-uv run black --check src/ tests/   # CI gate
-uv run ruff check --fix src/ tests/   # applies import sorting (I)
-
-# Type check
-uv run mypy src/
-```
-
-CI (`.github/workflows/ci.yml`) runs ruff + `black --check` + mypy + `pytest -m "not ee"`
-on Python 3.11 and 3.12.
-
----
-
-## Testing
-
-The suite is split into two tiers by pytest marker (registered in `pyproject.toml`):
-
-- **Pure / mock tests** (no marker) — `_config`, `tables`, `plots`, `constants`,
-  validation guards, and the `io` export layer (mocked so no real export tasks fire).
-  These always run and need no Earth Engine session.
-- **`@pytest.mark.ee`** — exercise real `ee.*` graph-building. Most run on *synthetic
-  `ee.Image.constant` images* so index/QA math is checked against hand-computed values;
-  a subset is also marked **`@pytest.mark.slow`** because it hits real datasets.
-
-The `ee_session` fixture (in `tests/conftest.py`) initializes Earth Engine from
-`EE_PROJECT` (or `GOOGLE_CLOUD_PROJECT`); if no authenticated session is available it
-**skips** every `ee` test rather than failing — so CI stays green without credentials.
-
-```bash
-# Run the EE tests locally (requires `earthengine authenticate` + a registered project)
-EE_PROJECT=<your-project> uv run pytest        # PowerShell: $env:EE_PROJECT="<project>"
+uv run pytest -m "not ee"                      # pure tests only — what CI runs
+EE_PROJECT=<project> uv run pytest             # PowerShell: $env:EE_PROJECT="<project>"
 uv run pytest -m "not slow"                    # synthetic EE tests, skip network datasets
-uv run pytest -m "not ee"                      # pure tests only (CI mode)
+uv run ruff check --fix src/ tests/            # ruff E,F,I (E501 deferred to black)
 ```
 
-A persisted default project (`earthengine set_project <project>`) lets the EE tests run
-without setting `EE_PROJECT` each time.
+CI gates: ruff, `black --check`, mypy, `pytest -m "not ee"` on Python 3.11 and 3.12.
 
 ---
 
 ## Architecture
 
-A single installable package, `eetools`, under `src/` (hatchling build, `src`-layout).
-
-```
-gee_utils/
-├── src/eetools/
-│   ├── __init__.py          # initialize() entry point + re-exports configure/get_project
-│   ├── _config.py           # module-level project_id state: configure() / get_project()
-│   ├── constants.py         # ALL collection IDs, band lists, band maps, scale factors, mask thresholds, seasons
-│   ├── compositing.py       # build_composite / build_period_composites (annual|monthly) / build_seasonal_composites
-│   ├── io.py                # Export to Drive / EE assets; task status helpers; GeoTIFF/shapefile → asset upload (GCS-staged)
-│   ├── utils.py             # date-range validation/windows, clipping, joins, temporal reducers, diffs, min/max, resampling
-│   ├── vectors.py           # local vector files (gpkg/geojson/shp) → ee.Geometry / site Features + FC property helpers
-│   ├── zonal.py             # reduce/sample images & collections over regions; class areas; histograms
-│   ├── thresholding.py      # adaptive Otsu thresholds: otsu_threshold / otsu_threshold_image / edge-based (Canny) edge_otsu_threshold
-│   ├── workflows.py         # end-to-end site timeseries (annual/monthly/seasonal) + static baseline assessment
-│   ├── sensors/
-│   │   ├── indices.py       # all spectral-index functions + calc_indices()/calc_veg_indices() multi-index builders
-│   │   ├── masking.py       # shared cloud/water mask helpers used by the optical sensors
-│   │   ├── texture.py       # sensor-agnostic GLCM + first-order texture (fixed-range quantize → glcmTexture; calc_texture entry point)
-│   │   ├── bii/             # Biodiversity Intactness Index preprocessing
-│   │   ├── canopy_height/   # Meta/WRI 1 m global canopy height (static mosaic; not a dated epoch)
-│   │   ├── chirps/          # precipitation preprocessing (+ monthly/annual rainfall table export)
-│   │   ├── dem/             # Copernicus DEM / terrain preprocessing
-│   │   ├── dswx/            # OPERA DSWx surface water (HLS + S1) masking + preprocessing
-│   │   ├── dynamicworld/    # Dynamic World LULC masking (cover-type filter) + preprocessing
-│   │   ├── esa/             # WorldCover preprocessing
-│   │   ├── hansen/          # Global Forest Change preprocessing
-│   │   ├── hls/             # masking + preprocessing
-│   │   ├── isda/            # iSDA Africa topsoil (0-20 cm) total soil carbon (static image)
-│   │   ├── landsat/         # masking + preprocessing
-│   │   ├── modis/           # masking (QA/fill masks) + preprocessing (LAI/Fpar, VI, burned area, NPP, VCF)
-│   │   ├── satellite_embedding/  # Google Satellite Embedding V1 (AlphaEarth) preprocessing + cosine-similarity change
-│   │   ├── sentinel/        # Sentinel-2 SR masking + preprocessing
-│   │   ├── sentinel1/       # Sentinel-1 SAR GRD masking (edge + speckle) + preprocessing
-│   │   │                    # + timescan.py (seasonal per-pixel temporal stats, VV/VH ratios, CV)
-│   │   ├── sm2rain/         # OpenLandMap SM2RAIN monthly precipitation climatology (static 12-month image)
-│   │   ├── smap/            # NASA SMAP L4 soil moisture preprocessing (3-hourly -> daily means)
-│   │   ├── viirs/           # NASA Black Marble VNP46A2 nighttime lights masking (quality/snow) + preprocessing
-│   │   └── wdpa/            # World Database on Protected Areas (vector) preprocessing + Drive export
-│   ├── landtrendr/          # METHOD subpackage (not a sensor): LandTrendr temporal segmentation
-│   │   ├── collection.py    # medoid composite + multi-sensor (Roy-harmonized) annual builder
-│   │   ├── segmentation.py  # run-param defaults + run_landtrendr / run_landtrendr_from_aoi
-│   │   └── outputs.py       # get_change_map / get_fitted_stack / get_segment_data (array-image parsers)
-│   └── visualization/       # plots.py, tables.py (matplotlib/seaborn/pandas)
-│                            # + vis_params.py (ready-made EE/geemap visParams presets)
-└── tests/                   # one test_*.py per source module; conftest.py holds shared
-                             # fixtures + the ee_session fixture (see "Testing")
-```
-
-**Per-sensor module pattern** (`sensors/<sensor>/`): a `masking.py` builds the cloud-free (and optional water-masked) collection, and a `preprocessing.py` exposes the public `get_<sensor>_collection(aoi, start_date, end_date, ...)` that validates the date range, applies scale factors/offsets, calls `calc_indices()` with the sensor's `*_BAND_MAP`, and returns an `ee.ImageCollection`. Follow this shape when adding a sensor.
-
-Non-optical sensors deviate where appropriate: `sentinel1` (SAR backscatter; `timescan.py` summarizes a dB collection into the 25-band `S1_TIMESCAN_BANDS` image, per season via `build_seasonal_s1_timescan`) and the pre-classified products `dswx` / `dynamicworld` skip `calc_indices()` (no reflectance bands); `satellite_embedding` (AlphaEarth foundation-model embeddings) likewise skips indices/masking and has no `masking.py` — it returns the raw 64-band stack and adds an `embedding_similarity()` change-detection helper; `smap` (L4 model-assimilated soil moisture) also skips indices and has no `masking.py` (already physical units, water-masked, no QA band) — instead it averages the 3-hourly timesteps to daily means by default; `sm2rain` is a static long-term **climatology** (one 12-band image, no time axis), so `get_sm2rain_climatology(months)` takes no AOI/dates, does no date validation, and tags each per-month image with a `month` property instead of `system:time_start`; and `wdpa` is a **vector** sensor — it returns an `ee.FeatureCollection`, has no `masking.py` or date validation, and its `get_*` functions filter by attribute/AOI instead.
-
-`landtrendr/` is a **method** subpackage (not a sensor): it fuses the Landsat builders into a one-image-per-year, Roy-harmonized medoid series, runs `ee.Algorithms.TemporalSegmentation.LandTrendr`, and parses the array-image outputs. Its segmentation band must be **loss-positive** (NBR/NDVI/NDMI ×−1, tracked by `DIST_DIR`), and run-param defaults + Roy coefficients live in `constants.py`.
+Single package `eetools` under `src/`. Per-sensor conventions live in `src/eetools/sensors/CLAUDE.md`; the LandTrendr method subpackage in `src/eetools/landtrendr/CLAUDE.md`.
 
 ### Key Conventions
 
 - **All collection IDs, band names, band maps, scale factors, offsets, and mask thresholds live in `constants.py`** — never hardcode them in sensor modules. Each sensor has a `*_BAND_MAP` dict (`{"nir": ..., "red": ...}`) that drives the generic index functions, so indices stay sensor-agnostic.
 - The built-in water masks (`build_non_water_mask`) use fixed spectral thresholds; for a per-scene split of a bimodal band (NDWI/MNDWI, SAR dB, dNBR, index differences) use `thresholding.edge_otsu_threshold`. Its Canny defaults (`CANNY_THRESHOLD`, `CANNY_SIGMA`) are in the band's units and tuned for normalized-difference indices; set `fallback` per index (returned when no edges are found).
 - Index functions in `indices.py` are generic (take explicit band-name args); sensor preprocessing wires them up via the band map. Add new indices there, then wire into `calc_indices`/`calc_veg_indices`.
-- Texture (`sensors/texture.py`) is applied by the caller to a composite, not wired into any `get_<sensor>_collection`. `glcmTexture` needs integer input, so bands are quantized against FIXED ranges (`TEXTURE_VALUE_RANGES`), never per-image. Output bands are always `<band>_<metric>_r<radius>`. The input is never reprojected: the window is `radius` px of the *requested* scale, so export at `scale_m` or pass `pin_scale=True`, which reprojects the output.
 - Public functions are fully type-hinted and carry Google-style docstrings with `Args:`/`Returns:` (including what is raised and what the EE return type is). Match this for new functions.
 - Always call `eetools.initialize(project=...)` first; functions that need the project ID read it via `get_project()` and accept a `project_id` override.
 - Export filenames are derived from per-image date/year properties; preserve `system:time_start` through `copyProperties` in any new map function.
