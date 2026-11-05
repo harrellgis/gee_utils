@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (MCD43A4, 8-day subsample, QA <= 1), `get_chirps_climatology`, `get_chirps_annual_totals`.
 - `pyarrow` dependency (ScreeningTables parquet I/O).
 
+### Fixed
+- `sensors.hansen.get_forest_loss_in_period` returned masked pixels (not 0) wherever no loss
+  occurred, because the source `lossyear` band is masked there. Area means over the result
+  therefore averaged loss pixels only (e.g. 0.97 instead of 0.05 for a 3 km disc in central
+  Kenya). `lossyear` is now unmasked to 0 first. Loss areas from summed `pixelArea()` were not
+  affected. Any earlier mean or fraction computed from this function overstated loss.
+
 ### Changed
 - `get_chirps_collection` takes `cadence="daily" | "pentad"` (default unchanged) and
   `process_chirps_image` keeps the `pentad` property; `validate_chirps_date_range` accepts a

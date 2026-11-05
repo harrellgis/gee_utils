@@ -8,4 +8,4 @@
 - **Joins:** use `workflows._join_new` (adds only missing columns). Build pools from fresh `store.table(level)` values first: earlier snapshots go stale after `ensure(...)` adds families.
 - Each layer family is reduced at its native scale (90 m gates, ~4.6 km climate, 100 m terrain/soil, 250 m NDVI/fractions, 500 m NBAR, 30 m canopy); never oversample to `analysis_scale_m`. Focal-plus-buffer pixels are masked with `RunContext.outside_mask()` before every candidate reduction (not climate).
 - Thresholds, ladders, class/soil group tables and profiles live in `constants.py` (`SEARCH_LADDERS`, `VECEA_CLASS_GROUPS`, `WRB_RELATED_GROUPS`, `MESS_RANGE_FLOORS`, `SOP_MATRIX_THRESHOLDS`, `DEGRADATION_TYPE_PROFILES`).
-- Hansen `lossyear` is masked where no loss occurred: always `unmask(0)` before comparing years.
+- Hansen `lossyear` is masked where no loss occurred: always `unmask(0)` before comparing years (as `sensors.hansen.get_forest_loss_in_period` now does).

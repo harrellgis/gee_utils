@@ -90,3 +90,23 @@ def test_get_forest_loss_in_period_band_name(ee_session, small_aoi):
         aoi=small_aoi, start_year=2015, end_year=2025, tree_cover_threshold=10
     )
     assert img.bandNames().getInfo() == ["forest_loss"]
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_get_forest_loss_in_period_no_loss_is_zero_not_masked(ee_session):
+    """Hansen lossyear is masked where no loss occurred; the result must still be
+    unmasked 0/1 everywhere, so an area mean is a true loss fraction."""
+    from eetools.sensors.hansen.preprocessing import get_forest_loss_in_period
+
+    aoi = ee_session.Geometry.Point([36.95, -0.40]).buffer(3000)
+    img = get_forest_loss_in_period(aoi=aoi, start_year=2001, end_year=2025)
+    stats = ee_session.Dictionary(
+        {
+            "mask": img.mask().reduceRegion(ee_session.Reducer.mean(), aoi, 30),
+            "mean": img.reduceRegion(ee_session.Reducer.mean(), aoi, 30),
+        }
+    ).getInfo()
+    # ~1 (edge pixels of the clipped disc carry fractional weight); ~0.06 when masked
+    assert stats["mask"]["forest_loss"] > 0.99
+    assert 0 < stats["mean"]["forest_loss"] < 0.5  # ~5% here; ~97% when masked
