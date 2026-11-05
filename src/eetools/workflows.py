@@ -21,6 +21,11 @@ from eetools.sensors.dem.preprocessing import get_terrain
 from eetools.sensors.esa.preprocessing import get_land_cover
 from eetools.sensors.hansen.preprocessing import get_forest_2000, get_forest_loss_image
 from eetools.sensors.isda.preprocessing import get_soil_carbon
+from eetools.site_selection.workflows import (  # noqa: F401 (re-exported entry points)
+    identify_degraded_sites,
+    identify_reference_sites,
+    result_to_feature_collection,
+)
 from eetools.vectors import get_sites_geometry
 from eetools.zonal import (
     check_region_pixel_coverage,

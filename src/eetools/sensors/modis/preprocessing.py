@@ -9,6 +9,12 @@ from eetools.constants import (
     MODIS_BURNED_AREA_COLLECTION,
     MODIS_LAI_FPAR_BANDS,
     MODIS_LAI_FPAR_COLLECTION,
+    MODIS_NBAR_BANDS,
+    MODIS_NBAR_COLLECTION,
+    MODIS_NBAR_MAX_QA,
+    MODIS_NBAR_QA_BANDS,
+    MODIS_NBAR_SCALE_FACTOR,
+    MODIS_NBAR_SUBSAMPLE_DAYS,
     MODIS_NPP_BANDS,
     MODIS_NPP_COLLECTION,
     MODIS_NPP_SCALE_FACTOR,
@@ -336,3 +342,181 @@ def get_modis_vcf_collection(
         col = col.map(mask_modis_vcf_fill)
 
     return col
+
+
+# --------------------------------------------------------------------------- #
+# Annual series + Sen's slope (site selection)                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _annual_means(
+    col: ee.ImageCollection, bands: list[str], start_year: int, end_year: int
+) -> ee.ImageCollection:
+    def _year_mean(year: ee.Number) -> ee.Image:
+        start = ee.Date.fromYMD(year, 1, 1)
+        return (
+            col.filterDate(start, start.advance(1, "year"))
+            .select(bands)
+            .mean()
+            .toFloat()
+            .set({"year": year, "system:time_start": start.millis()})
+        )
+
+    return ee.ImageCollection(ee.List.sequence(start_year, end_year).map(_year_mean))
+
+
+def get_modis_annual_ndvi(
+    aoi: ee.Geometry, start_year: int, end_year: int
+) -> ee.ImageCollection:
+    """Annual mean MOD13Q1 NDVI (250 m, QA-masked, scaled), one image per year.
+
+    Args:
+        aoi: Area of interest as ee.Geometry.
+        start_year: First year (inclusive, >= 2001 for full years).
+        end_year: Last year (inclusive).
+
+    Returns:
+        ee.ImageCollection of single-band 'NDVI' images with 'year' and
+        'system:time_start' (Jan 1) properties.
+
+    Raises:
+        ValueError: If end_year < start_year or the window is outside MOD13Q1.
+    """
+    if end_year < start_year:
+        raise ValueError(f"end_year ({end_year}) must be >= start_year ({start_year}).")
+    col = get_modis_vi_collection(
+        aoi, f"{start_year}-01-01", f"{end_year + 1}-01-01"
+    ).select(["NDVI"])
+    return _annual_means(col, ["NDVI"], start_year, end_year)
+
+
+def annual_sens_slope(annual: ee.ImageCollection, band: str) -> ee.Image:
+    """Per-pixel Sen's slope of an annual series against the 'year' property.
+
+    Args:
+        annual: ee.ImageCollection with one image per year, each carrying a numeric
+            'year' property and the band ``band``.
+        band: Band to fit.
+
+    Returns:
+        Single-band ee.Image named 'slope' (units of ``band`` per year).
+    """
+
+    def _with_year(img: ee.Image) -> ee.Image:
+        img = ee.Image(img)
+        year = ee.Image.constant(ee.Number(img.get("year"))).toFloat().rename("year")
+        return year.addBands(img.select([band]).toFloat())
+
+    return (
+        ee.ImageCollection(annual)
+        .map(_with_year)
+        .reduce(ee.Reducer.sensSlope())
+        .select(["slope"])
+    )
+
+
+def _nbar_subsample_indices(
+    start_year: int, end_year: int, step_days: int
+) -> list[str]:
+    from datetime import date, timedelta
+
+    out = []
+    for year in range(start_year, end_year + 1):
+        day = date(year, 1, 1)
+        while day.year == year:
+            out.append(f"{day:%Y_%m_%d}")
+            day += timedelta(days=step_days)
+    return out
+
+
+def get_modis_nbar_collection(
+    aoi: ee.Geometry,
+    start_year: int,
+    end_year: int,
+    subsample_days: int = MODIS_NBAR_SUBSAMPLE_DAYS,
+    apply_qa_mask: bool = True,
+) -> ee.ImageCollection:
+    """MODIS MCD43A4 NBAR (500 m) NIR/SWIR reflectance with NDMI and NBR bands.
+
+    Each daily value comes from a 16-day retrieval window, so consecutive days are
+    near-duplicates; only every ``subsample_days``-th day from Jan 1 of each year is
+    kept (~46 images/yr at the default 8). Pixels are kept where the mandatory
+    quality of bands 2, 6 and 7 is <= 1 (full or magnitude inversion).
+
+    Args:
+        aoi: Area of interest as ee.Geometry.
+        start_year: First year (inclusive).
+        end_year: Last year (inclusive).
+        subsample_days: Day step for subsampling (default 8; 1 keeps every day).
+        apply_qa_mask: If True (default), apply the QA <= 1 rule.
+
+    Returns:
+        ee.ImageCollection with bands 'nir', 'swir1', 'swir2' (reflectance) and
+        'NDMI' = (nir - swir1)/(nir + swir1), 'NBR' = (nir - swir2)/(nir + swir2).
+
+    Raises:
+        ValueError: If end_year < start_year, subsample_days < 1, or the window is
+            outside the MCD43A4 data.
+    """
+    if end_year < start_year:
+        raise ValueError(f"end_year ({end_year}) must be >= start_year ({start_year}).")
+    if subsample_days < 1:
+        raise ValueError("subsample_days must be >= 1.")
+    _validate_modis_date_range(
+        MODIS_NBAR_COLLECTION,
+        aoi,
+        f"{start_year}-01-01",
+        f"{end_year + 1}-01-01",
+        "MODIS MCD43A4 imagery",
+    )
+    keys = list(MODIS_NBAR_BANDS)
+    col = ee.ImageCollection(MODIS_NBAR_COLLECTION).filterDate(
+        f"{start_year}-01-01", f"{end_year + 1}-01-01"
+    )
+    if subsample_days > 1:
+        col = col.filter(
+            ee.Filter.inList(
+                "system:index",
+                _nbar_subsample_indices(start_year, end_year, subsample_days),
+            )
+        )
+
+    def _process(img: ee.Image) -> ee.Image:
+        img = ee.Image(img)
+        refl = (
+            img.select([MODIS_NBAR_BANDS[k] for k in keys], keys)
+            .multiply(MODIS_NBAR_SCALE_FACTOR)
+            .toFloat()
+        )
+        if apply_qa_mask:
+            qa = img.select([MODIS_NBAR_QA_BANDS[k] for k in keys])
+            refl = refl.updateMask(qa.lte(MODIS_NBAR_MAX_QA).reduce(ee.Reducer.min()))
+        nir = refl.select("nir")
+        ndmi = nir.subtract(refl.select("swir1")).divide(nir.add(refl.select("swir1")))
+        nbr = nir.subtract(refl.select("swir2")).divide(nir.add(refl.select("swir2")))
+        out = refl.addBands(ndmi.rename("NDMI")).addBands(nbr.rename("NBR"))
+        return ee.Image(out.copyProperties(img, ["system:time_start"]))
+
+    return col.map(_process)
+
+
+def get_modis_annual_nbar_indices(
+    aoi: ee.Geometry,
+    start_year: int,
+    end_year: int,
+    subsample_days: int = MODIS_NBAR_SUBSAMPLE_DAYS,
+) -> ee.ImageCollection:
+    """Annual mean MCD43A4 NDMI and NBR (500 m), one image per year.
+
+    Args:
+        aoi: Area of interest as ee.Geometry.
+        start_year: First year (inclusive).
+        end_year: Last year (inclusive).
+        subsample_days: Day step passed to get_modis_nbar_collection (default 8).
+
+    Returns:
+        ee.ImageCollection of two-band ('NDMI', 'NBR') images with 'year' and
+        'system:time_start' (Jan 1) properties.
+    """
+    col = get_modis_nbar_collection(aoi, start_year, end_year, subsample_days)
+    return _annual_means(col, ["NDMI", "NBR"], start_year, end_year)

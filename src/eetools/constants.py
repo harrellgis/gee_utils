@@ -798,3 +798,530 @@ DEFAULT_CRS = "EPSG:4326"
 # Override per AOI and region — these are illustrative defaults, not universal.
 SEASON_WET: tuple[int, int] = (3, 5)  # Mar–May  (long rains)
 SEASON_DRY: tuple[int, int] = (7, 10)  # Jul–Oct  (boreal dry)
+
+#################### CHIRPS v3 PENTAD (site selection, P1) ##########################
+# Same band name as the daily product, but units are mm per pentad (72 pentads/year).
+# Sums over a year or more equal the daily product to < 0.0001 mm (checked 2026-11-05),
+# so annual / multi-year totals request the pentad cadence at ~5x fewer image reads.
+# There is NO CHIRPS V3 monthly collection.
+CHIRPS_PENTAD_COLLECTION = "UCSB-CHC/CHIRPS/V3/PENTAD"
+CHIRPS_CADENCE_COLLECTIONS = {
+    "daily": CHIRPS_COLLECTION,
+    "pentad": CHIRPS_PENTAD_COLLECTION,
+}
+CHIRPS_NATIVE_SCALE_M = 5566
+# Fixed normal window for rainfall climatologies (inclusive years).
+CLIMATOLOGY_START_YEAR = 1991
+CLIMATOLOGY_END_YEAR = 2020
+
+#################### TerraClimate (IDAHO_EPSCOR/TERRACLIMATE) ##########################
+# Monthly ~4.6 km climate and water balance. Scales differ PER BAND: def/pet/tmmn/tmmx
+# are stored x10, but `pr` is NOT scaled (checked 2026-11-05: Nairobi monthly mean pr
+# ~90 raw = mm). A blanket x0.1 makes aridity 10x wrong.
+TERRACLIMATE_COLLECTION = "IDAHO_EPSCOR/TERRACLIMATE"
+TERRACLIMATE_SCALES = {
+    "pr": 1.0,
+    "pet": 0.1,
+    "def": 0.1,
+    "tmmn": 0.1,
+    "tmmx": 0.1,
+}
+TERRACLIMATE_NATIVE_SCALE_M = 4638
+# Output band names of get_terraclimate_climatology().
+TERRACLIMATE_CLIMATOLOGY_BANDS = ["cwd", "aridity", "tmin", "tmax"]
+
+#################### WorldClim V1 BIO (static ~1 km bioclim) ##########################
+WORLDCLIM_BIO_IMAGE = "WORLDCLIM/V1/BIO"
+# Catalog scales: temperatures are stored x10 (bio04 x100); precipitation bands and
+# bio15 (coefficient of variation, %) are unscaled.
+WORLDCLIM_SCALES = {"bio01": 0.1, "bio04": 0.01, "bio12": 1.0, "bio15": 1.0}
+WORLDCLIM_DEFAULT_BANDS = ["bio01", "bio04", "bio12", "bio15"]
+WORLDCLIM_NATIVE_SCALE_M = 928
+
+#################### RESOLVE Ecoregions 2017 ##########################
+# Polygons are split, so always match on ECO_ID (never on the polygon).
+RESOLVE_ECOREGIONS_COLLECTION = "RESOLVE/ECOREGIONS/2017"
+RESOLVE_ECO_ID_FIELD = "ECO_ID"
+RESOLVE_BIOME_FIELD = "BIOME_NUM"
+
+#################### TNC Global Human Modification v3 ##########################
+# ImageCollection holding one 2022 image; take .first() (keeps native 90 m projection).
+HUMAN_MODIFICATION_COLLECTION = "TNC/HM/v3/90m_s"
+HUMAN_MODIFICATION_BAND = "All_threats_combined"
+HUMAN_MODIFICATION_YEAR = 2022
+
+#################### OpenLandMap PNV biome (fallback national class) ##########################
+PNV_BIOME_IMAGE = "OpenLandMap/PNV/PNV_BIOME-TYPE_BIOME00K_C/v01"
+PNV_BIOME_BAND = "biome_type"
+PNV_NATIVE_SCALE_M = 1000
+# Biome codes (image property biome_type_class_values/_names, checked 2026-11-05) that
+# count as forest or woodland strata for the forest-only scoring extras.
+PNV_FOREST_WOODLAND_BIOMES = frozenset({1, 2, 3, 4, 7, 8, 9, 13, 14, 15, 16, 17})
+
+#################### MERIT Hydro (HAND) ##########################
+MERIT_HYDRO_IMAGE = "MERIT/Hydro/v1_0_1"
+MERIT_HAND_BAND = "hnd"
+MERIT_NATIVE_SCALE_M = 90
+# Height above nearest drainage separating riparian/wetland (< 5 m) from upland.
+HAND_RIPARIAN_MAX_M = 5.0
+
+#################### Copernicus DEM water-body mask ##########################
+# GLO-30 WBM band: 0 no water, 1 ocean, 2 lake, 3 river (checked 2026-11-05). The DEM
+# itself is NOT masked over the ocean, so coastal distance uses WBM == 1.
+COPERNICUS_WBM_BAND = "WBM"
+COPERNICUS_WBM_OCEAN = 1
+
+#################### iSDAsoil texture / sand / clay ##########################
+# Sand and clay content are integer % with no back-transform (checked 2026-11-05);
+# texture_class is the USDA texture class code.
+ISDA_TEXTURE_IMAGE = "ISDASOIL/Africa/v1/texture_class"
+ISDA_SAND_IMAGE = "ISDASOIL/Africa/v1/sand_content"
+ISDA_CLAY_IMAGE = "ISDASOIL/Africa/v1/clay_content"
+ISDA_NATIVE_SCALE_M = 30
+
+#################### SBTN Natural Lands 2020 (optional natural mask) ##########################
+SBTN_NATURAL_LANDS_IMAGE = "WRI/SBTN/naturalLands/v1_1/2020"
+SBTN_NATURAL_BAND = "natural"
+
+#################### Global Mangrove Watch 2020 (coastal stratum) ##########################
+GMW_2020_COLLECTION = "projects/sat-io/open-datasets/GMW/annual-extent/GMW_MNG_2020"
+GMW_BAND = "b1"
+
+#################### MODIS MCD43A4 NBAR (NDMI / NBR) ##########################
+# Daily 500 m nadir BRDF-adjusted reflectance; each value comes from a 16-day window,
+# so consecutive days are near-duplicates and every 8th day is kept. system:index is
+# "YYYY_MM_DD".
+MODIS_NBAR_COLLECTION = "MODIS/061/MCD43A4"
+MODIS_NBAR_BANDS = {
+    "nir": "Nadir_Reflectance_Band2",  # 841-876 nm
+    "swir1": "Nadir_Reflectance_Band6",  # 1628-1652 nm
+    "swir2": "Nadir_Reflectance_Band7",  # 2105-2155 nm
+}
+MODIS_NBAR_QA_BANDS = {
+    "nir": "BRDF_Albedo_Band_Mandatory_Quality_Band2",
+    "swir1": "BRDF_Albedo_Band_Mandatory_Quality_Band6",
+    "swir2": "BRDF_Albedo_Band_Mandatory_Quality_Band7",
+}
+MODIS_NBAR_MAX_QA = 1  # 0 full inversion, 1 magnitude inversion
+MODIS_NBAR_SCALE_FACTOR = 0.0001
+MODIS_NBAR_SUBSAMPLE_DAYS = 8
+MODIS_NBAR_SCALE_M = 500
+MODIS_VI_SCALE_M = 250
+
+#################### Uploaded assets (VECEA, SoilGrids WRB) ##########################
+# Loaders resolve the asset ID as: explicit asset_id= -> environment variable -> constant.
+#
+# VECEA v2.0 (van Breugel et al. 2015; Zenodo 10.5281/zenodo.11125645). LICENCE: the
+# Zenodo deposit says CC BY 4.0 but the bundled 2015 terms forbid redistribution and
+# commercial use without permission, so the asset stays PRIVATE until the VECEA team
+# confirms. To reproduce it under another project, follow VECEA_REPRODUCE_STEPS.
+VECEA_ASSET_ID = "projects/charrell-personal/assets/pnv_vecea_v2_0_Kenya"
+VECEA_ASSET_ENV = "EETOOLS_VECEA_ASSET"
+VECEA_BAND = "b1"
+VECEA_NATIVE_SCALE_M = 92
+VECEA_VERSION = "v2.0 (2024.05)"
+VECEA_DOI = "10.5281/zenodo.11125645"
+VECEA_REPRODUCE_STEPS = (
+    "1) download pnv_vecea_v2_0_<Country>_raster.zip from Zenodo "
+    "10.5281/zenodo.11125645; 2) upload pnv_vecea_v2_0_<Country>.tif as an image "
+    "asset with pyramiding policy MODE; 3) set EETOOLS_VECEA_ASSET or "
+    "asset_overrides={'vecea': '<asset id>'}."
+)
+# SoilGrids 2.0 WRB most-probable reference soil group (ISRIC, CC BY 4.0), Kenya clip.
+SOILGRIDS_WRB_ASSET_ID = (
+    "projects/charrell-personal/assets/soilgrids_wrb_mostprobable_kenya"
+)
+SOILGRIDS_WRB_ASSET_ENV = "EETOOLS_SOILGRIDS_WRB_ASSET"
+SOILGRIDS_WRB_BAND = "b1"
+SOILGRIDS_WRB_NATIVE_SCALE_M = 230
+# Asset key -> (default ID, environment variable).
+UPLOADED_ASSETS = {
+    "vecea": (VECEA_ASSET_ID, VECEA_ASSET_ENV),
+    "soilgrids_wrb": (SOILGRIDS_WRB_ASSET_ID, SOILGRIDS_WRB_ASSET_ENV),
+}
+
+# VECEA Kenya class table (MAP_ID -> (code, name)), from pnv_vecea_v2_0_Kenya.csv.
+# All 8 VECEA countries share one MAP_ID space (83 codes, no conflicts), so other
+# countries extend this dict.
+VECEA_CLASS_TABLE: dict[int, tuple[str, str]] = {
+    1: ("A", "Afroalpine vegetation"),
+    2: ("Ad", "Afromontane desert"),
+    3: ("B", "Afromontane bamboo"),
+    4: ("Bd", "Somalia-Masai Acacia-Commiphora deciduous bushland and thicket"),
+    5: (
+        "Bd/Wcd",
+        "Transitional zone Somalia-Masai Acacia-Commiphora deciduous bushland and "
+        "thicket and Dry Combretum wooded grassland",
+    ),
+    8: ("Bds", "Acacia-Commiphora stunted bushland"),
+    9: (
+        "Bds/S",
+        "Somalia-Masai Acacia-Commiphora shrubland + Somalia-Masai semi-desert "
+        "grassland and shrubland",
+    ),
+    10: ("Be", "Evergreen and semi-evergreen bushland and thicket"),
+    15: ("CM", "Coastal mosaic"),
+    16: ("D", "Desert"),
+    17: ("E", "Montane Ericaceous belt"),
+    19: ("Fa", "Afromontane rain forest"),
+    21: ("Fb", "Afromontane undifferentiated forest"),
+    22: (
+        "Fb/Be/wd",
+        "Complex of Afromontane undifferentiated forest with wooded grasslands and "
+        "evergreen or semi-evergreen bushland and thicket at lower margins",
+    ),
+    24: ("Fd", "Single-dominant Hagenia abyssinica forest"),
+    26: ("Fe", "Afromontane moist transitional forest"),
+    27: ("Ff", "Lake Victoria transitional rain forest"),
+    29: ("Fh", "Afromontane dry transitional forest"),
+    30: (
+        "Fi",
+        "Lake Victoria drier peripheral semi-evergreen Guineo-Congolian rain forest",
+    ),
+    33: ("Fo", "Zanzibar-Inhambane lowland rain forest"),
+    35: ("G", "Climatic grasslands"),
+    39: ("M", "Mangrove"),
+    40: ("P", "Palm wooded grassland"),
+    41: ("R", "Riverine wooded vegetation"),
+    42: ("S", "Somalia-Masai semi-desert grassland and shrubland"),
+    46: ("Wcd", "Dry combretum wooded grassland"),
+    49: ("Wcm", "Moist Combretum wooded grassland"),
+    51: (
+        "Wd/Wc",
+        "Acacia-Commiphora deciduous wooded grassland + Combretum wooded grassland",
+    ),
+    52: ("WdK", "Acacia tortilis wooded grassland and woodland"),
+    53: ("We", "Upland Acacia wooded grassland"),
+    67: (
+        "Wn/g",
+        "Catena of North Zambezian Undifferentiated woodland + edaphic grassland on "
+        "drainage-impeded or seasonally flooded soils",
+    ),
+    73: ("X", "Freshwater swamp"),
+    81: ("g", "Edaphic grassland on drainage-impeded or seasonally flooded soils"),
+    85: (
+        "g/X",
+        "Edaphic grassland on drainage-impeded or seasonally flooded soils + "
+        "freshwater swamp",
+    ),
+    86: ("gv", "Edaphic grassland on volcanic soils"),
+    87: ("s", "Sand"),
+    88: ("w", "Water bodies"),
+    89: (
+        "wd",
+        "Edaphic wooded grassland on drainage-impeded or seasonally flooded soils",
+    ),
+    92: ("Z", "Halophytic vegetation"),
+}
+# MAP_ID -> ecological group (spec 2026-11-05 §4.4). Basis: VECEA main groups, with
+# "Other types" split by ecology and three documented deviations: B (bamboo) and E
+# (Ericaceous belt) are Afromontane belts, R (riverine) is azonal. Composite types take
+# the group of their first component. 87 (sand) and 88 (water) are mapping classes, not
+# PNV types, and are deliberately absent (never matched by a group).
+VECEA_CLASS_GROUPS: dict[int, str] = {
+    **dict.fromkeys([19, 21, 22, 24, 26, 27, 29, 30, 33], "forest"),
+    **dict.fromkeys([40, 46, 49, 51, 52, 53, 67, 89], "woodland"),
+    41: "riverine",
+    **dict.fromkeys([4, 5, 8, 9, 10], "bushland"),
+    3: "bamboo",
+    **dict.fromkeys([1, 2, 17], "afroalpine_ericaceous"),
+    35: "climatic_grassland",
+    **dict.fromkeys([81, 85, 86], "edaphic_grassland"),
+    73: "swamp",
+    **dict.fromkeys([16, 42], "semi_desert"),
+    39: "mangrove",
+    92: "halophytic",
+    15: "coastal_mosaic",
+}
+VECEA_EXCLUDED_CLASSES = frozenset({87, 88})  # sand, water bodies
+VECEA_MOSAIC_CLASSES = frozenset({15})  # CM: too broad to discriminate coastal strata
+# Groups that count as forest/woodland strata for the forest-only scoring extras.
+VECEA_FOREST_WOODLAND_GROUPS = frozenset({"forest", "woodland", "riverine", "bamboo"})
+
+# SoilGrids WRB 2006 reference soil group codes (MostProbable.rat.json).
+WRB_CLASS_TABLE: dict[int, str] = {
+    0: "Acrisols",
+    1: "Albeluvisols",
+    2: "Alisols",
+    3: "Andosols",
+    4: "Arenosols",
+    5: "Calcisols",
+    6: "Cambisols",
+    7: "Chernozems",
+    8: "Cryosols",
+    9: "Durisols",
+    10: "Ferralsols",
+    11: "Fluvisols",
+    12: "Gleysols",
+    13: "Gypsisols",
+    14: "Histosols",
+    15: "Kastanozems",
+    16: "Leptosols",
+    17: "Lixisols",
+    18: "Luvisols",
+    19: "Nitisols",
+    20: "Phaeozems",
+    21: "Planosols",
+    22: "Plinthosols",
+    23: "Podzols",
+    24: "Regosols",
+    25: "Solonchaks",
+    26: "Solonetz",
+    27: "Stagnosols",
+    28: "Umbrisols",
+    29: "Vertisols",
+}
+# "Related" soil groups (matrix score 1): the FAO Major Soils of the World sets
+# (Driessen et al. 2001) with three stated adjustments: Set #3 split into singletons
+# (Andosols, Arenosols, Vertisols); Set #4 split into lowland (Fluvisols, Gleysols) and
+# upland/erosional (Leptosols, Regosols); Stagnosols join Planosols in Set #9.
+WRB_RELATED_GROUPS: dict[str, frozenset[int]] = {
+    "1_organic": frozenset({14}),
+    "3a_volcanic": frozenset({3}),
+    "3b_sandy": frozenset({4}),
+    "3c_shrink_swell_clay": frozenset({29}),
+    "4a_lowland": frozenset({11, 12}),
+    "4b_upland_erosional": frozenset({16, 24}),
+    "5_limited_age": frozenset({6}),
+    "6_wet_tropical": frozenset({22, 10, 2, 19, 0, 17}),
+    "7_arid": frozenset({25, 26, 13, 9, 5}),
+    "8_steppic": frozenset({7, 15, 20}),
+    "9_subhumid_temperate": frozenset({23, 21, 27, 1, 18, 28}),
+    "10_permafrost": frozenset({8}),
+}
+
+#################### SITE SELECTION (eetools.site_selection) ##########################
+# Coarse-to-fine grid (spec §5.0): fine cell = screen / k with k restricted so every
+# cell is a whole multiple of the 250 m fraction-image grid.
+ALLOWED_K = (1, 2, 4, 8)
+FRACTION_SCALE_M = 250
+SCREEN_CELL_STEP_M = 500  # grown screening cells snap up to multiples of this
+SITE_SELECTION_INDICATOR_SCALE_M = 90  # Stage 1 gate-indicator reduction
+FINE_MIN_SHARE = 0.5  # fine-cell categorical gates: in-set share >= this
+COARSE_MIN_SHARE_FLOOR = 0.05  # coarse gates: max(focal/cell area, this)
+MIN_LAND_SHARE = 0.5  # cells with less land than this (ocean) are removed
+DEFAULT_TIER_DISTANCES_KM = (25.0, 50.0, 150.0)
+DEFAULT_SCREEN_CELL_M = 2000.0
+DEFAULT_EXCLUDE_BUFFER_M = 500.0
+DEFAULT_REFERENCE_BUFFER_M = 1000.0
+DEFAULT_FOCAL_SAMPLES = 300
+REDUCE_BATCH_SIZE = 1500  # cells per reduceRegions request
+# Coastal mode: active when the focal site is within this distance of the ocean;
+# candidates must then lie within max(2 x focal distance, COASTAL_MIN_LIMIT_M).
+COASTAL_TRIGGER_M = 10_000.0
+COASTAL_MIN_LIMIT_M = 2_000.0
+COAST_DISTANCE_SCALE_M = 1000
+COAST_DISTANCE_MAX_M = 50_000  # coastal mode only matters within ~10-20 km
+
+# Search ladder (spec §5.1): (max_tier, relax_substrate, relax_class) per rung.
+SEARCH_LADDERS: dict[str, tuple[tuple[int, bool, bool], ...]] = {
+    "before_tier3": (
+        (1, False, False),
+        (2, False, False),
+        (2, True, False),
+        (2, True, True),
+        (3, True, True),
+    ),
+    "after_tier3": (
+        (1, False, False),
+        (2, False, False),
+        (3, False, False),
+        (3, True, False),
+        (3, True, True),
+    ),
+    "off": (
+        (1, False, False),
+        (2, False, False),
+        (3, False, False),
+    ),
+}
+
+# SOP envelope defaults (CER-K SOP; record what was used).
+SOP_ELEVATION_TOL_M = 300.0
+SOP_RAINFALL_TOL_FRAC = 0.25
+
+# MESS predictors (condition-independent only), in interpretability priority order:
+# drop_collinear keeps the earlier variable of a correlated pair (Porfirio et al. 2014).
+ENV_PREDICTORS = [
+    "elevation",
+    "bio12",
+    "bio01",
+    "sand",
+    "clay",
+    "hand",
+    "slope",
+    "cwd",
+    "aridity",
+    "bio04",
+    "bio15",
+    "tpi",
+]
+COAST_PREDICTOR = "coast_dist"
+# Climate predictors are reduced once at coarse level and inherited by fine cells.
+CLIMATE_PREDICTORS = ["bio01", "bio04", "bio12", "bio15", "cwd", "aridity"]
+TERRAIN_SOIL_PREDICTORS = ["elevation", "slope", "tpi", "sand", "clay", "hand"]
+PREDICTOR_LABELS = {
+    "elevation": "elevation",
+    "slope": "slope",
+    "tpi": "topographic position",
+    "bio01": "mean temperature",
+    "bio04": "temperature seasonality",
+    "bio12": "annual rainfall",
+    "bio15": "rainfall seasonality",
+    "cwd": "climatic water deficit",
+    "aridity": "aridity index",
+    "sand": "sand content",
+    "clay": "clay content",
+    "hand": "height above drainage",
+    "coast_dist": "distance to coast",
+}
+# Native sampling scale (m) of each predictor for the focal MESS reference sample.
+PREDICTOR_NATIVE_SCALE_M = {
+    "elevation": 30,
+    "slope": 30,
+    "tpi": 30,
+    "bio01": WORLDCLIM_NATIVE_SCALE_M,
+    "bio04": WORLDCLIM_NATIVE_SCALE_M,
+    "bio12": WORLDCLIM_NATIVE_SCALE_M,
+    "bio15": WORLDCLIM_NATIVE_SCALE_M,
+    "cwd": TERRACLIMATE_NATIVE_SCALE_M,
+    "aridity": TERRACLIMATE_NATIVE_SCALE_M,
+    "sand": ISDA_NATIVE_SCALE_M,
+    "clay": ISDA_NATIVE_SCALE_M,
+    "hand": MERIT_NATIVE_SCALE_M,
+    "coast_dist": COAST_DISTANCE_SCALE_M,
+}
+MESS_MIN_NATIVE_PX = 9
+MESS_COLLINEARITY_R = 0.8
+TPI_RADIUS_M = 500
+# MESS range floors (spec §5.2): ("abs", total range) or ("rel", fraction of |focal
+# median|). [L] defaults, written to layer_register.
+MESS_RANGE_FLOORS: dict[str, tuple[str, float]] = {
+    "elevation": ("abs", 50.0),
+    "slope": ("abs", 2.0),
+    "tpi": ("abs", 5.0),
+    "bio01": ("abs", 0.5),
+    "bio12": ("rel", 0.05),
+    "bio04": ("rel", 0.05),
+    "bio15": ("rel", 0.05),
+    "cwd": ("rel", 0.05),
+    "aridity": ("abs", 0.05),
+    "sand": ("abs", 5.0),
+    "clay": ("abs", 5.0),
+    "hand": ("abs", 2.0),
+    "coast_dist": ("abs", 1000.0),
+}
+
+# WorldCover classes counted as natural cover (tree, shrub, grass, herbaceous wetland,
+# mangrove, moss/lichen) and the land-cover fraction classes.
+NATURAL_WORLDCOVER_CLASSES = (10, 20, 30, 90, 95, 100)
+WORLDCOVER_CROPLAND = 40
+WORLDCOVER_BUILT = 50
+WORLDCOVER_BARE = 60
+WORLDCOVER_WATER = 80
+WORLDCOVER_YEAR = 2021
+CORE_FRAC_RADIUS_M = 1000
+REDUCE_RESOLUTION_MAX_PIXELS = 1024
+
+# WDPA protection weights by IUCN category (spec §5.3); STATUS must be "Designated".
+WDPA_IUCN_FIELD = "IUCN_CAT"
+WDPA_STATUS_FIELD = "STATUS"
+WDPA_DESIGNATED = "Designated"
+WDPA_IUCN_PROTECTION_WEIGHTS = {
+    "Ia": 1.0,
+    "Ib": 1.0,
+    "II": 1.0,
+    "III": 0.8,
+    "IV": 0.8,
+    "V": 0.5,
+    "VI": 0.5,
+    "Not Reported": 0.6,
+    "Not Assigned": 0.6,
+    "Not Applicable": 0.6,
+}
+WDPA_STRICT_CATEGORIES = ("Ia", "Ib", "II")  # WDPA-strict auto-seeds
+WDPA_I_IV_CATEGORIES = ("Ia", "Ib", "II", "III", "IV")  # matrix protection = 2
+WDPA_RASTER_SCALE_M = 30
+WDPA_STRICT_MIN_SHARE = 0.5
+WDPA_STRICT_MIN_CELLS = 2
+WDPA_STRICT_MAX_SEED_CELLS = 20
+
+# Productivity windows (Trends.Earth-style).
+STATE_WINDOW_YEARS = 3
+TREND_WINDOW_YEARS = 15
+RECENT_LOSS_YEARS = 5
+EMBEDDING_FIRST_YEAR = 2017
+EMBEDDING_LATEST_YEAR = 2025
+EMBEDDING_REDUCE_SCALE_M = 100
+DYNAMIC_WORLD_FIRST_YEAR = 2018  # ranked-site DW context skipped before this end_year
+DYNAMIC_WORLD_CONTEXT_SCALE_M = 30
+DYNAMIC_WORLD_CONTEXT_BANDS = ["bare", "crops", "built"]
+CANOPY_HEIGHT_REDUCE_SCALE_M = 30
+FOREST_MIN_CANOPY_M = 5.0  # [L] forest integrity: canopy consistent with forest class
+VIIRS_REDUCE_SCALE_M = 500
+
+# Degraded workflow.
+DEGRADED_EXCLUDE_MAX_FRAC = 0.5  # drop cells with >= this water or built-up fraction
+PA_EXCLUDE_MIN_SHARE = 0.5  # exclude_protected: drop cells this share inside a PA
+# Rules-mode signature profiles: terms are (column, orientation), +1 = higher means
+# "more like this degradation type"; layers name the extra reductions a profile needs.
+DEGRADATION_TYPE_PROFILES: dict[str, dict[str, list]] = {
+    "mining": {
+        "terms": [("bare_frac", 1), ("natural_frac", -1), ("ndvi_state", -1)],
+        "layers": [],
+    },
+    "bare_soil": {
+        "terms": [("bare_frac", 1), ("natural_frac", -1), ("ndvi_state", -1)],
+        "layers": [],
+    },
+    "cropland": {"terms": [("crop_frac", 1)], "layers": []},
+    "deforestation": {
+        "terms": [("forest_loss_frac", 1), ("canopy_height_p50", -1)],
+        "layers": ["canopy"],
+    },
+    "overgrazing": {
+        "terms": [("rue_trend", -1), ("bare_frac", 1), ("natural_frac", -1)],
+        "layers": ["rue"],
+    },
+    "rangeland": {
+        "terms": [("rue_trend", -1), ("bare_frac", 1), ("natural_frac", -1)],
+        "layers": ["rue"],
+    },
+    "settlement": {
+        "terms": [("ghm", 1), ("built_frac", 1), ("viirs", 1)],
+        "layers": ["viirs"],
+    },
+    "generic": {
+        "terms": [
+            ("ndvi_state", -1),
+            ("ndmi_state", -1),
+            ("natural_frac", -1),
+            ("ghm", 1),
+        ],
+        "layers": [],
+    },
+}
+
+# CER-K SOP selection-matrix thresholds ([L] defaults, reported in layer_register).
+SOP_MATRIX_THRESHOLDS = {
+    "integrity_loss_2": 0.01,  # loss since 2000 < 1% of cell for a 2
+    "integrity_loss_1": 0.05,  # loss since 2000 <= 5% for a 1
+    "recent_loss_frac": 0.005,  # recent (last 5 yr) loss fraction allowed
+    "bii_pool_quantile": 0.75,
+    "ghm_pool_quantile": 0.75,  # non-forest: 1 - ghm >= pool p75
+    "natural_frac_nonforest": 0.8,
+    "size_partial": 0.5,
+    "protection_share": 0.5,
+    "degraded_loss_2": 0.10,
+    "degraded_loss_1": 0.01,
+    "pathway_2": 0.75,
+    "pathway_1": 0.5,
+    "elevation_band_m": 150.0,
+    "rainfall_band_frac": 0.125,
+}
+INTACTNESS_WEAK_NATURALNESS = 0.7  # 1 - ghm below this -> intactness_flag "weak"
+INTACTNESS_WEAK_NATURAL_FRAC = 0.6
+ZERO_STAR_HIGH_PCT = 0.9
+ZERO_STAR_MODERATE_PCT = 0.75
+ZERO_STAR_MAX_PERFORMANCE = 0.5
+SPAN_ENV_COVERAGE_SD = 1.0  # env_coverage: focal samples within this RMS z-distance

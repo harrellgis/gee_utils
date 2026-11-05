@@ -69,3 +69,26 @@ def get_terrain(
         terrain = terrain.select(["slope", "aspect", "hillshade"])
 
     return terrain
+
+
+def get_tpi(
+    elevation: ee.Image | None = None,
+    radius_m: float = 500,
+) -> ee.Image:
+    """Topographic position index: elevation minus its circular-neighbourhood mean.
+
+    Positive values are ridges and upper slopes, negative values valleys.
+
+    Args:
+        elevation: Optional single-band elevation ee.Image (metres); defaults to the
+            Copernicus DEM GLO-30.
+        radius_m: Neighbourhood radius in metres (default 500).
+
+    Returns:
+        ee.Image with a single 'tpi' band (metres), in the elevation image's projection.
+    """
+    if elevation is None:
+        elevation = get_copernicus_dem()
+    elevation = ee.Image(elevation)
+    mean = elevation.focalMean(radius=radius_m, kernelType="circle", units="meters")
+    return elevation.subtract(mean).rename("tpi")

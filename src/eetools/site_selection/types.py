@@ -1,0 +1,335 @@
+"""Typed configuration and result containers for the site-selection workflows."""
+
+from __future__ import annotations
+
+import json
+import math
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+import geopandas as gpd
+import pandas as pd
+
+DegradationType = Literal[
+    "generic",
+    "mining",
+    "bare_soil",
+    "cropland",
+    "deforestation",
+    "overgrazing",
+    "rangeland",
+    "settlement",
+]
+SiteType = Literal["reference", "degraded"]
+
+_WEIGHT_TOL = 1e-6
+
+
+class ScreeningTablesMismatch(ValueError):
+    """Raised when supplied ScreeningTables were built with a different provenance key."""
+
+
+@dataclass(frozen=True)
+class EnvelopeTolerances:
+    """Stage 1 envelope-gate tolerances and search-ladder settings (spec §5.1).
+
+    Every tolerance actually applied is recorded in ``params`` and in the layer
+    register at [L] confidence ("default threshold, to be field-checked").
+
+    Attributes:
+        class_match: National vegetation class gate: 'same' class set, or 'group'
+            (adjacent classes in the same VECEA_CLASS_GROUPS group).
+        focal_class_min_share: A class enters the focal class set when it covers at
+            least this share of the focal site's pixels.
+        min_focal_class_pixels: Below this many native pixels, a categorical layer's
+            focal shares are computed over focal site + reference_buffer_m.
+        coarse_min_share: Share threshold for coarse-cell categorical gates; None ->
+            max(focal area / cell area, COARSE_MIN_SHARE_FLOOR).
+        substrate_match: WRB soil group gate: 'same', 'related' or 'off'.
+        elevation_tol_m: Elevation envelope (SOP default 300 m).
+        rainfall_tol_frac: Mean-annual rainfall envelope (SOP default 0.25).
+        hydro_match: Require the focal-majority HAND class (riparian/upland).
+        coastal_mode: 'auto' (on when focal site is near the ocean), 'on' or 'off'.
+        mess_floor: Stage 2 MESS floor (cells below are dropped).
+        relaxation: Search-ladder variant: 'before_tier3', 'after_tier3' or 'off'.
+        min_screen_pool: Stage 1 survivors needed for a rung to stop the ladder;
+            None -> 3 x n_candidates.
+        exclude_max_share: A cell is dropped if more than this share lies inside the
+            focal site + exclusion buffer (or exclude_fc).
+    """
+
+    class_match: Literal["same", "group"] = "same"
+    focal_class_min_share: float = 0.2
+    min_focal_class_pixels: int = 25
+    coarse_min_share: float | None = None
+    substrate_match: Literal["same", "related", "off"] = "same"
+    elevation_tol_m: float = 300.0
+    rainfall_tol_frac: float = 0.25
+    hydro_match: bool = True
+    coastal_mode: Literal["auto", "on", "off"] = "auto"
+    mess_floor: float = -25.0
+    relaxation: Literal["before_tier3", "after_tier3", "off"] = "before_tier3"
+    min_screen_pool: int | None = None
+    exclude_max_share: float = 0.5
+
+    def __post_init__(self) -> None:
+        _check_choice("class_match", self.class_match, ("same", "group"))
+        _check_choice(
+            "substrate_match", self.substrate_match, ("same", "related", "off")
+        )
+        _check_choice("coastal_mode", self.coastal_mode, ("auto", "on", "off"))
+        _check_choice(
+            "relaxation", self.relaxation, ("before_tier3", "after_tier3", "off")
+        )
+        _check_unit("focal_class_min_share", self.focal_class_min_share, open_low=True)
+        _check_unit("exclude_max_share", self.exclude_max_share)
+        if self.coarse_min_share is not None:
+            _check_unit("coarse_min_share", self.coarse_min_share, open_low=True)
+        if self.min_focal_class_pixels < 1:
+            raise ValueError("min_focal_class_pixels must be >= 1.")
+        if self.elevation_tol_m <= 0 or self.rainfall_tol_frac <= 0:
+            raise ValueError("elevation_tol_m and rainfall_tol_frac must be > 0.")
+        if self.min_screen_pool is not None and self.min_screen_pool < 1:
+            raise ValueError("min_screen_pool must be >= 1.")
+
+
+@dataclass(frozen=True)
+class ReferenceWeights:
+    """Intactness-score weights (spec §5.3). Must sum to 1.
+
+    For forest/woodland strata, ``forest_loss_shift`` moves from ``core`` to
+    pct(1 - forest_loss_frac) and ``canopy_shift`` moves from ``performance`` to
+    pct(canopy_height_p50).
+    """
+
+    naturalness: float = 0.25
+    natural_cover: float = 0.15
+    core: float = 0.15
+    performance: float = 0.10
+    moisture: float = 0.05
+    persistence: float = 0.05
+    burn_persist: float = 0.05
+    bii: float = 0.10
+    protection: float = 0.10
+    forest_loss_shift: float = 0.05
+    canopy_shift: float = 0.05
+
+    def __post_init__(self) -> None:
+        _check_weights(self, exclude=("forest_loss_shift", "canopy_shift"))
+        if self.forest_loss_shift > self.core or self.canopy_shift > self.performance:
+            raise ValueError(
+                "forest_loss_shift must be <= core and canopy_shift <= performance."
+            )
+
+
+@dataclass(frozen=True)
+class DegradedWeights:
+    """Degradation-score weights (spec §5.3). Must sum to 1.
+
+    ``loss`` applies to forest strata only; otherwise it is redistributed
+    proportionally to the four STATE terms.
+    """
+
+    perf_deficit: float = 0.15
+    moist_deficit: float = 0.10
+    unnatural: float = 0.15
+    pressure: float = 0.10
+    browning: float = 0.05
+    nbr_decline: float = 0.05
+    loss: float = 0.05
+    signature: float = 0.35
+
+    def __post_init__(self) -> None:
+        _check_weights(self)
+
+
+def _check_choice(name: str, value: Any, allowed: tuple[str, ...]) -> None:
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {allowed}, got {value!r}.")
+
+
+def _check_unit(name: str, value: float, open_low: bool = False) -> None:
+    low_ok = value > 0 if open_low else value >= 0
+    if not (low_ok and value <= 1):
+        raise ValueError(f"{name} must be in {'(0' if open_low else '[0'}, 1].")
+
+
+def _check_weights(obj: Any, exclude: tuple[str, ...] = ()) -> None:
+    values = {
+        f.name: getattr(obj, f.name) for f in fields(obj) if f.name not in exclude
+    }
+    negative = [k for k, v in values.items() if v < 0]
+    if negative:
+        raise ValueError(f"Weights must be non-negative: {negative}.")
+    total = sum(values.values())
+    if not math.isclose(total, 1.0, abs_tol=_WEIGHT_TOL):
+        raise ValueError(
+            f"{type(obj).__name__} weights must sum to 1 (got {total:.6f})."
+        )
+
+
+def _jsonable(value: Any) -> Any:
+    """Normalise a value so provenance keys compare equal after a JSON round-trip."""
+    return json.loads(json.dumps(value, sort_keys=True, default=str))
+
+
+@dataclass(frozen=True)
+class ScreeningTables:
+    """Raw per-cell Earth Engine reductions, shared between runs (spec §5.3).
+
+    Holds raw values only (gate-indicator shares, elevation, climate, MESS predictors,
+    condition mean/p10/p90, labels, embeddings), each family flagged by a
+    ``_done_<family>`` column. It never holds pools, MESS scores, percentiles, ranks
+    or the spanning set; every run recomputes those for its own pool.
+
+    Attributes:
+        coarse: Per-coarse-cell reductions, indexed by cell_id.
+        fine: Per-fine-cell reductions, indexed by cell_id.
+        embeddings: Mean embedding per (cell_id, year): columns cell_id, year, A00..A63.
+        labels: Per-cell VECEA / WRB frequency histograms (JSON strings), indexed by
+            cell_id.
+        key: Provenance key; a run whose key differs raises ScreeningTablesMismatch.
+        created: ISO-8601 creation timestamp (UTC).
+    """
+
+    coarse: pd.DataFrame
+    fine: pd.DataFrame
+    embeddings: pd.DataFrame
+    labels: pd.DataFrame
+    key: dict[str, Any]
+    created: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
+
+    def check_key(self, key: dict[str, Any]) -> None:
+        """Raise ScreeningTablesMismatch if ``key`` differs from the stored key.
+
+        Args:
+            key: Provenance key of the run that wants to reuse these tables.
+
+        Returns:
+            None.
+
+        Raises:
+            ScreeningTablesMismatch: Naming every differing field.
+        """
+        mine = _jsonable(self.key)
+        theirs = _jsonable(key)
+        diff = sorted(
+            k for k in set(mine) | set(theirs) if mine.get(k) != theirs.get(k)
+        )
+        if diff:
+            raise ScreeningTablesMismatch(
+                "ScreeningTables were built with a different provenance key; "
+                f"differing fields: {diff}. Re-run without screening= (or with "
+                "matching inputs)."
+            )
+
+    def to_parquet(self, path: str | Path) -> None:
+        """Write the tables to a local directory of parquet files plus meta.json.
+
+        Args:
+            path: Output directory (created if missing). Writes coarse.parquet,
+                fine.parquet, embeddings.parquet, labels.parquet and meta.json
+                (provenance key and creation time). Full float64 precision is kept.
+
+        Returns:
+            None.
+        """
+        out = Path(path)
+        out.mkdir(parents=True, exist_ok=True)
+        for name in ("coarse", "fine", "labels"):
+            df = getattr(self, name)
+            df.to_parquet(out / f"{name}.parquet", index=True)
+        self.embeddings.to_parquet(out / "embeddings.parquet", index=False)
+        meta = {"key": _jsonable(self.key), "created": self.created}
+        (out / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
+
+    @classmethod
+    def from_parquet(cls, path: str | Path) -> ScreeningTables:
+        """Read tables written by :meth:`to_parquet`.
+
+        Args:
+            path: Directory written by to_parquet.
+
+        Returns:
+            ScreeningTables with the stored key and creation time.
+        """
+        src = Path(path)
+        meta = json.loads((src / "meta.json").read_text())
+        return cls(
+            coarse=pd.read_parquet(src / "coarse.parquet"),
+            fine=pd.read_parquet(src / "fine.parquet"),
+            embeddings=pd.read_parquet(src / "embeddings.parquet"),
+            labels=pd.read_parquet(src / "labels.parquet"),
+            key=meta["key"],
+            created=meta["created"],
+        )
+
+    @classmethod
+    def empty(cls, key: dict[str, Any]) -> ScreeningTables:
+        """Return empty tables for a provenance key.
+
+        Args:
+            key: Provenance key.
+
+        Returns:
+            ScreeningTables with no rows.
+        """
+
+        def _frame() -> pd.DataFrame:
+            return pd.DataFrame(index=pd.Index([], name="cell_id", dtype=object))
+
+        return cls(
+            coarse=_frame(),
+            fine=_frame(),
+            embeddings=pd.DataFrame(columns=["cell_id", "year"]),
+            labels=_frame(),
+            key=_jsonable(key),
+        )
+
+
+@dataclass(frozen=True)
+class SiteSelectionResult:
+    """Output of identify_reference_sites / identify_degraded_sites (spec §5.5).
+
+    Attributes:
+        site_type: 'reference' or 'degraded'.
+        ranked: Top-N proposed sites, rank 1..N (EPSG:4326 cell polygons).
+        pool: Every scored candidate of the final rung (for audit / plotting).
+        focal_profile: Focal samples of condition-independent predictors; column
+            ``sample_set`` is 'mess' (native-scale MESS reference sample) or 'span'
+            (joint sample used for environmental-range spanning).
+        params: Every input, default, weight, tolerance and derived setting used.
+        provenance: Dataset IDs, versions and licence notes.
+        selection_matrix: CER-K SOP 0/1/2 matrix with evidence and H/M/L confidence.
+        layer_register: CER-K SOP §7 layer and query register.
+        screening: Raw per-cell reductions; pass as ``screening=`` to the other
+            workflow on the same focal site.
+        warnings: Human-readable warnings (ladder expanded, gate relaxed, ...).
+    """
+
+    site_type: SiteType
+    ranked: gpd.GeoDataFrame
+    pool: gpd.GeoDataFrame
+    focal_profile: pd.DataFrame
+    params: dict[str, Any]
+    provenance: dict[str, str]
+    selection_matrix: pd.DataFrame
+    layer_register: pd.DataFrame
+    screening: ScreeningTables
+    warnings: list[str]
+
+
+def dataclass_params(obj: Any) -> dict[str, Any]:
+    """Return a dataclass instance's fields as a plain dict (for ``params``).
+
+    Args:
+        obj: A dataclass instance.
+
+    Returns:
+        Dict of field name to value.
+    """
+    return asdict(obj)
