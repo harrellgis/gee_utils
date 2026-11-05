@@ -6,19 +6,31 @@ behind a consistent API: build cloud- and water-masked image collections, append
 a harmonized set of spectral indices, reduce over time, export to Drive or Earth
 Engine assets, and summarize/visualize the results. On top of the sensor builders
 it provides temporal compositing, zonal statistics over site polygons, local
-vector-file loading, and end-to-end site workflows.
+vector-file loading, end-to-end site workflows, and automated selection of TGBS
+reference and degraded sites.
 
-Supported sources: **Sentinel-2 SR**, **Landsat 5/7/8/9 C2 L2 SR**, **NASA HLS**
-(L30/S30), **MODIS** (MCD15A3H LAI/FPAR, MOD13Q1 NDVI/EVI, MCD64A1 burned area,
-MOD17A3HGF NPP, MOD44B vegetation continuous fields), **NASA SMAP** L4 soil
-moisture, **CHIRPS** precipitation, **OpenLandMap SM2RAIN** monthly precipitation
-climatology, **NASA Black Marble VIIRS** (VNP46A2) daily nighttime lights,
-**ESA WorldCover**, **Sentinel-1 SAR GRD**, **OPERA DSWx** surface water,
-**Dynamic World** LULC, **Copernicus DEM**/terrain, **Hansen** Global Forest
-Change, **Meta/WRI 1 m canopy height**, **iSDA** Africa topsoil carbon, **BII**
-(Biodiversity Intactness Index), **WDPA** protected-area vectors, and **Google Satellite Embedding V1** (AlphaEarth Foundations) annual
-64-D embeddings. It also includes a **LandTrendr** temporal-segmentation method
-subpackage built on the harmonized Landsat builders.
+Supported sources:
+
+- **Optical and SAR:** Sentinel-2 SR, Landsat 5/7/8/9 C2 L2 SR, NASA HLS
+  (L30/S30), Sentinel-1 SAR GRD.
+- **MODIS:** MCD15A3H LAI/FPAR, MOD13Q1 NDVI/EVI, MCD43A4 NBAR (NDMI/NBR),
+  MCD64A1 burned area, MOD17A3HGF NPP, MOD44B vegetation continuous fields.
+- **Climate and water:** CHIRPS v3 precipitation (daily or pentad), TerraClimate,
+  WorldClim V1 bioclim, OpenLandMap SM2RAIN precipitation climatology, NASA SMAP L4
+  soil moisture, OPERA DSWx surface water, MERIT Hydro HAND.
+- **Land cover and condition:** ESA WorldCover, Dynamic World, Hansen Global Forest
+  Change, Meta/WRI 1 m canopy height, TNC Global Human Modification, BII
+  (Biodiversity Intactness Index), SBTN Natural Lands, Global Mangrove Watch,
+  NASA Black Marble VIIRS (VNP46A2) nighttime lights, Google Satellite Embedding V1
+  (AlphaEarth Foundations) annual 64-D embeddings.
+- **Terrain, soil and ecology:** Copernicus DEM/terrain (incl. TPI), iSDA Africa soil
+  carbon and texture, SoilGrids WRB reference soil groups, VECEA potential natural
+  vegetation of eastern Africa, OpenLandMap PNV biomes, RESOLVE Ecoregions, WDPA
+  protected-area vectors.
+
+It also includes a **LandTrendr** temporal-segmentation method subpackage built on
+the harmonized Landsat builders, and a `thresholding` module for adaptive
+(edge-based Otsu) thresholds.
 
 ## Requirements
 
@@ -206,7 +218,77 @@ layers, summary = run_baseline_assessment(sites, export_folder="eetools_baseline
 ```
 
 `run_seasonal_site_timeseries` does the same as `run_site_timeseries` with
-seasonal composites.
+seasonal composites. `scale` is required for all site timeseries functions: choose
+the sensor's native resolution (e.g. 10 m for Sentinel-2, 30 m for HLS/Landsat).
+
+`get_chirps_collection` takes `cadence="daily"` (default) or `"pentad"`. Pentad totals
+over a year or more match the daily product at about 5x fewer image reads, so use
+`"pentad"` for annual or multi-year sums and `"daily"` for short windows.
+
+### Reference and degraded site selection
+
+`eetools.site_selection` proposes rank-ordered TGBS **reference** sites (most intact
+first) and **degraded** (zero-star) sites (most degraded first) for a focal site. The
+criteria follow the TGBS Manual §2.5/§4.1–4.2 and the CER-K reference-site SOP. Both
+entry points are also importable from `eetools.workflows`.
+
+```python
+from eetools.site_selection import (
+    ScreeningTables,
+    export_site_selection,
+    identify_degraded_sites,
+    identify_reference_sites,
+    result_to_feature_collection,
+)
+
+ref = identify_reference_sites("boundaries/focal.gpkg", auto_seeds="wdpa_strict")
+deg = identify_degraded_sites(
+    "boundaries/focal.gpkg",
+    project_start_year=2023,       # signature baseline = 2022
+    screening=ref.screening,       # reuse the reference run's reductions
+)
+
+ref.ranked                # GeoDataFrame: rank, role, rank_score, intactness, ...
+ref.selection_matrix      # CER-K SOP 0/1/2 matrix with evidence and H/M/L confidence
+ref.layer_register        # SOP §7 layer and query register
+ref.warnings              # ladder expansion, relaxed gates, fallbacks, ...
+
+ref.screening.to_parquet("outputs/screening")   # reload: ScreeningTables.from_parquet
+export_site_selection(ref, "outputs", project="TGBS", site="ITF")
+```
+
+How it works:
+
+- **Hard filters.** Candidates must match the focal site's national vegetation class
+  (VECEA) and soil group (SoilGrids WRB), be within ±300 m elevation and ±25% rainfall
+  (SOP defaults), and share its HAND class and coastal setting. Outside VECEA or WRB
+  coverage the class gate falls back to PNV biome + RESOLVE ecoregion and the soil gate
+  to iSDA texture, at lower confidence.
+- **Environmental similarity.** MESS on condition-independent predictors (terrain,
+  climate, soil texture, HAND).
+- **Condition.** Intactness or degradation from MODIS NDVI/NDMI/NBR state and trends, a
+  250 m fraction image (WorldCover or SBTN natural cover, Hansen loss, core area), gHM,
+  BII and WDPA. Degraded sites also score a signature: Satellite Embedding similarity to
+  the focal site's pre-project year, or a rule-based `degradation_type` profile.
+- **Search order.** A coarse screening grid in the focal UTM zone is refined into
+  focal-sized cells, and the search widens through tiers (25 / 50 / 150 km) only when
+  too few candidates pass. Reference shortlists are chosen to span the focal site's
+  environmental range.
+- **Earth Engine use.** Every reduction is memoised in `ScreeningTables`, and gating,
+  scoring and ranking run in pandas. Reusing the tables (in memory or from parquet)
+  costs no further EECU and gives identical results.
+
+VECEA and SoilGrids WRB are uploaded assets, not catalog datasets. Their IDs resolve as
+explicit argument → `EETOOLS_VECEA_ASSET` / `EETOOLS_SOILGRIDS_WRB_ASSET` environment
+variable → the default in `constants.py`. Pass `asset_overrides={"vecea": ...}` to use
+your own copy; `constants.VECEA_REPRODUCE_STEPS` explains how to rebuild VECEA (its
+licence terms are unresolved, so the default asset is private).
+
+Outputs are *proposed* sites for ecologist confirmation, not final designations.
+Confirm them with the survey sensor by passing `result_to_feature_collection(result)`
+to `run_site_timeseries` at the sensor's native scale.
+`examples/site_selection_handoff.ipynb` walks through this hand-off, the baseline vs
+end-year change terms, Dynamic World conversion pressure and the CHIRPS rain ratio.
 
 ### Exports and uploads
 
@@ -260,12 +342,21 @@ src/eetools/
 ├── utils.py          # date validation/windows, clipping, joins, reducers, resampling
 ├── vectors.py        # local vector files -> ee.Geometry / site FeatureCollections
 ├── zonal.py          # region reductions, sampling, class areas, histograms
-├── workflows.py      # end-to-end site timeseries and baseline assessment
+├── thresholding.py   # Otsu / edge-based Otsu adaptive thresholds
+├── workflows.py      # end-to-end site timeseries, baseline assessment, site-selection entry points
 ├── sensors/          # per-sensor masking.py + preprocessing.py, plus indices.py,
-│                     #   masking.py (shared helpers), and texture.py
+│                     #   masking.py (shared helpers), texture.py, and assets.py
+│                     #   (uploaded-asset ID resolution and pre-flight checks)
+├── site_selection/   # TGBS reference/degraded site selection: domain, predictors,
+│                     #   similarity, scoring, types, workflows
 ├── landtrendr/       # LandTrendr temporal-segmentation method (collection/segmentation/outputs)
 └── visualization/    # plots.py, tables.py, vis_params.py
+examples/
+└── site_selection_handoff.ipynb   # site selection -> survey-sensor confirmation
 ```
+
+Per-subpackage conventions for contributors live in `CLAUDE.md` files (root,
+`sensors/`, `site_selection/`, `landtrendr/`).
 
 ## Development
 
