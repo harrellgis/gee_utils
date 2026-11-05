@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `site_selection` subpackage implementing the 2026-11-05 simplified spec for TGBS reference
+  and degraded site selection, with entry points `identify_reference_sites` and
+  `identify_degraded_sites` (also re-exported from `eetools.workflows`). Reduce once, score in
+  Python: every Earth Engine reduction is memoised by `cell_id` in `ScreeningTables`, and the
+  gates, MESS, percentiles, ranking, thinning and spanning run in pandas.
+  - `domain`: client-side UTM grids (`build_candidate_grid`, `refine_cells`, nested exactly),
+    `derive_cell_size` (k in {1, 2, 4, 8}), tiers, area-share exclusions with geodesic
+    effective areas, and the declarative search ladder (`search_rungs`).
+  - `predictors`: Stage 1 90 m gate indicators (all relaxation levels), climate, terrain/soil,
+    MODIS NDVI (250 m) and MCD43A4 NDMI/NBR (500 m), the single 250 m fraction image
+    (WorldCover/SBTN fractions, Hansen loss, `core_frac`, gHM, BII, WDPA), embeddings, Dynamic
+    World ranked-site context, and the batched `reduce_cells` / `TableStore`.
+  - `similarity`: numpy MESS port with range floors, `drop_collinear`, `envelope_gate`
+    (coarse share/overlap rules vs fine 0.5 rules), embedding similarity and seed resolution.
+  - `scoring`: percentiles, intactness / degradation scores, rule-based signatures,
+    `thin_spatially`, `select_spanning_set` (management units, environmental coverage), the
+    CER-K SOP `build_selection_matrix` and `build_layer_register`.
+  - `types`: `EnvelopeTolerances`, `ReferenceWeights`, `DegradedWeights`, `ScreeningTables`
+    (parquet round-trip, provenance-key check), `SiteSelectionResult`.
+  - Hand-off helpers `result_to_feature_collection` and `export_site_selection`.
+- New sensor loaders: `terraclimate` (per-band scales; `pr` unscaled), `worldclim`,
+  `resolve`, `human_modification` (gHM v3), `pnv`, `vecea` and `soilgrids` (uploaded assets,
+  ID override via argument / `EETOOLS_*_ASSET` / constant, `sensors.assets.check_required_assets`),
+  and `hydro` (MERIT HAND, ocean mask, coast distance, SBTN natural lands, GMW 2020).
+- `get_soil_texture` (iSDA texture class, sand, clay), `get_tpi`, `get_modis_annual_ndvi`,
+  `annual_sens_slope`, `get_modis_nbar_collection` / `get_modis_annual_nbar_indices`
+  (MCD43A4, 8-day subsample, QA <= 1), `get_chirps_climatology`, `get_chirps_annual_totals`.
+- `pyarrow` dependency (ScreeningTables parquet I/O).
+
+### Fixed
+- `sensors.hansen.get_forest_loss_in_period` returned masked pixels (not 0) wherever no loss
+  occurred, because the source `lossyear` band is masked there. Area means over the result
+  therefore averaged loss pixels only (e.g. 0.97 instead of 0.05 for a 3 km disc in central
+  Kenya). `lossyear` is now unmasked to 0 first. Loss areas from summed `pixelArea()` were not
+  affected. Any earlier mean or fraction computed from this function overstated loss.
+
+### Changed
+- `get_chirps_collection` takes `cadence="daily" | "pentad"` (default unchanged) and
+  `process_chirps_image` keeps the `pentad` property; `validate_chirps_date_range` accepts a
+  `collection_id`.
 - `thresholding` module for adaptive (per-scene) thresholds with Otsu's method, as an
   alternative to fixed index thresholds (e.g. surface water from NDWI/MNDWI or Sentinel-1 dB,
   burn scars from dNBR, change maps):

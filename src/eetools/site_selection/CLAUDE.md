@@ -1,0 +1,11 @@
+# site_selection/ — conventions
+
+`site_selection/` is a **workflow** subpackage: it proposes TGBS reference and degraded sites for a focal site (spec: vault `raw/notes/gee_utils/2026-11-05-gee-utils-site-selection-simplified-spec-design.md`). Design rule: **reduce once, score in Python.** Earth Engine is touched only by `predictors.py` (and the focal geometry read in `domain.load_focal_geometry`); everything in `domain`, `similarity` and `scoring` is pure pandas/numpy and unit-tested without credentials.
+
+- **Grids are client-side.** Cells are `(size, ix, iy)` in the focal UTM zone with corners at `ix*size`; `cell_id = "<size>_<ix>_<iy>"`. Fine cells nest exactly in coarse cells and the 250 m fraction-image grid nests in both, because `k ∈ ALLOWED_K = (1, 2, 4, 8)`. Only integer indices travel to EE (`cells_feature_collection`).
+- **`ScreeningTables` hold raw reductions only**, one `_done_<family>` flag per reduction family, keyed by `cell_id` (embeddings by `(cell_id, year)`). Never store pools, MESS, percentiles or ranks there. Anything that changes a raw value must be in the provenance key built in `workflows._run`; tolerances and weights must not be.
+- **Determinism:** pools are sorted by `cell_id` and ties broken by `cell_id` (`scoring.sort_by_score`) so a run on reused tables is bit-identical to a fresh run. Keep it that way.
+- **Joins:** use `workflows._join_new` (adds only missing columns). Build pools from fresh `store.table(level)` values first: earlier snapshots go stale after `ensure(...)` adds families.
+- Each layer family is reduced at its native scale (90 m gates, ~4.6 km climate, 100 m terrain/soil, 250 m NDVI/fractions, 500 m NBAR, 30 m canopy); never oversample to `analysis_scale_m`. Focal-plus-buffer pixels are masked with `RunContext.outside_mask()` before every candidate reduction (not climate).
+- Thresholds, ladders, class/soil group tables and profiles live in `constants.py` (`SEARCH_LADDERS`, `VECEA_CLASS_GROUPS`, `WRB_RELATED_GROUPS`, `MESS_RANGE_FLOORS`, `SOP_MATRIX_THRESHOLDS`, `DEGRADATION_TYPE_PROFILES`).
+- Hansen `lossyear` is masked where no loss occurred: always `unmask(0)` before comparing years (as `sensors.hansen.get_forest_loss_in_period` now does).

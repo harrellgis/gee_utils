@@ -136,6 +136,10 @@ def get_forest_loss_in_period(
     year falls within ``[start_year, end_year]`` (inclusive) and intersects it with the
     year-2000 forest mask.
 
+    The source ``lossyear`` band is masked wherever no loss occurred, so it is unmasked
+    to 0 first: pixels without loss in the period are 0, not masked, and area means
+    (e.g. a loss fraction) are correct.
+
     Args:
         aoi: Area of interest as ee.Geometry; the result is clipped to it.
         start_year: First loss year to include (inclusive); must be >= HANSEN_LOSSYEAR_EPOCH + 1.
@@ -159,7 +163,9 @@ def get_forest_loss_in_period(
 
     gfc = get_forest_change_image()
     forest2000 = gfc.select(HANSEN_TREECOVER_BAND).gte(tree_cover_threshold)
-    lossyear = gfc.select(HANSEN_LOSSYEAR_BAND)
+    # lossyear is masked where no loss occurred; without unmask(0) every no-loss pixel
+    # would be masked and an area mean would only see loss pixels.
+    lossyear = gfc.select(HANSEN_LOSSYEAR_BAND).unmask(0)
 
     start_code = start_year - HANSEN_LOSSYEAR_EPOCH
     end_code = end_year - HANSEN_LOSSYEAR_EPOCH

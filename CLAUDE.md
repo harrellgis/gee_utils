@@ -47,7 +47,7 @@ CI gates: ruff, `black --check`, mypy, `pytest -m "not ee"` on Python 3.11 and 3
 
 ## Architecture
 
-Single package `eetools` under `src/`. Per-sensor conventions live in `src/eetools/sensors/CLAUDE.md`; the LandTrendr method subpackage in `src/eetools/landtrendr/CLAUDE.md`.
+Single package `eetools` under `src/`. Per-sensor conventions live in `src/eetools/sensors/CLAUDE.md`; the LandTrendr method subpackage in `src/eetools/landtrendr/CLAUDE.md`; the TGBS reference/degraded site-selection workflows (`identify_reference_sites`, `identify_degraded_sites`) in `src/eetools/site_selection/CLAUDE.md`.
 
 ### Key Conventions
 

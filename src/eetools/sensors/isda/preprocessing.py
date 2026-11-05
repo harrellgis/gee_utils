@@ -1,6 +1,48 @@
+from typing import Literal
+
 import ee
 
-from eetools.constants import ISDA_CARBON_COLLECTION, ISDA_CARBON_TOPSOIL_BAND
+from eetools.constants import (
+    ISDA_CARBON_COLLECTION,
+    ISDA_CARBON_TOPSOIL_BAND,
+    ISDA_CLAY_IMAGE,
+    ISDA_SAND_IMAGE,
+    ISDA_TEXTURE_IMAGE,
+)
+
+
+def get_soil_texture(
+    aoi: ee.Geometry | None = None,
+    depth: Literal["0_20", "20_50"] = "0_20",
+) -> ee.Image:
+    """Load iSDAsoil texture class, sand and clay content for one depth.
+
+    These are condition-independent edaphic predictors (unlike soil carbon). Sand and
+    clay are stored as integer % with no back-transform (checked against the catalog
+    2026-11-05); the texture class is the USDA texture class code.
+
+    Args:
+        aoi: Optional ee.Geometry to clip to.
+        depth: Depth interval, '0_20' (default) or '20_50' cm.
+
+    Returns:
+        ee.Image with bands 'texture_class' (int), 'sand' and 'clay' (%), in the
+        native 30 m projection.
+
+    Raises:
+        ValueError: If depth is not '0_20' or '20_50'.
+    """
+    if depth not in ("0_20", "20_50"):
+        raise ValueError("depth must be '0_20' or '20_50'.")
+    texture = ee.Image(ISDA_TEXTURE_IMAGE).select(
+        [f"texture_{depth}"], ["texture_class"]
+    )
+    sand = ee.Image(ISDA_SAND_IMAGE).select([f"mean_{depth}"], ["sand"])
+    clay = ee.Image(ISDA_CLAY_IMAGE).select([f"mean_{depth}"], ["clay"])
+    image = texture.addBands(sand.toFloat()).addBands(clay.toFloat())
+    if aoi is not None:
+        image = image.clip(aoi)
+    return image
 
 
 def get_soil_carbon(aoi: ee.Geometry | None = None) -> ee.Image:
