@@ -8,10 +8,15 @@ import pytest
 
 from eetools.site_selection.scoring import (
     MatrixContext,
+    anchor_check,
+    anchor_constraint,
+    baseline_window,
     build_layer_register,
     build_selection_matrix,
     degradation_score,
+    focal_baseline_pct,
     intactness_score,
+    pathway_gate,
     percentile_normalise,
     select_spanning_set,
     signature_from_rules,
@@ -50,7 +55,13 @@ def test_weights_must_sum_to_one():
     with pytest.raises(ValueError):
         ReferenceWeights(naturalness=0.5)
     with pytest.raises(ValueError):
-        DegradedWeights(signature=0.1)
+        DegradedWeights(perf_deficit=0.5)
+    # The signature is a pathway gate since 2026-11-07, never a ranking weight.
+    with pytest.raises(TypeError):
+        DegradedWeights(signature=0.1)  # type: ignore[call-arg]
+    w = DegradedWeights()
+    assert w.perf_deficit == pytest.approx(3 / 13)
+    assert w.loss == pytest.approx(1 / 13)
 
 
 def _pool(n=20, seed=0):
@@ -85,12 +96,105 @@ def test_intactness_weights_and_forest_shift():
     assert res.score.between(0, 1).all()
 
 
-def test_degradation_redistributes_loss_and_signature():
+def test_degradation_redistributes_loss_and_ignores_signature():
     res = degradation_score(_pool(), is_forest=False)
     assert "loss" not in res.weights
+    assert "signature" not in res.weights
     assert sum(res.weights.values()) == pytest.approx(1)
-    no_sig = degradation_score(_pool(), use_signature=False)
-    assert "signature" not in no_sig.weights
+    forest = degradation_score(_pool(), is_forest=True)
+    assert forest.weights["loss"] == pytest.approx(1 / 13)
+    # signature_sim in the pool does not change the score (it gates, never ranks)
+    other = _pool().assign(signature_sim=np.linspace(0, 1, 20))
+    pd.testing.assert_series_equal(res.score, degradation_score(other).score)
+
+
+def test_baseline_window():
+    assert baseline_window(2022) == (2019, 2021)
+    assert baseline_window(2003) == (2001, 2002)
+    assert baseline_window(2002) == (2001, 2001)
+    assert baseline_window(2001) is None
+
+
+_FOCAL = {"ndvi_base": 0.40, "ndvi_state": 0.55, "ndmi_base": 0.10, "ndmi_state": 0.20}
+
+
+def _anchor_df(**cols):
+    base = {"ndvi_base": 0.3, "ndvi_state": 0.3, "ndmi_base": 0.0, "ndmi_state": 0.0}
+    base.update(cols)
+    return pd.DataFrame([base], index=["c"])
+
+
+def test_anchor_constraint_both_windows_and_both_indices():
+    ok = anchor_constraint(_anchor_df(), _FOCAL)
+    assert ok.loc["c", "below_baseline"]
+    # healthier than the focal site at baseline, degraded since -> must fail
+    late = anchor_constraint(_anchor_df(ndvi_base=0.45, ndvi_state=0.2), _FOCAL)
+    assert not late.loc["c", "below_baseline_ndvi"]
+    assert not late.loc["c", "below_baseline"]
+    # current state above the focal baseline (focal improved): ceiling is min(base, now)
+    above = anchor_constraint(_anchor_df(ndvi_state=0.45), _FOCAL)
+    assert not above.loc["c", "below_baseline"]
+    # NDVI fine but NDMI fails -> overall fails, and the column says which
+    ndmi = anchor_constraint(_anchor_df(ndmi_base=0.15), _FOCAL)
+    assert ndmi.loc["c", "below_baseline_ndvi"]
+    assert not ndmi.loc["c", "below_baseline_ndmi"]
+    assert not ndmi.loc["c", "below_baseline"]
+    # focal declined: current ceiling is the focal current value
+    declined = {**_FOCAL, "ndvi_state": 0.25}
+    assert not anchor_constraint(_anchor_df(), declined).loc["c", "below_baseline"]
+
+
+def test_anchor_constraint_missing_values():
+    # a NaN candidate value cannot be verified -> fails
+    nan_cand = anchor_constraint(_anchor_df(ndvi_base=np.nan), _FOCAL)
+    assert not nan_cand.loc["c", "below_baseline"]
+    # no focal baseline -> only the current-window test applies
+    no_base = {"ndvi_state": 0.55, "ndmi_state": 0.20}
+    res = anchor_constraint(_anchor_df(ndvi_base=0.9, ndmi_base=0.9), no_base)
+    assert res.loc["c", "below_baseline"]
+
+
+def test_pathway_gate():
+    g = pathway_gate(pd.Series([0.0, 0.49, 0.5, 1.0, np.nan]), 0.5)
+    assert list(g) == ["failed", "failed", "pass", "pass", "failed"]
+
+
+def test_worked_example_zero_star_beats_baseline_look_alike():
+    # A: near zero-star but a weak baseline match; B: a moderately degraded
+    # look-alike. With the signature as a gate (both pass), A must rank above B.
+    pool = _pool(n=10, seed=3).drop(columns="signature_sim")
+    pool.loc["c0", ["ndvi_state", "ndmi_state", "natural_frac", "ghm"]] = [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+    pool.loc["c0", ["ndvi_trend", "nbr_trend"]] = [-0.05, -0.05]
+    pool.loc["c1", ["ndvi_state", "ndmi_state", "natural_frac", "ghm"]] = [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+    ]
+    score = degradation_score(pool).score
+    assert score["c0"] > score["c1"]
+
+
+def test_focal_baseline_pct_and_anchor_check():
+    df = pd.DataFrame(
+        {"ndvi_state": [0.1, 0.39, 0.9], "ndmi_state": [0.0, 0.0, 0.0]},
+        index=["deep", "close", "above_ref"],
+    )
+    pcts = focal_baseline_pct(df, _FOCAL, {"ndvi": 0.9, "ndmi": 0.3})
+    assert pcts.loc["deep", "focal_baseline_pct_ndvi"] == pytest.approx(0.375)
+    assert pcts.loc["close", "focal_baseline_pct_ndvi"] == pytest.approx(
+        (0.40 - 0.39) / (0.9 - 0.39)
+    )
+    assert np.isnan(pcts.loc["above_ref", "focal_baseline_pct_ndvi"])
+    chk = anchor_check(pcts, 0.3)
+    assert chk["deep"] == "review"  # NDVI 0.375 and NDMI 0.333 exceed 0.3
+    assert chk["close"] == "review"  # NDMI 0.10 / 0.30 = 0.333 > 0.3
+    assert list(anchor_check(pcts, 0.5)) == ["ok", "ok", "ok"]
 
 
 def test_signature_from_rules_orients_terms():
@@ -311,6 +415,28 @@ def test_matrix_relaxation_eligibility_and_size():
     assert m.loc["strict", "size_core_score"] == 2
     # 40 ha natural vs a 50 ha target: >= 50% of the target -> 1
     assert m.loc["small", "size_core_score"] == 1
+
+
+def test_degraded_matrix_below_baseline_is_mandatory():
+    cands = pd.DataFrame(
+        [
+            _cand(
+                below_baseline=True, below_baseline_ndvi=True, below_baseline_ndmi=True
+            ),
+            _cand(
+                below_baseline=False,
+                below_baseline_ndvi=True,
+                below_baseline_ndmi=False,
+            ),
+        ],
+        index=["anchor", "too_green"],
+    )
+    m = build_selection_matrix(cands, _ctx(site_type="degraded"))
+    assert m.loc["anchor", "below_baseline_score"] == 2
+    assert m.loc["too_green", "below_baseline_score"] == 0
+    assert "ndmi" in m.loc["too_green", "below_baseline_evidence"]
+    assert m.loc["anchor", "mandatory_met"]
+    assert not m.loc["too_green", "mandatory_met"]
 
 
 def test_layer_register_marks_thresholds_low_confidence():

@@ -147,6 +147,8 @@ class RunContext:
     substrate_fallback: bool = False
     texture_code: int | None = None
     hand_riparian: bool = False
+    baseline_start_year: int | None = None  # degraded anchor window (None: not used)
+    baseline_end_year: int | None = None
 
     def outside_mask(self) -> ee.Image:
         """1 outside the focal site + buffer (and user exclusions), 0 inside."""
@@ -365,6 +367,15 @@ def build_ndvi_metrics(ctx: RunContext) -> ee.Image:
     )
 
 
+def _ndmi_state(ctx: RunContext, annual: ee.ImageCollection) -> ee.Image:
+    return (
+        annual.filter(ee.Filter.gte("year", ctx.state_start_year))
+        .select("NDMI")
+        .median()
+        .rename("ndmi_state")
+    )
+
+
 def build_nbar_metrics(ctx: RunContext) -> ee.Image:
     """MCD43A4 NDMI state and NBR trend (500 m), focal-masked.
 
@@ -377,14 +388,84 @@ def build_nbar_metrics(ctx: RunContext) -> ee.Image:
     annual = get_modis_annual_nbar_indices(
         ctx.search_ee, ctx.trend_start_year, ctx.end_year
     )
-    ndmi = (
-        annual.filter(ee.Filter.gte("year", ctx.state_start_year))
-        .select("NDMI")
-        .median()
-        .rename("ndmi_state")
-    )
     nbr = annual_sens_slope(annual, "NBR").rename("nbr_trend")
-    return ndmi.addBands(nbr).updateMask(ctx.outside_mask())
+    return _ndmi_state(ctx, annual).addBands(nbr).updateMask(ctx.outside_mask())
+
+
+def build_baseline_state(ctx: RunContext, index: str, masked: bool = True) -> ee.Image:
+    """Baseline-window state of one anchor index (degraded anchor constraint, D1).
+
+    Median of annual means over [baseline_start_year, baseline_end_year], the same
+    statistic as the current ``*_state`` window, so the two windows compare
+    like-for-like.
+
+    Args:
+        ctx: RunContext with baseline_start_year / baseline_end_year set.
+        index: 'ndvi' (MOD13Q1, 250 m) or 'ndmi' (MCD43A4, 500 m).
+        masked: Mask out the focal site + buffer (candidate reductions).
+
+    Returns:
+        ee.Image with the single band ``<index>_base``.
+
+    Raises:
+        ValueError: If the baseline window is unset or the index is unknown.
+    """
+    start, end = ctx.baseline_start_year, ctx.baseline_end_year
+    if start is None or end is None:
+        raise ValueError("RunContext has no baseline window.")
+    if index == "ndvi":
+        annual = get_modis_annual_ndvi(ctx.search_ee, start, end).select("NDVI")
+    elif index == "ndmi":
+        annual = get_modis_annual_nbar_indices(ctx.search_ee, start, end).select("NDMI")
+    else:
+        raise ValueError(f"Unknown anchor index {index!r}.")
+    img = annual.median().rename(f"{index}_base")
+    return img.updateMask(ctx.outside_mask()) if masked else img
+
+
+def reduce_focal_anchor_state(ctx: RunContext) -> dict[str, float]:
+    """Focal-site means of the anchor indices in the baseline and current windows.
+
+    One round trip. The images are unmasked (the focal site is what is measured), and
+    each index is reduced at its native MODIS scale. reduceRegion weights partially
+    covered pixels, so focal sites smaller than one pixel still get a value.
+
+    Args:
+        ctx: RunContext (baseline window optional).
+
+    Returns:
+        {'ndvi_state', 'ndmi_state', 'ndvi_base', 'ndmi_base'} -> float (NaN where
+        unavailable; the *_base keys are NaN when the context has no baseline window).
+    """
+
+    def mean(img: ee.Image, scale: float) -> ee.Dictionary:
+        return img.reduceRegion(
+            ee.Reducer.mean(),
+            ctx.focal_ee,
+            scale=scale,
+            crs=ctx.crs,
+            tileScale=ctx.tile_scale,
+            maxPixels=int(1e10),
+        )
+
+    ndvi_annual = get_modis_annual_ndvi(
+        ctx.focal_ee, ctx.state_start_year, ctx.end_year
+    )
+    nbar_annual = get_modis_annual_nbar_indices(
+        ctx.focal_ee, ctx.state_start_year, ctx.end_year
+    )
+    ndvi = ndvi_annual.select("NDVI").median().rename("ndvi_state")
+    ndmi = _ndmi_state(ctx, nbar_annual)
+    if ctx.baseline_start_year is not None:
+        ndvi = ndvi.addBands(build_baseline_state(ctx, "ndvi", masked=False))
+        ndmi = ndmi.addBands(build_baseline_state(ctx, "ndmi", masked=False))
+    vals = cast(
+        dict,
+        mean(ndvi, MODIS_VI_SCALE_M).combine(mean(ndmi, MODIS_NBAR_SCALE_M)).getInfo()
+        or {},
+    )
+    keys = ("ndvi_state", "ndmi_state", "ndvi_base", "ndmi_base")
+    return {k: float("nan") if vals.get(k) is None else float(vals[k]) for k in keys}
 
 
 def build_rue_trend(ctx: RunContext) -> ee.Image:
@@ -1018,6 +1099,14 @@ def families(ctx: RunContext) -> dict[str, Family]:
             FRACTION_SCALE_M,
             "cond",
         ),
+        # Degraded anchor (D1): baseline-window state, fine cells only. Separate
+        # families so reference-run tables are completed rather than invalidated.
+        "ndvi_base": Family(
+            "ndvi_base", ("ndvi_base",), None, MODIS_VI_SCALE_M, "mean"
+        ),
+        "nbar_base": Family(
+            "nbar_base", ("ndmi_base",), None, MODIS_NBAR_SCALE_M, "mean"
+        ),
         "rue": Family("rue", ("rue_trend",), None, MODIS_VI_SCALE_M, "mean"),
         "viirs": Family("viirs", ("viirs",), None, VIIRS_REDUCE_SCALE_M, "mean"),
         "canopy": Family(
@@ -1041,6 +1130,8 @@ def family_image_fn(name: str, ctx: RunContext) -> Any:
         "env": lambda: build_terrain_soil_stack(ctx),
         "ndvi": lambda: build_ndvi_metrics(ctx),
         "nbar": lambda: build_nbar_metrics(ctx),
+        "ndvi_base": lambda: build_baseline_state(ctx, "ndvi"),
+        "nbar_base": lambda: build_baseline_state(ctx, "ndmi"),
         "fraction": lambda: build_fraction_image(ctx),
         "rue": lambda: build_rue_trend(ctx),
         "viirs": lambda: build_viirs(ctx),

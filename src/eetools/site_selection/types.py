@@ -26,6 +26,12 @@ SiteType = Literal["reference", "degraded"]
 
 _WEIGHT_TOL = 1e-6
 
+# Provenance-key fields a run may *complete*: tables whose key has None here (built by
+# a run that does not use the field, e.g. a reference run without
+# project_start_year) are reused, and the reusing run records its value. A field only
+# mismatches when both keys set it to different values.
+COMPLETABLE_KEY_FIELDS = ("project_start_year",)
+
 
 class ScreeningTablesMismatch(ValueError):
     """Raised when supplied ScreeningTables were built with a different provenance key."""
@@ -126,20 +132,22 @@ class ReferenceWeights:
 
 @dataclass(frozen=True)
 class DegradedWeights:
-    """Degradation-score weights (spec §5.3). Must sum to 1.
+    """Degradation-score weights (spec §5.3, amended §0a D3). Must sum to 1.
 
-    ``loss`` applies to forest strata only; otherwise it is redistributed
-    proportionally to the four STATE terms.
+    STATE + TRAJECTORY only. The embedding/rules signature is a pathway gate, not a
+    ranking weight (a weight penalised sites further along the same pathway). The
+    defaults are the original weights without the 0.35 signature term, renormalised
+    (thirteenths). ``loss`` applies to forest strata only; otherwise it is
+    redistributed proportionally to the four STATE terms.
     """
 
-    perf_deficit: float = 0.15
-    moist_deficit: float = 0.10
-    unnatural: float = 0.15
-    pressure: float = 0.10
-    browning: float = 0.05
-    nbr_decline: float = 0.05
-    loss: float = 0.05
-    signature: float = 0.35
+    perf_deficit: float = 3 / 13
+    moist_deficit: float = 2 / 13
+    unnatural: float = 3 / 13
+    pressure: float = 2 / 13
+    browning: float = 1 / 13
+    nbr_decline: float = 1 / 13
+    loss: float = 1 / 13
 
     def __post_init__(self) -> None:
         _check_weights(self)
@@ -218,7 +226,13 @@ class ScreeningTables:
         mine = _jsonable(self.key)
         theirs = _jsonable(key)
         diff = sorted(
-            k for k in set(mine) | set(theirs) if mine.get(k) != theirs.get(k)
+            k
+            for k in set(mine) | set(theirs)
+            if mine.get(k) != theirs.get(k)
+            and not (
+                k in COMPLETABLE_KEY_FIELDS
+                and (mine.get(k) is None or theirs.get(k) is None)
+            )
         )
         if diff:
             raise ScreeningTablesMismatch(

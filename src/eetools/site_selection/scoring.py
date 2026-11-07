@@ -13,9 +13,12 @@ import numpy as np
 import pandas as pd
 
 from eetools.constants import (
+    ANCHOR_INDICES,
+    DEGRADED_BASELINE_WINDOW_YEARS,
     FOREST_MIN_CANOPY_M,
     INTACTNESS_WEAK_NATURAL_FRAC,
     INTACTNESS_WEAK_NATURALNESS,
+    MODIS_FIRST_FULL_YEAR,
     PREDICTOR_LABELS,
     SOP_MATRIX_THRESHOLDS,
     SPAN_ENV_COVERAGE_SD,
@@ -173,20 +176,17 @@ def degradation_score(
     df: pd.DataFrame,
     weights: DegradedWeights | None = None,
     is_forest: bool = False,
-    use_signature: bool = True,
 ) -> ScoreResult:
-    """Degraded-site score: STATE + TRAJECTORY + SIGNATURE (spec §5.3).
+    """Degraded-site score: STATE + TRAJECTORY (spec §5.3, amended §0a D3).
 
-    ``signature_sim`` (column) enters as pct(signature_sim). Without it
-    (``use_signature=False``, e.g. coarse screening before embeddings) the remaining
-    weights are renormalised. ``loss`` applies to forest strata only; otherwise its
+    The signature is not a ranking term: it is the pathway gate (:func:`pathway_gate`),
+    applied before scoring. ``loss`` applies to forest strata only; otherwise its
     weight goes proportionally to the four STATE terms.
 
     Args:
-        df: Candidate pool.
+        df: Candidate pool (percentiles are taken over it).
         weights: DegradedWeights (defaults if None).
         is_forest: Focal stratum is forest/woodland.
-        use_signature: Include the signature term.
 
     Returns:
         ScoreResult with the degradation score.
@@ -200,7 +200,6 @@ def degradation_score(
         "browning": percentile_normalise(-_col(df, "ndvi_trend")),
         "nbr_decline": percentile_normalise(-_col(df, "nbr_trend")),
         "loss": percentile_normalise(_col(df, "forest_loss_frac")),
-        "signature": percentile_normalise(_col(df, "signature_sim")),
     }
     wts = {
         "perf_deficit": w.perf_deficit,
@@ -210,7 +209,6 @@ def degradation_score(
         "browning": w.browning,
         "nbr_decline": w.nbr_decline,
         "loss": w.loss,
-        "signature": w.signature,
     }
     if not is_forest:
         state = ["perf_deficit", "moist_deficit", "unnatural", "pressure"]
@@ -218,9 +216,126 @@ def degradation_score(
         for k in state:
             wts[k] += wts["loss"] * wts[k] / state_total
         wts["loss"] = 0.0
-    if not use_signature:
-        wts["signature"] = 0.0
     return _combine(comps, wts)
+
+
+# --------------------------------------------------------------------------- #
+# Degraded anchor (2026-11-07 amendment, spec §0a)                             #
+# --------------------------------------------------------------------------- #
+def baseline_window(project_start_year: int) -> tuple[int, int] | None:
+    """Baseline window for the anchor constraint: the complete years before start.
+
+    ``[start - DEGRADED_BASELINE_WINDOW_YEARS, start - 1]``, clipped to the first
+    complete MODIS year. None when no MODIS year precedes the start.
+
+    Args:
+        project_start_year: Year restoration started.
+
+    Returns:
+        (first_year, last_year) inclusive, or None.
+    """
+    last = int(project_start_year) - 1
+    first = max(last - DEGRADED_BASELINE_WINDOW_YEARS + 1, MODIS_FIRST_FULL_YEAR)
+    return (first, last) if last >= first else None
+
+
+def anchor_constraint(
+    df: pd.DataFrame,
+    focal: Mapping[str, float],
+    indices: Sequence[str] = ANCHOR_INDICES,
+) -> pd.DataFrame:
+    """D1: is each candidate at least as degraded as the focal site, in both windows?
+
+    For each index ``x``: ``D.x_base <= F.x_base`` and
+    ``D.x_state <= min(F.x_base, F.x_state)``. Like-for-like windows keep the focal
+    baseline at or above 0% on the TGBS rescale whether the downstream rescale uses
+    a fixed or a time-varying degraded value; the ``min`` keeps the anchor at or
+    below the focal site throughout. A focal value that is NaN drops that test (the
+    caller warns); a candidate value that is NaN fails it (it cannot be verified).
+
+    Args:
+        df: Candidates with ``<x>_state`` and ``<x>_base`` columns.
+        focal: Focal values keyed ``<x>_state`` / ``<x>_base``.
+        indices: Anchor indices (default ANCHOR_INDICES = ndvi, ndmi).
+
+    Returns:
+        DataFrame with ``below_baseline_<x>`` per index and ``below_baseline`` (all).
+    """
+    out = pd.DataFrame(index=df.index)
+    for x in indices:
+        f_base = focal.get(f"{x}_base", np.nan)
+        f_now = focal.get(f"{x}_state", np.nan)
+        ok = pd.Series(True, index=df.index)
+        if pd.notna(f_base):
+            ok &= (_col(df, f"{x}_base") <= f_base).fillna(False)
+        ceiling = (
+            np.nanmin([f_base, f_now]) if pd.notna([f_base, f_now]).any() else np.nan
+        )
+        if pd.notna(ceiling):
+            ok &= (_col(df, f"{x}_state") <= ceiling).fillna(False)
+        out[f"below_baseline_{x}"] = ok.astype(bool)
+    out["below_baseline"] = out.all(axis=1) if len(indices) else True
+    return out
+
+
+def pathway_gate(signature_pct: pd.Series, threshold: float) -> pd.Series:
+    """D2: 'pass' where pct(signature_sim) >= threshold, else 'failed'.
+
+    Args:
+        signature_pct: Within-pool percentile of signature_sim (NaN fails).
+        threshold: Minimum percentile (``pathway_gate_pct``).
+
+    Returns:
+        Series of 'pass' / 'failed'.
+    """
+    passed = (pd.to_numeric(signature_pct, errors="coerce") >= threshold).fillna(False)
+    return pd.Series(np.where(passed, "pass", "failed"), index=signature_pct.index)
+
+
+def focal_baseline_pct(
+    df: pd.DataFrame,
+    focal: Mapping[str, float],
+    reference: Mapping[str, float],
+    indices: Sequence[str] = ANCHOR_INDICES,
+) -> pd.DataFrame:
+    """D4: where the focal baseline sits on each candidate's 0-100% scale.
+
+    ``(F.x_base - D.x_state) / (R.x - D.x_state)``. Uses the focal current state if
+    the baseline is unavailable. Reported only, never a filter.
+
+    Args:
+        df: Candidates with ``<x>_state``.
+        focal: Focal values keyed ``<x>_base`` / ``<x>_state``.
+        reference: Reference (100%) value per index, keyed ``x``.
+        indices: Anchor indices.
+
+    Returns:
+        DataFrame with ``focal_baseline_pct_<x>`` (fractions; NaN if undefined).
+    """
+    out = pd.DataFrame(index=df.index)
+    for x in indices:
+        f = focal.get(f"{x}_base", np.nan)
+        if pd.isna(f):
+            f = focal.get(f"{x}_state", np.nan)
+        r = reference.get(x, np.nan)
+        d = _col(df, f"{x}_state")
+        span = r - d
+        out[f"focal_baseline_pct_{x}"] = ((f - d) / span).where(span > 0)
+    return out
+
+
+def anchor_check(pcts: pd.DataFrame, threshold: float) -> pd.Series:
+    """D4: 'review' where any focal_baseline_pct exceeds ``threshold``, else 'ok'.
+
+    Args:
+        pcts: Output of :func:`focal_baseline_pct`.
+        threshold: ``anchor_review_pct``.
+
+    Returns:
+        Series of 'review' / 'ok'.
+    """
+    review = (pcts > threshold).any(axis=1) if pcts.shape[1] else False
+    return pd.Series(np.where(review, "review", "ok"), index=pcts.index)
 
 
 def intactness_flag(df: pd.DataFrame) -> pd.Series:
@@ -595,7 +710,13 @@ REFERENCE_MANDATORY = (
     "rainfall",
     "integrity",
 )
-DEGRADED_MANDATORY = ("national_class", "substrate", "elevation", "rainfall")
+DEGRADED_MANDATORY = (
+    "national_class",
+    "substrate",
+    "elevation",
+    "rainfall",
+    "below_baseline",
+)
 HUMAN_CRITERIA = ("data_availability", "field_access", "successional_phase")
 
 
@@ -776,10 +897,33 @@ def build_selection_matrix(
                 f"{_fmt(c.get('ndvi_performance'))})",
                 "M",
             )
+            bb = bool(c.get("below_baseline", False))
+            failing = [
+                x
+                for x in ANCHOR_INDICES
+                if not bool(c.get(f"below_baseline_{x}", False))
+            ]
+            r["below_baseline"] = (
+                2 if bb else 0,
+                (
+                    "at least as degraded as the focal site (baseline and current "
+                    "windows)"
+                    if bb
+                    else f"not below the focal site on {','.join(failing) or 'n/a'}"
+                )
+                + "; focal_baseline_pct "
+                + ", ".join(
+                    f"{x} {_fmt(c.get(f'focal_baseline_pct_{x}'))}"
+                    for x in ANCHOR_INDICES
+                )
+                + f"; anchor_check {c.get('anchor_check')}",
+                "M",
+            )
             sp = c.get("signature_pct", np.nan)
             r["pathway"] = (
                 2 if sp >= t["pathway_2"] else (1 if sp >= t["pathway_1"] else 0),
-                f"signature percentile {_fmt(sp)}",
+                f"signature percentile {_fmt(sp)} (gate: {c.get('pathway_gate')}; "
+                "informational)",
                 "M",
             )
         row: dict[str, Any] = {}

@@ -67,6 +67,19 @@ def test_screening_tables_key_mismatch_names_fields():
         t.check_key({"end_year": 2024, "k": 8})
 
 
+def test_screening_tables_project_start_year_is_completable():
+    # Reference-run tables (no project_start_year) are completed by a degraded run.
+    t = _tables()
+    t.check_key({"end_year": 2025, "k": 8, "project_start_year": 2022})
+    t.check_key({"end_year": 2025, "k": 8, "project_start_year": None})
+    # Tables completed for one start year reject a different one, but a reference
+    # run (None) can still reuse them.
+    t22 = ScreeningTables.empty({"end_year": 2025, "k": 8, "project_start_year": 2022})
+    t22.check_key({"end_year": 2025, "k": 8, "project_start_year": None})
+    with pytest.raises(ScreeningTablesMismatch, match="project_start_year"):
+        t22.check_key({"end_year": 2025, "k": 8, "project_start_year": 2023})
+
+
 def test_screening_tables_hold_raw_values_only():
     t = _tables()
     for df in (t.coarse, t.fine):
