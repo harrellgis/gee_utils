@@ -1263,6 +1263,14 @@ VIIRS_REDUCE_SCALE_M = 500
 # Degraded workflow.
 DEGRADED_EXCLUDE_MAX_FRAC = 0.5  # drop cells with >= this water or built-up fraction
 PA_EXCLUDE_MIN_SHARE = 0.5  # exclude_protected: drop cells this share inside a PA
+# Degraded anchor (2026-11-07 amendment): the degraded site is the 0% end of the TGBS
+# reference = 100% / degraded = 0% rescale, so it must be at least as degraded as the
+# focal site in the baseline and current windows on these indices.
+ANCHOR_INDICES = ("ndvi", "ndmi")
+DEGRADED_BASELINE_WINDOW_YEARS = 3  # baseline = the 3 complete years before start
+MODIS_FIRST_FULL_YEAR = 2001  # first complete MOD13Q1 / MCD43A4 year
+PATHWAY_GATE_PCT = 0.5  # [L] min pct(signature_sim) for the pathway gate
+ANCHOR_REVIEW_PCT = 0.5  # [L] focal_baseline_pct above this -> anchor_check "review"
 # Rules-mode signature profiles: terms are (column, orientation), +1 = higher means
 # "more like this degradation type"; layers name the extra reductions a profile needs.
 DEGRADATION_TYPE_PROFILES: dict[str, dict[str, list]] = {

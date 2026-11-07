@@ -19,6 +19,8 @@ import pandas as pd
 import shapely
 
 from eetools.constants import (
+    ANCHOR_INDICES,
+    ANCHOR_REVIEW_PCT,
     CHIRPS_PENTAD_COLLECTION,
     COARSE_MIN_SHARE_FLOOR,
     COAST_PREDICTOR,
@@ -45,6 +47,7 @@ from eetools.constants import (
     MODIS_NBAR_SCALE_M,
     MODIS_VI_COLLECTION,
     PA_EXCLUDE_MIN_SHARE,
+    PATHWAY_GATE_PCT,
     PNV_BIOME_IMAGE,
     PNV_FOREST_WOODLAND_BIOMES,
     RECENT_LOSS_YEARS,
@@ -94,11 +97,16 @@ from eetools.site_selection.domain import (
 )
 from eetools.site_selection.scoring import (
     MatrixContext,
+    anchor_check,
+    anchor_constraint,
+    baseline_window,
     build_layer_register,
     build_selection_matrix,
     degradation_score,
+    focal_baseline_pct,
     intactness_flag,
     intactness_score,
+    pathway_gate,
     percentile_normalise,
     rank_candidates,
     select_spanning_set,
@@ -116,6 +124,7 @@ from eetools.site_selection.similarity import (
     resolve_seed_source,
 )
 from eetools.site_selection.types import (
+    COMPLETABLE_KEY_FIELDS,
     DegradationType,
     DegradedWeights,
     EnvelopeTolerances,
@@ -260,28 +269,46 @@ def identify_degraded_sites(
     tolerances: EnvelopeTolerances | None = None,
     weights: DegradedWeights | None = None,
     embed_pool: int = 100,
+    pathway_gate_pct: float = PATHWAY_GATE_PCT,
+    anchor_review_pct: float = ANCHOR_REVIEW_PCT,
+    reference_result: SiteSelectionResult | None = None,
     natural_mask: Literal["worldcover", "sbtn"] = "worldcover",
     exclude_protected: bool = False,
     exclude_fc: ee.FeatureCollection | None = None,
     asset_overrides: dict[str, str] | None = None,
     tile_scale: int = 4,
 ) -> SiteSelectionResult:
-    """Propose rank-ordered TGBS degraded (zero-star) sites matching the focal site.
+    """Propose rank-ordered TGBS degraded (zero-star) sites for a focal site.
 
-    Same envelope, MESS, condition screen and search ladder as
-    :func:`identify_reference_sites`, scored on STATE (productivity and moisture
-    deficit, unnaturalness, pressure) + TRAJECTORY (browning, NBR decline, loss) +
-    SIGNATURE (similarity to the focal site's pre-project baseline). The signature is
-    the cosine similarity of mean Satellite Embeddings in ``project_start_year - 1``
-    (``signature_mode='embedding'``), or a rule-based profile of
-    ``degradation_type`` (``'rules'``; forced, with a warning, for baselines before
-    2017). Permanent water and built-up cells are excluded (built-up is kept for
-    'settlement'). Pass ``screening=reference_result.screening`` to reuse the
-    reference run's reductions.
+    The degraded site is the 0% anchor of the TGBS rescale (reference = 100%,
+    degraded = 0%; Manual §4.1-4.2), not a look-alike of the focal baseline. After
+    the same envelope, MESS, condition screen and search ladder as
+    :func:`identify_reference_sites`, fine cells go through constrain -> gate -> rank:
+
+    1. **Anchor constraint (D1):** on NDVI and NDMI, the candidate's baseline-window
+       state <= the focal site's, and its current state <= min(focal baseline,
+       focal current). The baseline window is the 3 complete years before
+       ``project_start_year``.
+    2. **Pathway gate (D2):** pct(signature_sim) >= ``pathway_gate_pct``. The
+       signature is the cosine similarity of mean Satellite Embeddings in
+       ``project_start_year - 1`` (``signature_mode='embedding'``), or a rule-based
+       profile of ``degradation_type`` (``'rules'``; forced, with a warning, for
+       baselines before 2017). It filters on the *kind* of degradation; it never
+       ranks, because a weight would penalise sites further along the same pathway.
+    3. **Rank** on STATE (productivity and moisture deficit, unnaturalness, pressure)
+       + TRAJECTORY (browning, NBR decline, loss).
+
+    Each ranked site also reports ``focal_baseline_pct_<x>`` (where the focal
+    baseline falls on that site's 0-100% scale) and ``anchor_check='review'`` when
+    any exceeds ``anchor_review_pct``. If nothing passes D1, the most degraded
+    candidates are returned with ``below_baseline=False`` and a warning. Permanent
+    water and built-up cells are excluded (built-up is kept for 'settlement'). Pass
+    ``screening=reference_result.screening`` to reuse the reference run's reductions.
 
     Args:
         focal_site: Focal site (see identify_reference_sites).
-        project_start_year: Year restoration started; the baseline is the year before.
+        project_start_year: Year restoration started; sets the signature baseline year
+            (the year before) and the anchor baseline window (3 years before).
         end_year: Last complete year of the condition window (default: last year).
         degradation_type: Degradation pathway; drives rules-mode signatures and the
             built-up exclusion.
@@ -294,7 +321,13 @@ def identify_degraded_sites(
         screening: ScreeningTables from an earlier run on the same focal site.
         tolerances: EnvelopeTolerances (defaults if None).
         weights: DegradedWeights (defaults if None).
-        embed_pool: Fine cells sent to the signature (embedding) step.
+        embed_pool: Anchor-constraint survivors sent to the embedding (pathway) step.
+        pathway_gate_pct: Minimum pct(signature_sim) to pass the pathway gate ([L]).
+        anchor_review_pct: focal_baseline_pct above this flags anchor_check='review'
+            ([L]).
+        reference_result: Optional reference run on the same focal site; its ranked
+            sites' mean NDVI/NDMI state is the 100% value for focal_baseline_pct
+            (else the pool p90).
         natural_mask: 'worldcover' (default) or 'sbtn'.
         exclude_protected: Drop cells at least half inside designated WDPA areas.
         exclude_fc: Optional areas to exclude.
@@ -325,6 +358,9 @@ def identify_degraded_sites(
         tolerances=tolerances,
         deg_weights=weights,
         embed_pool=embed_pool,
+        pathway_gate_pct=pathway_gate_pct,
+        anchor_review_pct=anchor_review_pct,
+        reference_result=reference_result,
         natural_mask=natural_mask,
         exclude_protected=exclude_protected,
         exclude_fc=exclude_fc,
@@ -465,7 +501,7 @@ def _condition_view(tab: pd.DataFrame, site_type: str, coarse: bool) -> pd.DataF
         v["ndvi_state"] = tab.get("ndvi_state_p90")
         v["forest_loss_frac"] = tab.get("forest_loss_frac_p10")
     v["ndvi_state_p10"] = tab.get("ndvi_state_p10")
-    for single in ("rue_trend", "viirs"):
+    for single in ("rue_trend", "viirs", "ndvi_base", "ndmi_base"):
         if single in tab.columns:
             v[single] = tab[single]
     if "canopy_height" in tab.columns:
@@ -506,6 +542,18 @@ def _run(
         )
         if msg:
             warn.append(msg)
+    base_win: tuple[int, int] | None = None
+    if site_type == "degraded":
+        for name in ("pathway_gate_pct", "anchor_review_pct"):
+            if not 0.0 <= float(kw[name]) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1].")
+        base_win = baseline_window(kw["project_start_year"])
+        if base_win is None:
+            warn.append(
+                f"No complete MODIS year precedes project_start_year "
+                f"{kw['project_start_year']}: the anchor constraint uses the current "
+                "window only (D_now <= F_now)."
+            )
 
     asset_ids = check_required_assets(kw.get("asset_overrides"))
 
@@ -614,7 +662,12 @@ def _run(
         substrate_fallback=sets["substrate_fallback"],
         texture_code=sets["texture_code"],
         hand_riparian=sets["hand_riparian"],
+        baseline_start_year=base_win[0] if base_win else None,
+        baseline_end_year=base_win[1] if base_win else None,
     )
+    if site_type == "degraded":
+        kw["_focal_anchor"] = _focal_anchor(ctx, base_win, warn)
+        kw["_reference_state"] = _reference_state(kw.get("reference_result"))
 
     key = {
         "focal_geometry": geometry_hash(focal_ll),
@@ -638,6 +691,11 @@ def _run(
         "coastal": coastal,
         **{f"focal_{k_}": v for k_, v in sets.items()},
         "qa_rules": "MOD13Q1 SummaryQA<=1; MCD43A4 mandatory QA<=1 on b2/6/7, 8-day subsample",
+        # Sets the ndvi_base / ndmi_base window (anchor constraint). Completable: a
+        # reference run leaves it None and its tables are completed, not rejected.
+        "project_start_year": (
+            int(kw["project_start_year"]) if site_type == "degraded" else None
+        ),
     }
     screening = kw.get("screening")
     if screening is not None:
@@ -649,6 +707,12 @@ def _run(
     else:
         tables = ScreeningTables.empty(key)
     store = P.TableStore(tables)
+    if screening is not None:
+        merged = dict(store.key)
+        for field_ in COMPLETABLE_KEY_FIELDS:
+            if merged.get(field_) is None and key.get(field_) is not None:
+                merged[field_] = key[field_]
+        store.key = merged
     fams = P.families(ctx)
 
     def ensure(level: str, name: str, cells: pd.DataFrame) -> None:
@@ -832,6 +896,39 @@ def _run(
     )
 
 
+def _focal_anchor(
+    ctx: P.RunContext, base_win: tuple[int, int] | None, warn: list[str]
+) -> dict[str, float]:
+    """Focal NDVI/NDMI in the baseline and current windows (anchor constraint, D1)."""
+    vals = P.reduce_focal_anchor_state(ctx)
+    for x in ANCHOR_INDICES:
+        missing = [
+            w
+            for w in (("base",) if base_win else ()) + ("state",)
+            if np.isnan(vals[f"{x}_{w}"])
+        ]
+        if missing:
+            warn.append(
+                f"Focal {x.upper()} unavailable for window(s) {missing}: that part of "
+                "the anchor constraint is skipped."
+            )
+    return vals
+
+
+def _reference_state(result: SiteSelectionResult | None) -> dict[str, float]:
+    """Mean NDVI/NDMI state of a reference run's ranked sites (D4's 100% value)."""
+    if result is None:
+        return {}
+    if result.site_type != "reference":
+        raise ValueError("reference_result must come from identify_reference_sites.")
+    out: dict[str, float] = {}
+    for x in ANCHOR_INDICES:
+        col = f"{x}_state"
+        if col in result.ranked.columns and len(result.ranked):
+            out[x] = float(pd.to_numeric(result.ranked[col], errors="coerce").mean())
+    return out
+
+
 def _dataset_ids() -> dict[str, str]:
     return {
         "chirps_pentad": CHIRPS_PENTAD_COLLECTION,
@@ -925,10 +1022,17 @@ def _score_rung(  # noqa: C901, PLR0913
         if len(cpool)
         else float("nan")
     )
-    cpool["env_sim"] = percentile_normalise(cpool["mess"])
-    cpool["screen_score"] = _screen_score(
-        cpool, site_type, ref_w, deg_w, is_forest, signature_mode, degradation_type
+    denom_ndmi = (
+        float(
+            pd.to_numeric(
+                craw.loc[cpool.index, "ndmi_state_mean"], errors="coerce"
+            ).quantile(0.9)
+        )
+        if len(cpool)
+        else float("nan")
     )
+    cpool["env_sim"] = percentile_normalise(cpool["mess"])
+    cpool["screen_score"] = _screen_score(cpool, site_type, ref_w, deg_w, is_forest)
 
     # ---- Stage 3a: refine best coarse cells ----------------------------------
     # Thin coarse cells so edge neighbours are not refined twice (diagonals allowed).
@@ -972,6 +1076,10 @@ def _score_rung(  # noqa: C901, PLR0913
         level = "coarse"
     for fam in ("env", "ndvi", "nbar", "fraction"):
         ensure(level, fam, fcells)
+    if site_type == "degraded" and ctx.baseline_start_year is not None:
+        # Anchor constraint (D1): baseline-window state on the final cells only.
+        ensure(level, "ndvi_base", fcells)
+        ensure(level, "nbar_base", fcells)
     ensure("labels", "labels", fcells)
     if need_rue:
         ensure(level, "rue", fcells)
@@ -1016,6 +1124,7 @@ def _score_rung(  # noqa: C901, PLR0913
         "mess_range_widened": sorted(set(mess.widened) | set(fmess.widened)),
         "mess_dropped": sorted(set(mess.dropped) | set(fmess.dropped)),
         "ndvi_performance_denominator": denom,
+        "ndmi_pool_p90": denom_ndmi,
         "coarse_stage2_survivors": int(len(surv2)),
         "refined_coarse_cells": int(len(top_ids)),
         "min_separation_m": min_sep,
@@ -1100,23 +1209,17 @@ def _screen_score(
     ref_w: ReferenceWeights,
     deg_w: DegradedWeights,
     is_forest: bool,
-    signature_mode: str | None,
-    degradation_type: str,
 ) -> pd.Series:
     if len(pool) == 0:
         return pd.Series(dtype=float)
     env = 0.5 + 0.5 * pool["env_sim"].fillna(0.5)
     if site_type == "reference":
         return intactness_score(pool, ref_w, is_forest).score * env
-    df = pool.copy()
-    use_sig = signature_mode == "rules"
-    if use_sig:
-        df["signature_sim"] = signature_from_rules(
-            df, DEGRADATION_TYPE_PROFILES[degradation_type]["terms"]
-        )
-    score = degradation_score(df, deg_w, is_forest, use_signature=use_sig).score
+    # Degraded coarse screen: state + trajectory (the pathway signature gates fine
+    # cells later; it never ranks).
+    score = degradation_score(pool, deg_w, is_forest).score
     tie = 1e-6 * percentile_normalise(
-        -pd.to_numeric(df.get("ndvi_state_p10"), errors="coerce")
+        -pd.to_numeric(pool.get("ndvi_state_p10"), errors="coerce")
     ).fillna(0.5)
     return score * env + tie
 
@@ -1256,13 +1359,42 @@ def _rank_degraded(
     info: dict[str, Any],
     rw: list[str],
 ) -> pd.DataFrame:
+    """Constrain -> gate -> rank (spec §5.3, amended §0a).
+
+    D1 anchor constraint on the fine cells, then the pathway signature on the
+    survivors (embeddings for the top ``embed_pool`` survivors, or the rules
+    profile), the D2 gate, and state + trajectory ranking over what passes. D4
+    reports where the focal baseline falls on each candidate's 0-100% scale.
+    """
+    focal: dict[str, float] = kw.get("_focal_anchor") or {}
+    n_candidates = int(len(pool))
+
+    # ---- D1: anchor constraint ------------------------------------------------
+    anchor = anchor_constraint(pool, focal)
+    for c in anchor.columns:
+        pool[c] = anchor[c]
+    survivors = pool.loc[pool["below_baseline"]]
+    anchor_fallback = bool(n_candidates and len(survivors) == 0)
+    if anchor_fallback:
+        rw.append(
+            "No candidate is at least as degraded as the focal site on NDVI and NDMI "
+            "(baseline and current windows): the focal site may be the most degraded "
+            "place in the search domain. The most degraded candidates are returned "
+            "with below_baseline=False, and the focal baseline will rescale below 0%. "
+            "TGBS §4.1 fallback: the lowest-rated site available; review by hand."
+        )
+        survivors = pool
+    pool = survivors.copy()
+    n_anchor = int(pool["below_baseline"].sum())
+
+    # ---- Pathway signature on the survivors ------------------------------------
     pool["signature_sim"] = np.nan
     if signature_mode == "rules":
         pool["signature_sim"] = signature_from_rules(
             pool, DEGRADATION_TYPE_PROFILES[degradation_type]["terms"]
         )
     elif len(pool) and baseline_year is not None:
-        pre = degradation_score(pool, w, is_forest, use_signature=False).score * (
+        pre = degradation_score(pool, w, is_forest).score * (
             0.5 + 0.5 * pool["env_sim"]
         )
         embed_ids = pre.sort_values(ascending=False).index[: int(kw["embed_pool"])]
@@ -1276,8 +1408,26 @@ def _rank_degraded(
             )
         pool.loc[embed_ids, "signature_sim"] = embedding_query_similarity(emb, query)
         pool = pool.loc[embed_ids].copy()
-        pool["env_sim"] = percentile_normalise(pool["mess"])
-    sc = degradation_score(pool, w, is_forest, use_signature=True)
+
+    # ---- D2: pathway gate -------------------------------------------------------
+    pool["signature_pct"] = percentile_normalise(pool["signature_sim"])
+    pool["pathway_gate"] = pathway_gate(
+        pool["signature_pct"], float(kw["pathway_gate_pct"])
+    )
+    passed = pool["pathway_gate"] == "pass"
+    n_gate = int(passed.sum())
+    if len(pool) and n_gate == 0:
+        rw.append(
+            "No candidate passed the pathway gate (pct(signature_sim) >= "
+            f"{kw['pathway_gate_pct']}); candidates are ranked without it "
+            "(pathway_gate='failed')."
+        )
+    else:
+        pool = pool.loc[passed].copy()
+
+    # ---- Rank: state + trajectory over the survivors --------------------------
+    pool["env_sim"] = percentile_normalise(pool["mess"])
+    sc = degradation_score(pool, w, is_forest)
     if sc.missing:
         rw.append(
             f"Degradation components with missing values (scored neutral 0.5): {sc.missing}."
@@ -1287,12 +1437,46 @@ def _rank_degraded(
         pool[f"c_{c}"] = sc.components[c]
     pool["rank_score"] = pool["degradation"] * (0.5 + 0.5 * pool["env_sim"])
     pool["degradation_pct"] = percentile_normalise(pool["degradation"])
-    pool["signature_pct"] = percentile_normalise(pool["signature_sim"])
     pool["zero_star_likelihood"] = zero_star_likelihood(
         pool["degradation_pct"], pool["ndvi_performance"]
     )
+
+    # ---- D4: anchor check (reported, never a filter) ----------------------------
+    ref_state = kw.get("_reference_state") or {}
+    pool_ref = {
+        "ndvi": info.get("ndvi_performance_denominator", np.nan),
+        "ndmi": info.get("ndmi_pool_p90", np.nan),
+    }
+    reference = {x: ref_state.get(x, pool_ref.get(x, np.nan)) for x in ANCHOR_INDICES}
+    pcts = focal_baseline_pct(pool, focal, reference)
+    for c in pcts.columns:
+        pool[c] = pcts[c]
+    pool["anchor_check"] = anchor_check(pcts, float(kw["anchor_review_pct"]))
+
     info["signature_mode"] = signature_mode
     info["baseline_year"] = baseline_year
+    info["anchor"] = {
+        "indices": list(ANCHOR_INDICES),
+        "baseline_window": (
+            [ctx.baseline_start_year, ctx.baseline_end_year]
+            if ctx.baseline_start_year is not None
+            else None
+        ),
+        "focal": focal,
+        "candidates": n_candidates,
+        "below_baseline": int(anchor["below_baseline"].sum()) if n_candidates else 0,
+        "fallback": anchor_fallback,
+        "pathway_gate_pct": float(kw["pathway_gate_pct"]),
+        "pathway_gate_passed": n_gate,
+        "anchor_survivors_scored": n_anchor,
+        "anchor_review_pct": float(kw["anchor_review_pct"]),
+        "reference_values": reference,
+        "reference_source": (
+            "reference_result"
+            if ref_state
+            else "pool p90 (ndvi_performance denominator)"
+        ),
+    }
     return pool
 
 
@@ -1462,6 +1646,17 @@ def _assemble(  # noqa: C901
     else:
         ranked = thinned.head(n_candidates).copy()
         ranked["rank"] = np.arange(1, len(ranked) + 1)
+        if (
+            "anchor_check" in ranked.columns
+            and (ranked["anchor_check"] == "review").any()
+        ):
+            ids = ", ".join(ranked.index[ranked["anchor_check"] == "review"])
+            warn.append(
+                f"anchor_check='review' for {ids}: the focal baseline sits above "
+                f"{kw['anchor_review_pct']:.0%} of the scale for these anchors, so they "
+                "may be far more degraded than the focal site's starting point. Confirm "
+                "the same vegetation formation and degradation pathway."
+            )
         if ctx.end_year >= DYNAMIC_WORLD_FIRST_YEAR and len(ranked):
             try:
                 dw = P.reduce_dw_context(ctx, ranked[["ix", "iy", "size"]])
@@ -1596,6 +1791,9 @@ def _assemble(  # noqa: C901
                 "signature_mode": signature_mode,
                 "baseline_year": baseline_year,
                 "exclude_protected": kw.get("exclude_protected"),
+                "pathway_gate_pct": kw.get("pathway_gate_pct"),
+                "anchor_review_pct": kw.get("anchor_review_pct"),
+                "reference_result_supplied": kw.get("reference_result") is not None,
             }
         )
     provenance = _provenance(ctx)
@@ -1633,6 +1831,32 @@ def _assemble(  # noqa: C901
     )
     if kw.get("screening") is not None:
         extra.append(_reg("ScreeningTables reused", f"created {store.created}", "H"))
+    if site_type == "degraded":
+        anc = info.get("anchor", {})
+        extra.append(
+            _reg(
+                "anchor constraint (D1): NDVI + NDMI, D_base <= F_base and "
+                "D_now <= min(F_base, F_now)",
+                f"baseline window {anc.get('baseline_window')} (MODIS proxy; repeat "
+                "on the survey sensor)",
+                "M",
+            )
+        )
+        extra.append(
+            _reg(
+                f"pathway gate (D2): pct(signature_sim) >= {kw.get('pathway_gate_pct')}",
+                "relative threshold, uncalibrated",
+                "L",
+            )
+        )
+        extra.append(
+            _reg(
+                f"anchor_check (D4): focal_baseline_pct > {kw.get('anchor_review_pct')}",
+                f"100% value from {anc.get('reference_source')}; TGBS App. F gives no "
+                "RS star thresholds",
+                "L",
+            )
+        )
     if site_type == "reference":
         conf = {"user": "H", "wdpa_strict": "M", "pseudo": "L"}.get(
             info.get("seed_source", ""), "L"

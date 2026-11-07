@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `identify_degraded_sites` treats the degraded site as the 0% anchor of
+  the TGBS rescale (vault spec §0a, degraded-anchor review 2026-11-07). The 0.35
+  embedding/rules signature weight is gone, and fine cells now go through
+  constrain → gate → rank:
+  - **Anchor constraint (D1):** on NDVI and NDMI, `D_base <= F_base` and
+    `D_now <= min(F_base, F_now)`, with baseline = the 3 complete years before
+    `project_start_year` (`below_baseline`, `below_baseline_ndvi`, `below_baseline_ndmi`).
+  - **Pathway gate (D2):** `pct(signature_sim) >= pathway_gate_pct` (default 0.5, [L]).
+  - **Ranking (D3):** state + trajectory only. `DegradedWeights` loses `signature`; the
+    remaining defaults are renormalised to thirteenths.
+
+  If nothing passes D1, the most degraded candidates are returned with
+  `below_baseline=False` and a warning.
+- The degraded coarse screen no longer uses the rules-mode signature (it only gates fine
+  cells).
+- `degradation_score` drops the `use_signature` argument.
+- The degraded selection matrix gains a mandatory `below_baseline` row. `pathway` is
+  informational.
+
+### Added
+- `identify_degraded_sites(pathway_gate_pct=, anchor_review_pct=, reference_result=)`.
+- Reported `focal_baseline_pct_ndvi` / `focal_baseline_pct_ndmi` and `anchor_check` (D4):
+  the 100% value comes from `reference_result`'s ranked sites, or else the pool p90.
+- New scoring helpers: `baseline_window`, `anchor_constraint`, `pathway_gate`,
+  `focal_baseline_pct`, `anchor_check`.
+- New predictors: `build_baseline_state`, `reduce_focal_anchor_state`.
+- New memoised families `ndvi_base` / `nbar_base`, reduced on final cells only.
+- New layer-register rows for D1, D2 and D4.
+- `project_start_year` joins the `ScreeningTables` provenance key as a *completable*
+  field (`COMPLETABLE_KEY_FIELDS`). Reference-run and 0.4.0 tables are completed rather
+  than rejected; tables for a different start year raise `ScreeningTablesMismatch`.
+
 ## [0.4.0] - 2026-11-07
 
 ### Added

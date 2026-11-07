@@ -182,3 +182,37 @@ def test_nbar_and_annual_ndvi(ee_session, small_aoi):
     assert info["bands"] == ["nir", "swir1", "swir2", "NDMI", "NBR"]
     assert info["ndvi_n"] == 2
     assert info["ann_bands"] == ["NDMI", "NBR"]
+
+
+@pytest.mark.slow
+def test_baseline_state_and_focal_anchor(ee_session, small_aoi):
+    """Anchor constraint (D1): baseline-window bands and the focal reduction."""
+    from eetools.site_selection.predictors import (
+        RunContext,
+        build_baseline_state,
+        reduce_focal_anchor_state,
+    )
+
+    focal = ee_session.Geometry.Rectangle([39.22, -4.28, 39.225, -4.275])  # ~0.3 km2
+    ctx = RunContext(
+        focal_ee=focal,
+        exclusion_ee=focal.buffer(500),
+        search_ee=small_aoi,
+        crs=CRS,
+        end_year=2024,
+        trend_start_year=2010,
+        state_start_year=2022,
+        asset_ids={},
+        baseline_start_year=2019,
+        baseline_end_year=2021,
+    )
+    assert build_baseline_state(ctx, "ndvi").bandNames().getInfo() == ["ndvi_base"]
+    assert build_baseline_state(ctx, "ndmi").bandNames().getInfo() == ["ndmi_base"]
+    vals = reduce_focal_anchor_state(ctx)
+    assert set(vals) == {"ndvi_state", "ndmi_state", "ndvi_base", "ndmi_base"}
+    for k, v in vals.items():
+        assert -1.0 <= v <= 1.0, k  # finite and in index range
+    no_base = reduce_focal_anchor_state(
+        RunContext(**{**ctx.__dict__, "baseline_start_year": None})
+    )
+    assert pd.isna(no_base["ndvi_base"]) and pd.notna(no_base["ndvi_state"])

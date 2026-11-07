@@ -1,6 +1,6 @@
 # site_selection/ — conventions
 
-`site_selection/` is a **workflow** subpackage: it proposes TGBS reference and degraded sites for a focal site (spec: vault `raw/notes/gee_utils/2026-11-05-gee-utils-site-selection-simplified-spec-design.md`). Design rule: **reduce once, score in Python.** Earth Engine is touched only by `predictors.py` (and the focal geometry read in `domain.load_focal_geometry`); everything in `domain`, `similarity` and `scoring` is pure pandas/numpy and unit-tested without credentials.
+`site_selection/` is a **workflow** subpackage: it proposes TGBS reference and degraded sites for a focal site (spec: vault `raw/notes/gee_utils/2026-11-05-gee-utils-site-selection-simplified-spec-design.md`, amended §0a by `2026-11-07-gee-utils-degraded-anchor-design-review.md`). Design rule: **reduce once, score in Python.** Earth Engine is touched only by `predictors.py` (and the focal geometry read in `domain.load_focal_geometry`); everything in `domain`, `similarity` and `scoring` is pure pandas/numpy and unit-tested without credentials.
 
 - **Grids are client-side.** Cells are `(size, ix, iy)` in the focal UTM zone with corners at `ix*size`; `cell_id = "<size>_<ix>_<iy>"`. Fine cells nest exactly in coarse cells and the 250 m fraction-image grid nests in both, because `k ∈ ALLOWED_K = (1, 2, 4, 8)`. Only integer indices travel to EE (`cells_feature_collection`).
 - **`ScreeningTables` hold raw reductions only**, one `_done_<family>` flag per reduction family, keyed by `cell_id` (embeddings by `(cell_id, year)`). Never store pools, MESS, percentiles or ranks there. Anything that changes a raw value must be in the provenance key built in `workflows._run`; tolerances and weights must not be.
@@ -9,3 +9,9 @@
 - Each layer family is reduced at its native scale (90 m gates, ~4.6 km climate, 100 m terrain/soil, 250 m NDVI/fractions, 500 m NBAR, 30 m canopy); never oversample to `analysis_scale_m`. Focal-plus-buffer pixels are masked with `RunContext.outside_mask()` before every candidate reduction (not climate).
 - Thresholds, ladders, class/soil group tables and profiles live in `constants.py` (`SEARCH_LADDERS`, `VECEA_CLASS_GROUPS`, `WRB_RELATED_GROUPS`, `MESS_RANGE_FLOORS`, `SOP_MATRIX_THRESHOLDS`, `DEGRADATION_TYPE_PROFILES`).
 - Hansen `lossyear` is masked where no loss occurred: always `unmask(0)` before comparing years (as `sensors.hansen.get_forest_loss_in_period` now does).
+- **Degraded sites are the 0% rescale anchor** (§0a). The order is constrain → gate → rank in `workflows._rank_degraded`:
+  - `scoring.anchor_constraint` (D1): NDVI + NDMI, `D_base <= F_base` and `D_now <= min(F_base, F_now)`;
+  - `scoring.pathway_gate` (D2) on `pct(signature_sim)`;
+  - `degradation_score` on state + trajectory.
+
+  Never put `signature_sim` back into a ranking weight: it penalises sites further along the same pathway. `project_start_year` is a completable key field (`types.COMPLETABLE_KEY_FIELDS`); the baseline bands are separate families (`ndvi_base`, `nbar_base`) so reference tables are completed rather than invalidated.
