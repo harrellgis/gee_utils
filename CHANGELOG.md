@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-07
+
 ### Added
 - `site_selection` subpackage implementing the 2026-11-05 simplified spec for TGBS reference
   and degraded site selection, with entry points `identify_reference_sites` and
@@ -60,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `canny_edges` / `canny_edge_buffer` expose the edge layer and the edge-sampled image for
     mapping and histogram plots.
   - Defaults `OTSU_HISTOGRAM_BUCKETS`, `CANNY_THRESHOLD`, `CANNY_SIGMA` in `constants.py`.
+- `sensors.texture` module for sensor-agnostic GLCM and first-order image texture.
+  `calc_texture` is the main entry point, alongside `calc_glcm_texture`,
+  `calc_first_order_texture`, `quantize_band`, `glcm_radius` and `add_texture_to_collection`,
+  with `TEXTURE_*` / `GLCM_*` defaults in `constants.py`. Bands are quantized against fixed value
+  ranges (comparable across images), output bands are named `<band>_<metric>_r<radius>`, and
+  `maxcorr` and the duplicate `contrast` + `inertia` pair are rejected before any EE call.
 - `sensors.sentinel1.timescan` module for multi-temporal Sentinel-1 summaries (the band set
   used by the GEE book A3.2 mangrove timescans), with the band list in
   `constants.S1_TIMESCAN_BANDS`:
