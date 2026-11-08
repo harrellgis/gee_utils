@@ -15,13 +15,17 @@ import pandas as pd
 from eetools.constants import (
     ANCHOR_INDICES,
     DEGRADED_BASELINE_WINDOW_YEARS,
+    DEGRADED_EXCLUDE_MAX_FRAC,
     FOREST_MIN_CANOPY_M,
     INTACTNESS_WEAK_NATURAL_FRAC,
     INTACTNESS_WEAK_NATURALNESS,
     MODIS_FIRST_FULL_YEAR,
+    PA_EXCLUDE_MIN_SHARE,
+    PNV_FOREST_STRATUM_BIOMES,
     PREDICTOR_LABELS,
     SOP_MATRIX_THRESHOLDS,
     SPAN_ENV_COVERAGE_SD,
+    VECEA_FOREST_STRATUM_GROUPS,
     ZERO_STAR_HIGH_PCT,
     ZERO_STAR_MAX_PERFORMANCE,
     ZERO_STAR_MODERATE_PCT,
@@ -110,7 +114,7 @@ def intactness_score(
     Args:
         df: Candidate pool with the condition columns.
         weights: ReferenceWeights (defaults if None).
-        is_forest: Focal stratum is forest/woodland.
+        is_forest: Forest integrity stratum (see forest_stratum).
 
     Returns:
         ScoreResult with the intactness score.
@@ -186,7 +190,7 @@ def degradation_score(
     Args:
         df: Candidate pool (percentiles are taken over it).
         weights: DegradedWeights (defaults if None).
-        is_forest: Focal stratum is forest/woodland.
+        is_forest: Forest integrity stratum (see forest_stratum).
 
     Returns:
         ScoreResult with the degradation score.
@@ -378,6 +382,108 @@ def zero_star_likelihood(
 # --------------------------------------------------------------------------- #
 # Ranking and thinning                                                         #
 # --------------------------------------------------------------------------- #
+def forest_stratum(
+    class_groups: Iterable[str],
+    *,
+    class_fallback: bool,
+    pnv_code: int | None,
+    target_cover_classes: Sequence[int] | None = None,
+) -> bool:
+    """Whether a run uses the forest integrity stratum.
+
+    The forest stratum requires median canopy height >= ``FOREST_MIN_CANOPY_M`` for
+    integrity 2 and adds the forest-only intactness extras. Only true forest groups
+    qualify (``VECEA_FOREST_STRATUM_GROUPS``: forest, riverine, bamboo; or a PNV forest
+    biome outside VECEA coverage). Woodland and wooded grassland use the non-forest
+    path, so intactness does not mean "more trees" (spec §1.2).
+
+    Args:
+        class_groups: VECEA_CLASS_GROUPS groups of the focal class set.
+        class_fallback: The class gate uses PNV + RESOLVE (focal outside VECEA).
+        pnv_code: Focal OpenLandMap PNV biome code (used only with class_fallback).
+        target_cover_classes: Optional WorldCover natural classes; tree cover (10) or
+            mangrove (95) forces the forest stratum.
+
+    Returns:
+        True for the forest stratum.
+    """
+    forest = bool(set(class_groups) & VECEA_FOREST_STRATUM_GROUPS) or (
+        class_fallback and pnv_code in PNV_FOREST_STRATUM_BIOMES
+    )
+    if target_cover_classes and ({10, 95} & set(target_cover_classes)):
+        forest = True
+    return forest
+
+
+def degraded_exclusions(
+    pool: pd.DataFrame,
+    *,
+    final: bool,
+    max_built_frac: float,
+    keep_built: bool = False,
+    exclude_protected: bool = False,
+) -> pd.Series:
+    """Cells to drop from a degraded pool (True = drop).
+
+    Permanent water (``water_frac >= DEGRADED_EXCLUDE_MAX_FRAC``) is always dropped.
+    Built-up land is dropped unless ``keep_built`` (degradation_type 'settlement'):
+    on the coarse screen at ``built_frac >= DEGRADED_EXCLUDE_MAX_FRAC`` (a 2 km cell
+    nearly always holds some built-up land), and on final candidate cells above
+    ``max_built_frac`` (inclusive maximum), because GBS focal sites hold no built
+    structures.
+
+    Args:
+        pool: Cells with water_frac, built_frac and (optionally) pa_share columns.
+        final: Final candidate cells (fine cells, or coarse cells when k == 1).
+        max_built_frac: Maximum WorldCover built-up fraction for final cells.
+        keep_built: Skip the built-up rules (settlement pathway).
+        exclude_protected: Also drop cells >= PA_EXCLUDE_MIN_SHARE inside a PA.
+
+    Returns:
+        Boolean Series aligned to ``pool`` (True = drop).
+    """
+
+    def col(name: str) -> pd.Series:
+        if name not in pool.columns:
+            return pd.Series(0.0, index=pool.index)
+        return pd.to_numeric(pool[name], errors="coerce").fillna(0.0)
+
+    drop = col("water_frac") >= DEGRADED_EXCLUDE_MAX_FRAC
+    if not keep_built:
+        built = col("built_frac")
+        drop |= (
+            (built > max_built_frac) if final else (built >= DEGRADED_EXCLUDE_MAX_FRAC)
+        )
+    if exclude_protected:
+        drop |= col("pa_share") >= PA_EXCLUDE_MIN_SHARE
+    return drop
+
+
+def dw_built_filter(
+    shortlist: pd.DataFrame, shares: pd.Series, max_share: float
+) -> tuple[pd.DataFrame, list[str]]:
+    """Keep shortlisted cells whose Dynamic World built-label share is <= max_share.
+
+    Cells with no Dynamic World observation (NaN share) are kept: the WorldCover
+    filter already applied, and a missing value is not evidence of built-up land.
+    Order is kept and ``rank`` is renumbered 1..n.
+
+    Args:
+        shortlist: Thinned, rank-ordered candidates (index cell_id).
+        shares: dw_built_share per cell_id.
+        max_share: Maximum built-label share (inclusive).
+
+    Returns:
+        (kept candidates with a dw_built_share column, dropped cell_ids).
+    """
+    s = pd.to_numeric(shares.reindex(shortlist.index), errors="coerce")
+    keep = s.isna() | (s <= max_share)
+    out = shortlist.loc[keep].copy()
+    out["dw_built_share"] = s.loc[keep]
+    out["rank"] = np.arange(1, len(out) + 1)
+    return out, list(shortlist.index[~keep])
+
+
 def thin_spatially(
     df: pd.DataFrame,
     score_col: str,
@@ -671,7 +777,7 @@ class MatrixContext:
         elevation_tol_m: SOP elevation tolerance.
         rainfall_tol_frac: SOP rainfall tolerance.
         focal_area_ha: Focal site area (ha).
-        is_forest: Forest/woodland stratum.
+        is_forest: Forest integrity stratum (see forest_stratum).
         class_fallback: PNV + ecoregion used instead of VECEA.
         class_mosaic: Focal class is a mosaic class.
         substrate_fallback: iSDA texture used instead of WRB.

@@ -105,7 +105,7 @@ class EnvelopeTolerances:
 class ReferenceWeights:
     """Intactness-score weights (spec §5.3). Must sum to 1.
 
-    For forest/woodland strata, ``forest_loss_shift`` moves from ``core`` to
+    For the forest stratum (forest, riverine, bamboo), ``forest_loss_shift`` moves from ``core`` to
     pct(1 - forest_loss_frac) and ``canopy_shift`` moves from ``performance`` to
     pct(canopy_height_p50).
     """

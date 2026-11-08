@@ -460,3 +460,98 @@ def test_layer_register_marks_thresholds_low_confidence():
         reg.loc[reg["layer_or_query"].str.startswith("threshold"), "confidence"] == "L"
     ).all()
     assert reg.loc[reg["layer_or_query"] == "WDPA", "confidence"].item() == "H"
+
+
+# --------------------------------------------------------------------------- #
+# Integrity stratum and degraded built-up filters (Ecosia first-run review)    #
+# --------------------------------------------------------------------------- #
+def test_forest_stratum_excludes_woodland_and_wooded_grassland():
+    from eetools.constants import VECEA_CLASS_GROUPS
+    from eetools.site_selection.scoring import forest_stratum
+
+    def groups(*map_ids):
+        return [VECEA_CLASS_GROUPS[m] for m in map_ids]
+
+    kw = {"class_fallback": False, "pnv_code": None}
+    # Ecosia: Be (bushland) + Wcd (dry combretum wooded grassland) -> non-forest
+    assert not forest_stratum(groups(10, 46), **kw)
+    assert not forest_stratum(["woodland"], **kw)
+    # ITF: Fb (forest) + B (bamboo) -> forest; riverine stays forest
+    assert forest_stratum(groups(21, 3), **kw)
+    assert forest_stratum(["riverine"], **kw)
+    # a mixed set with any forest group is forest
+    assert forest_stratum(["woodland", "forest"], **kw)
+    # tree cover / mangrove target classes force the forest stratum
+    assert forest_stratum(["woodland"], **kw, target_cover_classes=[10, 30])
+    assert forest_stratum(["woodland"], **kw, target_cover_classes=[95])
+    assert not forest_stratum(["woodland"], **kw, target_cover_classes=[20, 30])
+
+
+def test_forest_stratum_pnv_fallback():
+    from eetools.site_selection.scoring import forest_stratum
+
+    def fb(code):
+        return forest_stratum([], class_fallback=True, pnv_code=code)
+
+    assert fb(1) and fb(3)  # tropical evergreen / deciduous forest
+    assert not fb(16) and not fb(17)  # open woodland / shrubland
+    assert not fb(18) and not fb(20)  # tropical savanna, xerophytic woods/scrub
+    # the PNV code is ignored when VECEA covers the focal site
+    assert not forest_stratum([], class_fallback=False, pnv_code=1)
+
+
+def test_degraded_exclusions_thresholds():
+    from eetools.site_selection.scoring import degraded_exclusions
+
+    pool = pd.DataFrame(
+        {
+            "water_frac": [0.0, 0.0, 0.0, 0.0, 0.6, 0.0],
+            "built_frac": [0.0, 0.01, 0.0101, 0.4, 0.0, np.nan],
+            "pa_share": [0.0, 0.0, 0.0, 0.0, 0.0, 0.7],
+        },
+        index=list("abcdef"),
+    )
+    final = degraded_exclusions(pool, final=True, max_built_frac=0.01)
+    # 0.01 kept (inclusive max), 0.0101 dropped, 0.4 dropped, water dropped, NaN built kept
+    assert list(final) == [False, False, True, True, True, False]
+    # coarse screen keeps the old >= 0.5 built rule
+    coarse = degraded_exclusions(pool, final=False, max_built_frac=0.01)
+    assert list(coarse) == [False, False, False, False, True, False]
+    # settlement keeps built-up land; water still goes
+    settle = degraded_exclusions(pool, final=True, max_built_frac=0.01, keep_built=True)
+    assert list(settle) == [False, False, False, False, True, False]
+    # max 0 drops any built-up pixel
+    strict = degraded_exclusions(pool, final=True, max_built_frac=0.0)
+    assert list(strict) == [False, True, True, True, True, False]
+    prot = degraded_exclusions(
+        pool, final=True, max_built_frac=0.01, exclude_protected=True
+    )
+    assert prot["f"]
+    # missing columns are treated as 0
+    bare = degraded_exclusions(
+        pd.DataFrame(index=["x"]), final=True, max_built_frac=0.01
+    )
+    assert list(bare) == [False]
+
+
+def test_dw_built_filter_keeps_order_and_renumbers():
+    from eetools.site_selection.scoring import dw_built_filter
+
+    short = pd.DataFrame(
+        {"rank": [1, 2, 3, 4], "rank_score": [0.9, 0.8, 0.7, 0.6]},
+        index=["c1", "c2", "c3", "c4"],
+    )
+    shares = pd.Series({"c1": 0.30, "c2": 0.01, "c3": np.nan, "c4": 0.0})
+    kept, dropped = dw_built_filter(short, shares, 0.01)
+    assert dropped == ["c1"]
+    assert list(kept.index) == [
+        "c2",
+        "c3",
+        "c4",
+    ]  # NaN (no DW obs) kept; 0.01 inclusive
+    assert list(kept["rank"]) == [1, 2, 3]
+    assert kept.loc["c2", "dw_built_share"] == 0.01 and np.isnan(
+        kept.loc["c3", "dw_built_share"]
+    )
+    empty, gone = dw_built_filter(short, pd.Series(1.0, index=short.index), 0.01)
+    assert empty.empty and gone == list(short.index)

@@ -25,6 +25,8 @@ from eetools.constants import (
     CANOPY_HEIGHT_REDUCE_SCALE_M,
     CHIRPS_NATIVE_SCALE_M,
     CORE_FRAC_RADIUS_M,
+    DW_BUILT_LABEL,
+    DW_BUILT_SCALE_M,
     DW_COLLECTION,
     DYNAMIC_WORLD_CONTEXT_BANDS,
     DYNAMIC_WORLD_CONTEXT_SCALE_M,
@@ -748,6 +750,36 @@ def build_dw_context(ctx: RunContext) -> ee.Image:
     return col.mean().rename([f"dw_{b}" for b in DYNAMIC_WORLD_CONTEXT_BANDS])
 
 
+def build_dw_built(ctx: RunContext) -> ee.Image:
+    """Dynamic World built-label share image for the degraded built-up filter.
+
+    Per pixel: 1 where the most frequent Dynamic World label over the state window is
+    built, else 0 (pixels without observations stay masked); focal-masked. A cell mean
+    is the share of the cell that is mostly built. Label share, not mean built
+    probability, because the probability is non-zero almost everywhere (bare-soil
+    confusion). Reduced only on each rung's degraded shortlist.
+
+    Args:
+        ctx: RunContext.
+
+    Returns:
+        ee.Image with a single 'dw_built_share' band (0/1).
+    """
+    col = (
+        ee.ImageCollection(DW_COLLECTION)
+        .filterBounds(ctx.search_ee)
+        .filterDate(f"{ctx.state_start_year}-01-01", f"{ctx.end_year + 1}-01-01")
+        .select("label")
+    )
+    return (
+        col.mode()
+        .eq(DW_BUILT_LABEL)
+        .toFloat()
+        .rename("dw_built_share")
+        .updateMask(ctx.outside_mask())
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Reduction families                                                           #
 # --------------------------------------------------------------------------- #
@@ -1112,6 +1144,10 @@ def families(ctx: RunContext) -> dict[str, Family]:
         "canopy": Family(
             "canopy", ("canopy_height",), None, CANOPY_HEIGHT_REDUCE_SCALE_M, "median"
         ),
+        # Degraded built-up filter: shortlisted final cells only.
+        "dw_built": Family(
+            "dw_built", ("dw_built_share",), None, DW_BUILT_SCALE_M, "mean"
+        ),
         "labels": Family(
             "labels",
             ("pnv_biome" if ctx.class_fallback else "vecea_class", "wrb_group"),
@@ -1136,6 +1172,7 @@ def family_image_fn(name: str, ctx: RunContext) -> Any:
         "rue": lambda: build_rue_trend(ctx),
         "viirs": lambda: build_viirs(ctx),
         "canopy": lambda: build_canopy(ctx),
+        "dw_built": lambda: build_dw_built(ctx),
         "labels": lambda: build_label_image(ctx),
     }[name]
 
