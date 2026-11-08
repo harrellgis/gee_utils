@@ -30,7 +30,9 @@ from eetools.constants import (
     DEFAULT_FOCAL_SAMPLES,
     DEFAULT_REFERENCE_BUFFER_M,
     DEGRADATION_TYPE_PROFILES,
-    DEGRADED_EXCLUDE_MAX_FRAC,
+    DEGRADED_MAX_BUILT_FRAC,
+    DEGRADED_MAX_DW_BUILT,
+    DW_BUILT_SHORTLIST_FACTOR,
     DW_COLLECTION,
     DYNAMIC_WORLD_FIRST_YEAR,
     EMBEDDING_FIRST_YEAR,
@@ -49,7 +51,6 @@ from eetools.constants import (
     PA_EXCLUDE_MIN_SHARE,
     PATHWAY_GATE_PCT,
     PNV_BIOME_IMAGE,
-    PNV_FOREST_WOODLAND_BIOMES,
     RECENT_LOSS_YEARS,
     RESOLVE_ECOREGIONS_COLLECTION,
     SATELLITE_EMBEDDING_COLLECTION,
@@ -59,7 +60,6 @@ from eetools.constants import (
     TREND_WINDOW_YEARS,
     VECEA_DOI,
     VECEA_EXCLUDED_CLASSES,
-    VECEA_FOREST_WOODLAND_GROUPS,
     VECEA_MOSAIC_CLASSES,
     VECEA_VERSION,
     VIIRS_NTL_COLLECTION,
@@ -103,7 +103,10 @@ from eetools.site_selection.scoring import (
     build_layer_register,
     build_selection_matrix,
     degradation_score,
+    degraded_exclusions,
+    dw_built_filter,
     focal_baseline_pct,
+    forest_stratum,
     intactness_flag,
     intactness_score,
     pathway_gate,
@@ -272,6 +275,8 @@ def identify_degraded_sites(
     pathway_gate_pct: float = PATHWAY_GATE_PCT,
     anchor_review_pct: float = ANCHOR_REVIEW_PCT,
     reference_result: SiteSelectionResult | None = None,
+    max_built_frac: float = DEGRADED_MAX_BUILT_FRAC,
+    max_dw_built: float | None = DEGRADED_MAX_DW_BUILT,
     natural_mask: Literal["worldcover", "sbtn"] = "worldcover",
     exclude_protected: bool = False,
     exclude_fc: ee.FeatureCollection | None = None,
@@ -302,7 +307,13 @@ def identify_degraded_sites(
     baseline falls on that site's 0-100% scale) and ``anchor_check='review'`` when
     any exceeds ``anchor_review_pct``. If nothing passes D1, the most degraded
     candidates are returned with ``below_baseline=False`` and a warning. Permanent
-    water and built-up cells are excluded (built-up is kept for 'settlement'). Pass
+    water is excluded. Unless ``degradation_type='settlement'``, built-up land is
+    excluded too, because GBS focal sites hold no built structures (cropland stays
+    acceptable): final cells need ESA WorldCover built-up <= ``max_built_frac``, and
+    the top ``DW_BUILT_SHORTLIST_FACTOR x n_candidates`` thinned cells of each rung
+    need a Dynamic World built-label share <= ``max_dw_built`` (catches built-up land
+    newer than WorldCover's 2021 snapshot). Both filters act before the stop rule, so
+    the search ladder widens when they empty a rung. Pass
     ``screening=reference_result.screening`` to reuse the reference run's reductions.
 
     Args:
@@ -329,6 +340,11 @@ def identify_degraded_sites(
             sites' mean NDVI/NDMI state is the 100% value for focal_baseline_pct
             (else the pool p90).
         natural_mask: 'worldcover' (default) or 'sbtn'.
+        max_built_frac: Maximum ESA WorldCover (2021) built-up fraction of a final
+            candidate cell ([L]; ignored for 'settlement').
+        max_dw_built: Maximum Dynamic World built-label share (most frequent label
+            over the state window) of a shortlisted cell ([L]); None disables the
+            Dynamic World filter. Ignored for 'settlement' and before the S2 era.
         exclude_protected: Drop cells at least half inside designated WDPA areas.
         exclude_fc: Optional areas to exclude.
         asset_overrides: Optional {'vecea': id, 'soilgrids_wrb': id}.
@@ -361,6 +377,8 @@ def identify_degraded_sites(
         pathway_gate_pct=pathway_gate_pct,
         anchor_review_pct=anchor_review_pct,
         reference_result=reference_result,
+        max_built_frac=max_built_frac,
+        max_dw_built=max_dw_built,
         natural_mask=natural_mask,
         exclude_protected=exclude_protected,
         exclude_fc=exclude_fc,
@@ -544,9 +562,14 @@ def _run(
             warn.append(msg)
     base_win: tuple[int, int] | None = None
     if site_type == "degraded":
-        for name in ("pathway_gate_pct", "anchor_review_pct"):
+        for name in ("pathway_gate_pct", "anchor_review_pct", "max_built_frac"):
             if not 0.0 <= float(kw[name]) <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1].")
+        if (
+            kw.get("max_dw_built") is not None
+            and not 0.0 <= float(kw["max_dw_built"]) <= 1.0
+        ):
+            raise ValueError("max_dw_built must be in [0, 1] or None.")
         base_win = baseline_window(kw["project_start_year"])
         if base_win is None:
             warn.append(
@@ -631,12 +654,13 @@ def _run(
         raise ValueError(
             "Could not read focal elevation or rainfall; check the geometry."
         )
-    is_forest = bool(set(sets["class_groups"]) & VECEA_FOREST_WOODLAND_GROUPS) or (
-        sets["class_fallback"] and sets["pnv_code"] in PNV_FOREST_WOODLAND_BIOMES
-    )
     tcc = kw.get("target_cover_classes")
-    if tcc and (10 in tcc or 95 in tcc):
-        is_forest = True
+    is_forest = forest_stratum(
+        sets["class_groups"],
+        class_fallback=sets["class_fallback"],
+        pnv_code=sets["pnv_code"],
+        target_cover_classes=tcc,
+    )
 
     ctx = P.RunContext(
         focal_ee=focal_ee,
@@ -1012,7 +1036,7 @@ def _score_rung(  # noqa: C901, PLR0913
     cview = _condition_view(craw, site_type, coarse=coarse_rule)
     for c in cview.columns:
         cpool[c] = cview[c]
-    cpool = _apply_type_exclusions(cpool, site_type, kw, degradation_type, rw)
+    cpool = _apply_type_exclusions(cpool, site_type, kw, degradation_type, final=False)
     denom = (
         float(
             pd.to_numeric(
@@ -1109,7 +1133,7 @@ def _score_rung(  # noqa: C901, PLR0913
     view = _condition_view(pool, site_type, coarse=False)
     for c in view.columns:
         pool[c] = view[c]
-    pool = _apply_type_exclusions(pool, site_type, kw, degradation_type, rw)
+    pool = _apply_type_exclusions(pool, site_type, kw, degradation_type, final=True)
     pool["env_sim"] = percentile_normalise(pool["mess"])
     pool["ndvi_performance"] = (
         pool["ndvi_state"] / denom if denom and denom > 0 else np.nan
@@ -1166,6 +1190,20 @@ def _score_rung(  # noqa: C901, PLR0913
         if len(pool)
         else pool.assign(rank=[])
     )
+    if site_type == "degraded":
+        thinned = _filter_dw_built(
+            thinned,
+            pool,
+            fcells,
+            level,
+            store,
+            ensure,
+            ctx,
+            kw,
+            degradation_type,
+            info,
+            rw,
+        )
     return {
         "pool": pool,
         "thinned": thinned,
@@ -1174,6 +1212,59 @@ def _score_rung(  # noqa: C901, PLR0913
         "warnings": rw,
         "stage1_survivors": int(len(surv)),
     }
+
+
+def _filter_dw_built(
+    thinned: pd.DataFrame,
+    pool: pd.DataFrame,
+    fcells: pd.DataFrame,
+    level: str,
+    store: P.TableStore,
+    ensure: Any,
+    ctx: P.RunContext,
+    kw: dict[str, Any],
+    degradation_type: str,
+    info: dict[str, Any],
+    rw: list[str],
+) -> pd.DataFrame:
+    """Dynamic World built-up filter on the rung's degraded shortlist (memoised).
+
+    Only the top ``DW_BUILT_SHORTLIST_FACTOR x n_candidates`` thinned cells are
+    reduced; the rest are not candidates on this rung, so a short result lets the
+    stop rule widen the search. Adds ``dw_built_share`` to the shortlisted pool rows.
+    """
+    max_dw = kw.get("max_dw_built")
+    if max_dw is None or degradation_type == "settlement" or not len(thinned):
+        info["dw_built_filter"] = {"applied": False}
+        return thinned
+    if ctx.end_year < DYNAMIC_WORLD_FIRST_YEAR:
+        info["dw_built_filter"] = {"applied": False, "reason": "end_year before S2 era"}
+        rw.append(
+            "Dynamic World built-up filter skipped (end_year before the S2 era); only the "
+            "WorldCover built-up filter applies."
+        )
+        return thinned
+    k = DW_BUILT_SHORTLIST_FACTOR * int(kw["n_candidates"])
+    short = thinned.head(k)
+    ensure(level, "dw_built", fcells.loc[short.index])
+    shares = pd.to_numeric(
+        store.table(level).loc[short.index, "dw_built_share"], errors="coerce"
+    )
+    kept, dropped = dw_built_filter(short, shares, float(max_dw))
+    pool.loc[short.index, "dw_built_share"] = shares
+    info["dw_built_filter"] = {
+        "applied": True,
+        "max_dw_built": float(max_dw),
+        "shortlist": int(len(short)),
+        "dropped": int(len(dropped)),
+        "kept": int(len(kept)),
+    }
+    if dropped:
+        rw.append(
+            f"Dynamic World built-up filter dropped {len(dropped)} of {len(short)} "
+            f"shortlisted cells (built-label share > {max_dw})."
+        )
+    return kept
 
 
 def _join_new(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
@@ -1189,17 +1280,20 @@ def _apply_type_exclusions(
     site_type: str,
     kw: dict[str, Any],
     degradation_type: str,
-    rw: list[str],
+    *,
+    final: bool,
 ) -> pd.DataFrame:
     if site_type == "reference":
         if kw.get("require_protected"):
             pool = pool.loc[pool["pa_share"].fillna(0) >= PA_EXCLUDE_MIN_SHARE]
         return pool
-    drop = pool["water_frac"].fillna(0) >= DEGRADED_EXCLUDE_MAX_FRAC
-    if degradation_type != "settlement":
-        drop |= pool["built_frac"].fillna(0) >= DEGRADED_EXCLUDE_MAX_FRAC
-    if kw.get("exclude_protected"):
-        drop |= pool["pa_share"].fillna(0) >= PA_EXCLUDE_MIN_SHARE
+    drop = degraded_exclusions(
+        pool,
+        final=final,
+        max_built_frac=float(kw.get("max_built_frac", DEGRADED_MAX_BUILT_FRAC)),
+        keep_built=degradation_type == "settlement",
+        exclude_protected=bool(kw.get("exclude_protected")),
+    )
     return pool.loc[~drop]
 
 
@@ -1794,6 +1888,8 @@ def _assemble(  # noqa: C901
                 "pathway_gate_pct": kw.get("pathway_gate_pct"),
                 "anchor_review_pct": kw.get("anchor_review_pct"),
                 "reference_result_supplied": kw.get("reference_result") is not None,
+                "max_built_frac": kw.get("max_built_frac"),
+                "max_dw_built": kw.get("max_dw_built"),
             }
         )
     provenance = _provenance(ctx)
@@ -1849,6 +1945,29 @@ def _assemble(  # noqa: C901
                 "L",
             )
         )
+        if degradation_type != "settlement":
+            extra.append(
+                _reg(
+                    f"built-up filter: ESA WorldCover built_frac <= {kw.get('max_built_frac')} "
+                    "(final cells)",
+                    "WorldCover v200 (2021 snapshot); GBS focal sites hold no built structures",
+                    "L",
+                )
+            )
+            dwf = info.get("dw_built_filter", {})
+            extra.append(
+                _reg(
+                    f"built-up filter: Dynamic World built-label share <= {kw.get('max_dw_built')} "
+                    "(shortlist)",
+                    (
+                        f"most frequent label over the state window; shortlist "
+                        f"{dwf.get('shortlist')}, dropped {dwf.get('dropped')}"
+                        if dwf.get("applied")
+                        else f"not applied ({dwf.get('reason', 'disabled')})"
+                    ),
+                    "L",
+                )
+            )
         extra.append(
             _reg(
                 f"anchor_check (D4): focal_baseline_pct > {kw.get('anchor_review_pct')}",

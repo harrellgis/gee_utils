@@ -269,7 +269,10 @@ How it works:
   climate, soil texture, HAND).
 - **Condition.** Intactness or degradation from MODIS NDVI/NDMI/NBR state and trends, a
   250 m fraction image (WorldCover or SBTN natural cover, Hansen loss, core area), gHM,
-  BII and WDPA.
+  BII and WDPA. Only forest, riverine and bamboo classes use the forest integrity test
+  (median canopy height >= 5 m); woodland, wooded grassland and other open vegetation
+  are judged on human modification and natural cover, so intact does not mean "more
+  trees".
 - **Degraded sites are the 0% anchor** of the TGBS rescale (reference = 100%,
   degraded = 0%), not look-alikes of the focal baseline. Fine cells go through
   constrain → gate → rank:
@@ -279,6 +282,10 @@ How it works:
   - **pathway gate:** the Satellite Embedding similarity to the focal site's pre-project
     year (or a rule-based `degradation_type` profile) must reach `pathway_gate_pct`. It
     filters on the *kind* of degradation and never ranks;
+  - **no built-up land** (except for `degradation_type="settlement"`): ESA WorldCover
+    built-up <= `max_built_frac` on every candidate, and a Dynamic World built-label
+    share <= `max_dw_built` on each rung's shortlist, which catches newer sprawl.
+    Cropland stays acceptable;
   - **ranking** on state + trajectory only.
 
   Each ranked site reports `focal_baseline_pct_ndvi` / `_ndmi` (where the focal

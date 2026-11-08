@@ -216,3 +216,45 @@ def test_baseline_state_and_focal_anchor(ee_session, small_aoi):
         RunContext(**{**ctx.__dict__, "baseline_start_year": None})
     )
     assert pd.isna(no_base["ndvi_base"]) and pd.notna(no_base["ndvi_state"])
+
+
+@pytest.mark.slow
+def test_dw_built_share_band_and_range(ee_session, small_aoi):
+    """Degraded built-up filter: Dynamic World built-label share, focal-masked."""
+    from eetools.site_selection.predictors import (
+        RunContext,
+        build_dw_built,
+        families,
+        family_reducer,
+        reduce_cells,
+    )
+
+    focal = ee_session.Geometry.Rectangle([39.22, -4.28, 39.225, -4.275])
+    ctx = RunContext(
+        focal_ee=focal,
+        exclusion_ee=focal.buffer(500),
+        search_ee=small_aoi,
+        crs=CRS,
+        end_year=2024,
+        trend_start_year=2010,
+        state_start_year=2022,
+        asset_ids={},
+    )
+    img = build_dw_built(ctx)
+    assert img.bandNames().getInfo() == ["dw_built_share"]
+    fam = families(ctx)["dw_built"]
+    assert fam.bands == ("dw_built_share",) and fam.scale == 10
+    cells = _cells(["250_1200_39500"])
+    df = reduce_cells(
+        img,
+        cells,
+        bands=fam.bands,
+        stats=fam.stats,
+        reducer=family_reducer(fam.reducer),
+        scale=fam.scale,
+        crs=CRS,
+        tile_scale=4,
+        single_name="mean",
+    )
+    v = df["dw_built_share"].iloc[0]
+    assert pd.isna(v) or 0.0 <= v <= 1.0

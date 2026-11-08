@@ -854,9 +854,13 @@ HUMAN_MODIFICATION_YEAR = 2022
 PNV_BIOME_IMAGE = "OpenLandMap/PNV/PNV_BIOME-TYPE_BIOME00K_C/v01"
 PNV_BIOME_BAND = "biome_type"
 PNV_NATIVE_SCALE_M = 1000
-# Biome codes (image property biome_type_class_values/_names, checked 2026-11-05) that
-# count as forest or woodland strata for the forest-only scoring extras.
-PNV_FOREST_WOODLAND_BIOMES = frozenset({1, 2, 3, 4, 7, 8, 9, 13, 14, 15, 16, 17})
+# Biome codes (image property biome_type_class_values/_names, checked 2026-11-08) that
+# count as the forest integrity stratum (canopy-height test, forest-only scoring
+# extras) when the class gate falls back to PNV. Open woodland, shrubland and savanna
+# (16 temperate sclerophyll woodland and shrubland, 17 temperate evergreen needleleaf
+# open woodland, 18 tropical savanna, 20 xerophytic woods/scrub) use the non-forest
+# path: "intactness must not mean more trees" (spec §1.2; Ecosia first-run review).
+PNV_FOREST_STRATUM_BIOMES = frozenset({1, 2, 3, 4, 7, 8, 9, 13, 14, 15})
 
 #################### MERIT Hydro (HAND) ##########################
 MERIT_HYDRO_IMAGE = "MERIT/Hydro/v1_0_1"
@@ -1036,7 +1040,12 @@ VECEA_CLASS_GROUPS: dict[int, str] = {
 VECEA_EXCLUDED_CLASSES = frozenset({87, 88})  # sand, water bodies
 VECEA_MOSAIC_CLASSES = frozenset({15})  # CM: too broad to discriminate coastal strata
 # Groups that count as forest/woodland strata for the forest-only scoring extras.
-VECEA_FOREST_WOODLAND_GROUPS = frozenset({"forest", "woodland", "riverine", "bamboo"})
+# VECEA_CLASS_GROUPS groups scored with the forest integrity stratum (median canopy
+# height >= FOREST_MIN_CANOPY_M, forest-only intactness extras). "woodland" is not one:
+# in Kenya it is mostly wooded grassland (e.g. Wcd, Dry combretum wooded grassland),
+# whose cells have 0-1 m median canopy, so it uses the non-forest path (1-gHM and
+# natural cover). Changed 2026-11-08 after the TGBS_Ecosia first run.
+VECEA_FOREST_STRATUM_GROUPS = frozenset({"forest", "riverine", "bamboo"})
 
 # SoilGrids WRB 2006 reference soil group codes (MostProbable.rat.json).
 WRB_CLASS_TABLE: dict[int, str] = {
@@ -1261,7 +1270,20 @@ FOREST_MIN_CANOPY_M = 5.0  # [L] forest integrity: canopy consistent with forest
 VIIRS_REDUCE_SCALE_M = 500
 
 # Degraded workflow.
-DEGRADED_EXCLUDE_MAX_FRAC = 0.5  # drop cells with >= this water or built-up fraction
+DEGRADED_EXCLUDE_MAX_FRAC = (
+    0.5  # drop cells with >= this water (any cell) or built-up (coarse screen) fraction
+)
+# Degraded built-up filters on final candidate cells (not for degradation_type
+# 'settlement'). GBS focal sites hold no built structures, so a built-up cell is the
+# wrong 0% anchor; cropland stays acceptable. [L] defaults; ~0.01 rather than 0 so a
+# single road pixel (10 m) does not drop a 250 m cell.
+DEGRADED_MAX_BUILT_FRAC = (
+    0.01  # ESA WorldCover (2021) built-up fraction, every final cell
+)
+DEGRADED_MAX_DW_BUILT = 0.01  # Dynamic World built-label share, shortlist only
+DW_BUILT_SHORTLIST_FACTOR = 4  # shortlist = top (factor x n_candidates) thinned cells
+DW_BUILT_LABEL = 6  # Dynamic World 'label' code for built
+DW_BUILT_SCALE_M = 10  # Dynamic World native scale
 PA_EXCLUDE_MIN_SHARE = 0.5  # exclude_protected: drop cells this share inside a PA
 # Degraded anchor (2026-11-07 amendment): the degraded site is the 0% end of the TGBS
 # reference = 100% / degraded = 0% rescale, so it must be at least as degraded as the

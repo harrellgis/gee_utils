@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Breaking (scores):** the forest integrity stratum is now VECEA groups
+  `{forest, riverine, bamboo}` (`VECEA_FOREST_STRATUM_GROUPS`, was
+  `VECEA_FOREST_WOODLAND_GROUPS` with `woodland`) or, outside VECEA, PNV forest biomes
+  without open woodland/shrubland (`PNV_FOREST_STRATUM_BIOMES`, was
+  `PNV_FOREST_WOODLAND_BIOMES` with 16 and 17). Woodland and wooded grassland (e.g. Kenyan
+  Wcd, dry combretum wooded grassland) now use the non-forest integrity path (1 − gHM and
+  natural cover) instead of median canopy height >= 5 m, which their cells (0–1 m) could
+  never meet, and drop the forest-only intactness extras and the canopy reduction. Found
+  on the TGBS_Ecosia first run, where no reference could score integrity 2. Forest sites
+  (e.g. TGBS_ITF, Fb + B) are unchanged.
+- **Breaking (degraded candidates):** built-up land is excluded from degraded candidates
+  (unless `degradation_type="settlement"`), because GBS focal sites hold no built
+  structures; cropland stays acceptable. Final cells need ESA WorldCover built-up
+  <= `max_built_frac` (default `DEGRADED_MAX_BUILT_FRAC = 0.01`; was >= 0.5 dropped,
+  which the coarse screen keeps). The top `DW_BUILT_SHORTLIST_FACTOR` (4) x
+  `n_candidates` thinned cells of each rung also need a Dynamic World built-label share
+  (most frequent label over the state window) <= `max_dw_built` (default 0.01; `None`
+  disables), which catches built-up land newer than WorldCover's 2021 snapshot. Both act
+  before the stop rule, so the search ladder widens when they empty a rung. On
+  TGBS_Ecosia all three degraded picks had been in post-2021 urban sprawl (Dynamic World
+  built probability 0.36–0.54).
 - **Breaking:** `identify_degraded_sites` treats the degraded site as the 0% anchor of
   the TGBS rescale (vault spec §0a, degraded-anchor review 2026-11-07). The 0.35
   embedding/rules signature weight is gone, and fine cells now go through
@@ -28,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   informational.
 
 ### Added
+- `identify_degraded_sites(max_built_frac=, max_dw_built=)`.
+- Pure helpers `forest_stratum`, `degraded_exclusions` and `dw_built_filter` in
+  `site_selection.scoring`.
+- Memoised reduction family `dw_built` (`build_dw_built`, 10 m), reduced on each rung's
+  degraded shortlist only; `dw_built_share` is reported on shortlisted cells, and
+  `params["dw_built_filter"]` and two [L] layer-register rows record the filters.
 - `identify_degraded_sites(pathway_gate_pct=, anchor_review_pct=, reference_result=)`.
 - Reported `focal_baseline_pct_ndvi` / `focal_baseline_pct_ndmi` and `anchor_check` (D4):
   the 100% value comes from `reference_result`'s ranked sites, or else the pool p90.
