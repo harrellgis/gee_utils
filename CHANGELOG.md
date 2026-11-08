@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
 ### Changed
 - **Breaking (scores):** the forest integrity stratum is now VECEA groups
   `{forest, riverine, bamboo}` (`VECEA_FOREST_STRATUM_GROUPS`, was
