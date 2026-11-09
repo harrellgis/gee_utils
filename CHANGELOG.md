@@ -16,6 +16,18 @@ time-aware; percentiles only order eligible cells. Fresh runs are needed: the
 and `dw_landuse_first_year` added), so saved tables are rejected.
 
 ### Added
+- Site-selection condition diagnostics in `eetools.visualization.plots`:
+  `plot_condition_signals` (box-and-strip panels of per-cell condition signals for the
+  strict-PA cells, reference top quartile, reference pool and degraded pool, with
+  separation AUCs in each title), `condition_separation_table` (group medians plus
+  oriented AUCs: reference top quartile vs degraded pool and strict PA vs the rest),
+  `gate_trial_table` (cells each candidate reference-eligibility gate keeps per group),
+  `separation_auc`, `condition_groups`, and the `CONDITION_SIGNALS` /
+  `CONDITION_GROUP_COLUMNS` defaults. Pure pandas/matplotlib on a per-cell table. The
+  default signals are WorldCover natural cover, Dynamic World natural/crop label shares
+  and natural persistence, gHM, NDVI/NDMI state and core fraction; SBTN, BII and
+  dry-season greenness are excluded, since the 2026-11-09 review found they do not
+  separate intact from degraded cells in the TGBS sites.
 - `dw_landuse` reduction family: one 30 m reduction of yearly Dynamic World label modes
   (2019 to `end_year`) on every final cell of each rung. Bands store year shares
   (natural in all / all-but-one years, persistently modified, converted by each year,
