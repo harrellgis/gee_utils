@@ -1031,7 +1031,9 @@ def _score_rung(  # noqa: C901, PLR0913
         ensure("coarse", "rue", c2)
     if need_viirs:
         ensure("coarse", "viirs", c2)
-    craw = _join_new(surv2, store.coarse)
+    # Fresh store values first: surv2 is a snapshot taken before the condition
+    # reductions above, so its copies of those columns can be stale (NaN).
+    craw = _fresh_join(grid.loc[surv2.index], store.coarse, surv2)
     cpool = craw.copy()
     cview = _condition_view(craw, site_type, coarse=coarse_rule)
     for c in cview.columns:
@@ -1113,7 +1115,7 @@ def _score_rung(  # noqa: C901, PLR0913
         ensure(level, "canopy", fcells)
     # Fresh store values first (ftab is a snapshot taken before the condition
     # reductions), then the gate evidence, MESS and parent-climate columns from ftab.
-    pool = _join_new(_join_new(fcells, store.table(level)), ftab)
+    pool = _fresh_join(fcells, store.table(level), ftab)
     pool = _join_new(pool, store.labels)
     pool = pool.sort_index()
 
@@ -1273,6 +1275,20 @@ def _join_new(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
         c for c in right.columns if c not in left.columns and not c.startswith("_done_")
     ]
     return left.join(right[cols], how="left")
+
+
+def _fresh_join(
+    cells: pd.DataFrame, table: pd.DataFrame, snapshot: pd.DataFrame
+) -> pd.DataFrame:
+    """Cells joined to current store values first, then the snapshot's extra columns.
+
+    ``snapshot`` was built before some reductions ran, so any store column it already
+    holds may be stale (NaN for cells reduced since). ``_join_new`` never overwrites a
+    column, so the order matters: store values win and the snapshot only adds columns
+    the store lacks (gate evidence, MESS, parent climate). Without this, results
+    depended on what earlier runs had left in a reused ScreeningTables.
+    """
+    return _join_new(_join_new(cells, table), snapshot)
 
 
 def _apply_type_exclusions(

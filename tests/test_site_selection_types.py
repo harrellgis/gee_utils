@@ -184,3 +184,26 @@ def test_management_units_from_focal_sets():
     outside = _focal_sets(prof({}, {}), EnvelopeTolerances())
     assert outside["class_fallback"] and outside["substrate_fallback"]
     assert np.isnan(np.nan)
+
+
+def test_fresh_join_prefers_store_over_stale_snapshot():
+    """A reused ScreeningTables must not leak stale values into a rung (reproducibility)."""
+    from eetools.site_selection.workflows import _fresh_join, _join_new
+
+    idx = pd.Index(["a", "b"], name="cell_id")
+    cells = pd.DataFrame({"ix": [0, 1]}, index=idx)
+    # Snapshot taken before 'b' was reduced: the column exists (from earlier cells) but is NaN.
+    snapshot = pd.DataFrame(
+        {"ndvi_state_mean": [0.5, np.nan], "mess": [10.0, 20.0]}, index=idx
+    )
+    store = pd.DataFrame(
+        {"ndvi_state_mean": [0.5, 0.7], "_done_ndvi": [True, True]}, index=idx
+    )
+
+    # The old join kept the stale NaN; the fresh join takes the store value.
+    assert np.isnan(_join_new(snapshot, store).loc["b", "ndvi_state_mean"])
+    out = _fresh_join(cells, store, snapshot)
+    assert out.loc["b", "ndvi_state_mean"] == 0.7
+    assert list(out["mess"]) == [10.0, 20.0]  # snapshot-only columns still added
+    assert not any(c.startswith("_done_") for c in out.columns)
+    assert list(out.index) == ["a", "b"]

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Site-selection results no longer depend on what a reused `ScreeningTables` already
+  holds. The Stage 3 coarse condition screen joined store values onto a snapshot taken
+  *before* the coarse condition reductions, and `_join_new` never overwrites a column, so
+  once a store held the `ndvi`/`nbar`/`fraction` columns (from an earlier run, rung or the
+  reference run), cells newly reduced in this run kept NaN in the screen. That changed the
+  screen score, which coarse cells were refined, and so the final pools: TGBS_ITF's
+  degraded pool was 40 cells on a fresh store and 35 from the saved one. Store values now
+  take precedence (`_fresh_join`, also used for the final pool join). Affected: any run
+  reusing a partly filled store, and any single run that moved past the first
+  search-ladder rung. Results from a store that already held every needed cell are
+  unchanged. On a store with 300 of 728 coarse cells blanked, ITF reproduced the
+  saturated results exactly (reference pool 139, degraded pool 35, same ranked sites);
+  unfixed, it gave 129 and 36 with different references.
+
 ## [0.5.0] - 2026-11-08
 
 ### Changed
