@@ -883,10 +883,6 @@ ISDA_SAND_IMAGE = "ISDASOIL/Africa/v1/sand_content"
 ISDA_CLAY_IMAGE = "ISDASOIL/Africa/v1/clay_content"
 ISDA_NATIVE_SCALE_M = 30
 
-#################### SBTN Natural Lands 2020 (optional natural mask) ##########################
-SBTN_NATURAL_LANDS_IMAGE = "WRI/SBTN/naturalLands/v1_1/2020"
-SBTN_NATURAL_BAND = "natural"
-
 #################### Global Mangrove Watch 2020 (coastal stratum) ##########################
 GMW_2020_COLLECTION = "projects/sat-io/open-datasets/GMW/annual-extent/GMW_MNG_2020"
 GMW_BAND = "b1"
@@ -1275,15 +1271,42 @@ DEGRADED_EXCLUDE_MAX_FRAC = (
 )
 # Degraded built-up filters on final candidate cells (not for degradation_type
 # 'settlement'). GBS focal sites hold no built structures, so a built-up cell is the
-# wrong 0% anchor; cropland stays acceptable. [L] defaults; ~0.01 rather than 0 so a
-# single road pixel (10 m) does not drop a 250 m cell.
-DEGRADED_MAX_BUILT_FRAC = (
-    0.01  # ESA WorldCover (2021) built-up fraction, every final cell
-)
-DEGRADED_MAX_DW_BUILT = 0.01  # Dynamic World built-label share, shortlist only
-DW_BUILT_SHORTLIST_FACTOR = 4  # shortlist = top (factor x n_candidates) thinned cells
+# wrong 0% anchor; cropland stays acceptable. [L] defaults, set to tolerate scattered
+# smallholder homesteads and tracks (2026-11-09 review: at 0.01 the TGBS_ITF degraded
+# shortlist kept 2 of 34 farm cells; at 0.05, 13). A cell up to 5% built changes
+# cell-mean NDVI/NDMI little compared with the anchor gaps D1 selects on; the sprawl
+# cells the filter targets were 0.18-1.0 (TGBS_Ecosia). Field-check at the next
+# smallholder site.
+DEGRADED_MAX_BUILT_FRAC = 0.02  # ESA WorldCover (2021) built-up fraction
+DEGRADED_MAX_DW_BUILT = 0.05  # Dynamic World built-label share (dw_landuse family)
 DW_BUILT_LABEL = 6  # Dynamic World 'label' code for built
-DW_BUILT_SCALE_M = 10  # Dynamic World native scale
+
+# Dynamic World land-use history (dw_landuse family, 2026-11-09 robustness review).
+# One 30 m reduction of yearly DW label modes from DW_LANDUSE_FIRST_YEAR to end_year on
+# the final cells of each rung; both workflows read the same values. Thresholds below
+# are [L] tolerances applied in pandas, never part of the provenance key.
+DW_LANDUSE_FIRST_YEAR = 2019  # first year of the land-use history (as tested)
+DW_LANDUSE_SCALE_M = 30
+DW_NATURAL_LABELS = (1, 2, 3, 5)  # trees, grass, flooded vegetation, shrub and scrub
+DW_MODIFIED_LABELS = (4, 6, 7)  # crops, built, bare
+DW_CROP_LABEL = 4
+LANDUSE_MIN_NATURAL_PERSIST = 0.8  # reference gate: persistent-natural cell share
+LANDUSE_MIN_MODIFIED_SHARE = 0.5  # converted / persistently modified cell share
+LANDUSE_MIN_VALID_SHARE = 0.5  # below this share with DW observations -> 'no_dw'
+LANDUSE_CLASSES = (
+    "persistent_natural",
+    "converted",
+    "persistent_modified",
+    "built",
+    "mixed",
+    "no_dw",
+)
+# Degradation pathways that convert land cover (absolute DW pathway test: modified at or
+# before the end of the baseline window). Pathways inside natural cover (overgrazing,
+# rangeland) keep the D2 signature gate and are not separated from references by class.
+CONVERSION_DEGRADATION_TYPES = frozenset(
+    {"generic", "cropland", "settlement", "mining", "bare_soil", "deforestation"}
+)
 PA_EXCLUDE_MIN_SHARE = 0.5  # exclude_protected: drop cells this share inside a PA
 # Degraded anchor (2026-11-07 amendment): the degraded site is the 0% end of the TGBS
 # reference = 100% / degraded = 0% rescale, so it must be at least as degraded as the
@@ -1337,9 +1360,10 @@ SOP_MATRIX_THRESHOLDS = {
     "integrity_loss_2": 0.01,  # loss since 2000 < 1% of cell for a 2
     "integrity_loss_1": 0.05,  # loss since 2000 <= 5% for a 1
     "recent_loss_frac": 0.005,  # recent (last 5 yr) loss fraction allowed
-    "bii_pool_quantile": 0.75,
-    "ghm_pool_quantile": 0.75,  # non-forest: 1 - ghm >= pool p75
-    "natural_frac_nonforest": 0.8,
+    # Non-forest integrity 2 also needs the reference land-use gate and gHM below the
+    # moderate/high break of Kennedy et al. 2019 (low < 0.1, moderate 0.1-0.4, high
+    # 0.4-0.7, very high > 0.7). Absolute, so it never moves with the pool.
+    "integrity_max_ghm": 0.4,
     "size_partial": 0.5,
     "protection_share": 0.5,
     "degraded_loss_2": 0.10,

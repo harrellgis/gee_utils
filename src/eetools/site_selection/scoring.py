@@ -14,11 +14,15 @@ import pandas as pd
 
 from eetools.constants import (
     ANCHOR_INDICES,
+    CONVERSION_DEGRADATION_TYPES,
     DEGRADED_BASELINE_WINDOW_YEARS,
     DEGRADED_EXCLUDE_MAX_FRAC,
+    DW_LANDUSE_FIRST_YEAR,
     FOREST_MIN_CANOPY_M,
     INTACTNESS_WEAK_NATURAL_FRAC,
     INTACTNESS_WEAK_NATURALNESS,
+    LANDUSE_MIN_MODIFIED_SHARE,
+    LANDUSE_MIN_VALID_SHARE,
     MODIS_FIRST_FULL_YEAR,
     PA_EXCLUDE_MIN_SHARE,
     PNV_FOREST_STRATUM_BIOMES,
@@ -106,8 +110,10 @@ def intactness_score(
     """Reference intactness score (spec §5.3), percentiles over the pool in ``df``.
 
     Components: pct(1 - ghm), pct(natural_frac), pct(core_frac), pct(ndvi_state),
-    pct(ndmi_state), pct(min(ndvi_trend, 0)), pct(min(nbr_trend, 0)), pct(bii) and the
-    absolute pa_overlap. Forest strata move ``forest_loss_shift`` from core to
+    pct(ndmi_state), pct(min(ndvi_trend, 0)), pct(min(nbr_trend, 0)),
+    pct(natural_persist) (Dynamic World persistent-natural share) and the absolute
+    pa_overlap. Percentiles only order cells that already passed the absolute
+    land-use gate; they never decide eligibility. Forest strata move ``forest_loss_shift`` from core to
     pct(1 - forest_loss_frac) and ``canopy_shift`` from performance to
     pct(canopy_height_p50) (only when canopy height is available).
 
@@ -128,7 +134,7 @@ def intactness_score(
         "moisture": percentile_normalise(_col(df, "ndmi_state")),
         "persistence": percentile_normalise(_col(df, "ndvi_trend").clip(upper=0)),
         "burn_persist": percentile_normalise(_col(df, "nbr_trend").clip(upper=0)),
-        "bii": percentile_normalise(_col(df, "bii")),
+        "natural_persist": percentile_normalise(_col(df, "natural_persist")),
         "protection": _col(df, "pa_overlap").fillna(0.0).clip(0, 1),
     }
     wts = {
@@ -139,7 +145,7 @@ def intactness_score(
         "moisture": w.moisture,
         "persistence": w.persistence,
         "burn_persist": w.burn_persist,
-        "bii": w.bii,
+        "natural_persist": w.natural_persist,
         "protection": w.protection,
     }
     if is_forest:
@@ -415,32 +421,38 @@ def forest_stratum(
     return forest
 
 
-def degraded_exclusions(
+def degraded_exclusion_reasons(
     pool: pd.DataFrame,
     *,
     final: bool,
     max_built_frac: float,
     keep_built: bool = False,
     exclude_protected: bool = False,
+    max_dw_built: float | None = None,
 ) -> pd.Series:
-    """Cells to drop from a degraded pool (True = drop).
+    """Why each cell is excluded from a degraded pool (None = kept).
 
-    Permanent water (``water_frac >= DEGRADED_EXCLUDE_MAX_FRAC``) is always dropped.
-    Built-up land is dropped unless ``keep_built`` (degradation_type 'settlement'):
-    on the coarse screen at ``built_frac >= DEGRADED_EXCLUDE_MAX_FRAC`` (a 2 km cell
-    nearly always holds some built-up land), and on final candidate cells above
-    ``max_built_frac`` (inclusive maximum), because GBS focal sites hold no built
-    structures.
+    Permanent water (``water_frac >= DEGRADED_EXCLUDE_MAX_FRAC``) -> 'water'. Built-up
+    land, unless ``keep_built`` (degradation_type 'settlement'): on the coarse screen
+    ``built_frac >= DEGRADED_EXCLUDE_MAX_FRAC`` (a 2 km cell nearly always holds some
+    built-up land); on final cells WorldCover ``built_frac > max_built_frac`` ->
+    'built_wc' and Dynamic World ``dw_built_share > max_dw_built`` -> 'built_dw' (NaN
+    is kept: a missing value is not evidence of built-up land), because GBS focal sites
+    hold no built structures. ``exclude_protected`` -> 'protected'. The first matching
+    reason wins. Applied before thinning (gate, then thin).
 
     Args:
-        pool: Cells with water_frac, built_frac and (optionally) pa_share columns.
+        pool: Cells with water_frac, built_frac and (optionally) pa_share and
+            dw_built_share columns.
         final: Final candidate cells (fine cells, or coarse cells when k == 1).
         max_built_frac: Maximum WorldCover built-up fraction for final cells.
         keep_built: Skip the built-up rules (settlement pathway).
         exclude_protected: Also drop cells >= PA_EXCLUDE_MIN_SHARE inside a PA.
+        max_dw_built: Maximum Dynamic World built-label share for final cells; None
+            disables the Dynamic World test.
 
     Returns:
-        Boolean Series aligned to ``pool`` (True = drop).
+        Series of reason strings (None where the cell is kept), aligned to ``pool``.
     """
 
     def col(name: str) -> pd.Series:
@@ -448,40 +460,260 @@ def degraded_exclusions(
             return pd.Series(0.0, index=pool.index)
         return pd.to_numeric(pool[name], errors="coerce").fillna(0.0)
 
-    drop = col("water_frac") >= DEGRADED_EXCLUDE_MAX_FRAC
+    reason = pd.Series(None, index=pool.index, dtype=object)
+
+    def mark(mask: pd.Series, label: str) -> None:
+        reason[mask & reason.isna()] = label
+
+    mark(col("water_frac") >= DEGRADED_EXCLUDE_MAX_FRAC, "water")
     if not keep_built:
         built = col("built_frac")
-        drop |= (
-            (built > max_built_frac) if final else (built >= DEGRADED_EXCLUDE_MAX_FRAC)
-        )
+        if final:
+            mark(built > max_built_frac, "built_wc")
+            if max_dw_built is not None and "dw_built_share" in pool.columns:
+                dwb = pd.to_numeric(pool["dw_built_share"], errors="coerce")
+                mark((dwb > max_dw_built).fillna(False), "built_dw")
+        else:
+            mark(built >= DEGRADED_EXCLUDE_MAX_FRAC, "built_wc")
     if exclude_protected:
-        drop |= col("pa_share") >= PA_EXCLUDE_MIN_SHARE
-    return drop
+        mark(col("pa_share") >= PA_EXCLUDE_MIN_SHARE, "protected")
+    return reason
 
 
-def dw_built_filter(
-    shortlist: pd.DataFrame, shares: pd.Series, max_share: float
-) -> tuple[pd.DataFrame, list[str]]:
-    """Keep shortlisted cells whose Dynamic World built-label share is <= max_share.
-
-    Cells with no Dynamic World observation (NaN share) are kept: the WorldCover
-    filter already applied, and a missing value is not evidence of built-up land.
-    Order is kept and ``rank`` is renumbered 1..n.
+def degraded_exclusions(
+    pool: pd.DataFrame,
+    *,
+    final: bool,
+    max_built_frac: float,
+    keep_built: bool = False,
+    exclude_protected: bool = False,
+    max_dw_built: float | None = None,
+) -> pd.Series:
+    """Cells to drop from a degraded pool (True = drop); see degraded_exclusion_reasons.
 
     Args:
-        shortlist: Thinned, rank-ordered candidates (index cell_id).
-        shares: dw_built_share per cell_id.
-        max_share: Maximum built-label share (inclusive).
+        pool: Cells with water_frac, built_frac and optional pa_share / dw_built_share.
+        final: Final candidate cells (fine cells, or coarse cells when k == 1).
+        max_built_frac: Maximum WorldCover built-up fraction for final cells.
+        keep_built: Skip the built-up rules (settlement pathway).
+        exclude_protected: Also drop cells >= PA_EXCLUDE_MIN_SHARE inside a PA.
+        max_dw_built: Maximum Dynamic World built-label share for final cells.
 
     Returns:
-        (kept candidates with a dw_built_share column, dropped cell_ids).
+        Boolean Series aligned to ``pool`` (True = drop).
     """
-    s = pd.to_numeric(shares.reindex(shortlist.index), errors="coerce")
-    keep = s.isna() | (s <= max_share)
-    out = shortlist.loc[keep].copy()
-    out["dw_built_share"] = s.loc[keep]
-    out["rank"] = np.arange(1, len(out) + 1)
-    return out, list(shortlist.index[~keep])
+    return degraded_exclusion_reasons(
+        pool,
+        final=final,
+        max_built_frac=max_built_frac,
+        keep_built=keep_built,
+        exclude_protected=exclude_protected,
+        max_dw_built=max_dw_built,
+    ).notna()
+
+
+def _natural_persist_column(natural_persist_years: str) -> str:
+    if natural_persist_years not in ("all", "all_but_one"):
+        raise ValueError("natural_persist_years must be 'all' or 'all_but_one'.")
+    return f"dw_nat_share_{natural_persist_years}"
+
+
+def landuse_history(
+    df: pd.DataFrame,
+    *,
+    end_year: int,
+    natural_persist_years: str = "all",
+    min_natural_persist: float = 0.8,
+    max_built_share: float = 0.05,
+    baseline_end_year: int | None = None,
+    min_modified_share: float = LANDUSE_MIN_MODIFIED_SHARE,
+    min_valid_share: float = LANDUSE_MIN_VALID_SHARE,
+) -> pd.DataFrame:
+    """Absolute land-use history class per cell from the ``dw_landuse`` shares.
+
+    Classes, in priority order:
+
+    - ``no_dw``: fewer than ``min_valid_share`` of pixels observed in n - 1 years;
+    - ``built``: Dynamic World built-label share > ``max_built_share``;
+    - ``persistent_natural``: natural share (all / all-but-one years) >=
+      ``min_natural_persist``;
+    - ``converted`` / ``persistent_modified``: converted + persistently modified
+      share >= ``min_modified_share``, labelled by the larger part;
+    - ``mixed``: everything else.
+
+    The two workflows read the same classes, so the reference gate
+    (persistent_natural) and the conversion pathway test (modified by the end of the
+    baseline window) are disjoint by construction.
+
+    Args:
+        df: Cells with the ``dw_landuse`` columns.
+        end_year: Last year of the land-use history.
+        natural_persist_years: 'all' or 'all_but_one'.
+        min_natural_persist: Persistent-natural share for the reference gate.
+        max_built_share: Built-label share above which a cell is 'built'.
+        baseline_end_year: Last year of the degraded baseline window (None: no
+            ``modified_by_baseline`` column beyond the persistent share).
+        min_modified_share: Converted + persistently modified share for the
+            converted / persistent_modified classes.
+        min_valid_share: Observed share below which a cell is 'no_dw'.
+
+    Returns:
+        DataFrame with natural_persist, converted_share, modified_share,
+        modified_by_baseline, dw_conversion_year and landuse_class.
+    """
+    out = pd.DataFrame(index=df.index)
+    nat = _col(df, _natural_persist_column(natural_persist_years))
+    persist = _col(df, "dw_mod_share_persist")
+    conv_end = _col(df, f"dw_converted_by_{int(end_year)}")
+    if int(end_year) <= DW_LANDUSE_FIRST_YEAR:
+        conv_end = pd.Series(0.0, index=df.index)
+    out["natural_persist"] = nat
+    out["converted_share"] = conv_end
+    out["modified_share"] = (persist.fillna(0) + conv_end.fillna(0)).where(
+        persist.notna() | conv_end.notna()
+    )
+    if baseline_end_year is None:
+        by_base = persist
+    elif baseline_end_year <= DW_LANDUSE_FIRST_YEAR:
+        by_base = persist
+    else:
+        y = min(int(baseline_end_year), int(end_year))
+        conv_base = _col(df, f"dw_converted_by_{y}")
+        by_base = (persist.fillna(0) + conv_base.fillna(0)).where(
+            persist.notna() | conv_base.notna()
+        )
+    out["modified_by_baseline"] = by_base
+    out["dw_conversion_year"] = _col(df, "dw_conversion_year")
+    valid = _col(df, "dw_valid_share")
+    built = _col(df, "dw_built_share")
+    cls = pd.Series("mixed", index=df.index, dtype=object)
+    modified = out["modified_share"] >= min_modified_share
+    cls[modified & (conv_end.fillna(0) >= persist.fillna(0))] = "converted"
+    cls[modified & (conv_end.fillna(0) < persist.fillna(0))] = "persistent_modified"
+    cls[nat >= min_natural_persist] = "persistent_natural"
+    cls[built > max_built_share] = "built"
+    cls[valid.isna() | (valid < min_valid_share)] = "no_dw"
+    out["landuse_class"] = cls
+    return out
+
+
+def conversion_pathway(
+    history: pd.DataFrame,
+    degradation_type: str,
+    *,
+    forest_loss_frac: pd.Series | None = None,
+    min_modified_share: float = LANDUSE_MIN_MODIFIED_SHARE,
+    forest_loss_min: float = 0.10,
+) -> pd.Series | None:
+    """Absolute degraded pathway test for conversion pathways (replaces D2 there).
+
+    A cell is on a conversion pathway when at least ``min_modified_share`` of it was
+    converted (natural -> crops, built or bare) at or before the end of the baseline
+    window, or is persistently modified. For 'deforestation' a Hansen forest loss of at
+    least ``forest_loss_min`` also passes, because Dynamic World does not separate trees
+    from regrowing grass or shrub. Returns None for pathways inside natural cover
+    (overgrazing, rangeland), which keep the signature gate (D2) and D1.
+
+    Args:
+        history: Output of :func:`landuse_history`.
+        degradation_type: Degradation pathway.
+        forest_loss_frac: Hansen loss share per cell (deforestation only).
+        min_modified_share: Modified share needed.
+        forest_loss_min: Loss share that also passes for deforestation.
+
+    Returns:
+        Boolean Series (True = on the pathway), or None for non-conversion pathways.
+    """
+    if degradation_type not in CONVERSION_DEGRADATION_TYPES:
+        return None
+    ok = (
+        pd.to_numeric(history["modified_by_baseline"], errors="coerce")
+        >= min_modified_share
+    ).fillna(False)
+    if degradation_type == "deforestation" and forest_loss_frac is not None:
+        loss = pd.to_numeric(forest_loss_frac, errors="coerce").reindex(history.index)
+        ok |= (loss >= forest_loss_min).fillna(False)
+    return ok
+
+
+def near_references(
+    pool: pd.DataFrame, references: pd.DataFrame, min_separation_m: float
+) -> pd.Series:
+    """Cells closer than ``min_separation_m`` to any reference centroid (True = near).
+
+    Used for pathways inside natural cover, where land-use classes cannot keep the
+    degraded and reference sets apart.
+
+    Args:
+        pool: Cells with cx, cy (grid metres).
+        references: Reference cells with cx, cy in the same grid.
+        min_separation_m: Separation distance.
+
+    Returns:
+        Boolean Series aligned to ``pool``.
+    """
+    near = pd.Series(False, index=pool.index)
+    if references is None or not len(references) or not len(pool):
+        return near
+    px = pool["cx"].to_numpy(float)
+    py = pool["cy"].to_numpy(float)
+    for rx, ry in zip(
+        references["cx"].to_numpy(float), references["cy"].to_numpy(float), strict=True
+    ):
+        near |= np.hypot(px - rx, py - ry) < min_separation_m
+    return near
+
+
+def gate_then_thin(
+    pool: pd.DataFrame, eligible: pd.Series, score_col: str, min_separation_m: float
+) -> pd.DataFrame:
+    """Drop ineligible cells first, then thin spatially (never the reverse).
+
+    Thinning before a filter lets a rejected cell suppress its eligible neighbours,
+    which are then never reconsidered (the v0.5.0 Dynamic World built filter did
+    this). Every gate in the workflows runs through this order.
+
+    Args:
+        pool: Scored candidates.
+        eligible: Boolean Series aligned to ``pool`` (True = keep).
+        score_col: Score column.
+        min_separation_m: Thinning distance.
+
+    Returns:
+        Thinned eligible candidates in rank order with a 'rank' column.
+    """
+    keep = eligible.reindex(pool.index, fill_value=False).astype(bool)
+    sub = pool.loc[keep]
+    if not len(sub):
+        return sub.assign(rank=pd.Series(dtype=int))
+    return rank_candidates(sub, score_col, min_separation_m)
+
+
+def stop_rule_met(
+    n_thinned: int,
+    n_candidates: int,
+    units: Iterable[str] = (),
+    covered: Iterable[str] = (),
+    *,
+    require_units: bool = True,
+) -> bool:
+    """Search-ladder stop rule: enough eligible thinned candidates (and every unit).
+
+    Args:
+        n_thinned: Eligible thinned candidates on the rung.
+        n_candidates: Candidates wanted.
+        units: Management units (focal classes) that need a candidate.
+        covered: Units with at least one eligible thinned candidate.
+        require_units: Also require every unit to be covered.
+
+    Returns:
+        True when the rung is good enough to stop the ladder.
+    """
+    if n_thinned < n_candidates:
+        return False
+    if require_units and set(units) - set(covered):
+        return False
+    return True
 
 
 def thin_spatially(
@@ -785,7 +1017,7 @@ class MatrixContext:
         relaxed_criteria: Mandatory criteria relaxed for this rung.
         focal_class_label: Focal class description for evidence.
         focal_substrate_label: Focal soil group description for evidence.
-        pool: Pool used for the BII / naturalness p75 thresholds.
+        baseline_end_year: Last year of the degraded baseline window (evidence).
     """
 
     site_type: str
@@ -806,7 +1038,7 @@ class MatrixContext:
     relaxed_criteria: set[str]
     focal_class_label: str
     focal_substrate_label: str
-    pool: pd.DataFrame
+    baseline_end_year: int | None = None
 
 
 REFERENCE_MANDATORY = (
@@ -877,9 +1109,6 @@ def build_selection_matrix(
     """
     t = SOP_MATRIX_THRESHOLDS
     rows: dict[str, dict[str, Any]] = {}
-    pool = ctx.pool
-    bii_p75 = _col(pool, "bii").quantile(t["bii_pool_quantile"])
-    nat_p75 = (1.0 - _col(pool, "ghm")).quantile(t["ghm_pool_quantile"])
     e_lo2 = min(ctx.elevation_p5, ctx.elevation - t["elevation_band_m"])
     e_hi2 = max(ctx.elevation_p95, ctx.elevation + t["elevation_band_m"])
     r_lo2 = min(ctx.rainfall_p5, ctx.rainfall * (1 - t["rainfall_band_frac"]))
@@ -959,7 +1188,7 @@ def build_selection_matrix(
         )
         loss = c.get("loss_since_2000_frac", np.nan)
         if ctx.site_type == "reference":
-            r["integrity"] = _integrity(c, ctx, bii_p75, nat_p75)
+            r["integrity"] = _integrity(c, ctx)
             eff = c.get("effective_area_ha", np.nan)
             target = min(ctx.focal_area_ha, eff) if pd.notna(eff) else ctx.focal_area_ha
             nat_area = c.get("natural_frac", np.nan) * eff
@@ -1026,10 +1255,26 @@ def build_selection_matrix(
                 "M",
             )
             sp = c.get("signature_pct", np.nan)
+            cy = c.get("dw_conversion_year", np.nan)
+            land = (
+                f"; land use {c.get('landuse_class')}, modified by baseline "
+                f"{_fmt(c.get('modified_by_baseline'))}, converted "
+                f"{_fmt(c.get('converted_share'))}"
+                + (f" (mean year {int(round(cy))})" if pd.notna(cy) else "")
+            )
+            if (
+                pd.notna(cy)
+                and ctx.baseline_end_year is not None
+                and cy > ctx.baseline_end_year
+            ):
+                land += (
+                    f"; converted after the baseline window ({ctx.baseline_end_year}): "
+                    "pathway example rather than anchor"
+                )
             r["pathway"] = (
                 2 if sp >= t["pathway_2"] else (1 if sp >= t["pathway_1"] else 0),
                 f"signature percentile {_fmt(sp)} (gate: {c.get('pathway_gate')}; "
-                "informational)",
+                "informational)" + land,
                 "M",
             )
         row: dict[str, Any] = {}
@@ -1070,39 +1315,40 @@ def build_selection_matrix(
     return mat
 
 
-def _integrity(
-    c: pd.Series, ctx: MatrixContext, bii_p75: float, nat_p75: float
-) -> tuple:
+def _integrity(c: pd.Series, ctx: MatrixContext) -> tuple:
+    """SOP integrity row with absolute thresholds (never pool-relative).
+
+    0: loss since 2000 > integrity_loss_1 or recent loss > recent_loss_frac.
+    2, forest: loss < integrity_loss_2 and canopy >= FOREST_MIN_CANOPY_M.
+    2, non-forest: loss < integrity_loss_2, the reference land-use gate passed
+    (persistent natural) and gHM < integrity_max_ghm. Otherwise 1. An unchanged
+    candidate scores the same whatever the rest of the pool looks like.
+    """
     t = SOP_MATRIX_THRESHOLDS
     loss = c.get("loss_since_2000_frac", np.nan)
     recent = c.get("recent_loss_frac", np.nan)
     loss = 0.0 if pd.isna(loss) else loss
     recent = 0.0 if pd.isna(recent) else recent
-    bii = c.get("bii", np.nan)
+    ghm = c.get("ghm", np.nan)
+    gate = c.get("landuse_class") == "persistent_natural"
     if loss > t["integrity_loss_1"] or recent > t["recent_loss_frac"]:
         score = 0
     else:
-        cond2 = loss < t["integrity_loss_2"] and pd.notna(bii) and bii >= bii_p75
+        cond2 = loss < t["integrity_loss_2"]
         if ctx.is_forest:
             ch = c.get("canopy_height_p50", np.nan)
             cond2 = cond2 and (pd.isna(ch) or ch >= FOREST_MIN_CANOPY_M)
         else:
-            nat = 1.0 - c.get("ghm", np.nan)
-            cond2 = (
-                cond2
-                and pd.notna(nat)
-                and nat >= nat_p75
-                and c.get("natural_frac", 0.0) >= t["natural_frac_nonforest"]
-            )
+            cond2 = cond2 and gate and pd.notna(ghm) and ghm < t["integrity_max_ghm"]
         score = 2 if cond2 else 1
     stratum = (
-        "forest"
+        f"forest (canopy >= {FOREST_MIN_CANOPY_M:g} m)"
         if ctx.is_forest
-        else "non-forest (also needs 1-gHM >= pool p75, natural_frac >= 0.8)"
+        else f"non-forest (needs land-use gate and gHM < {t['integrity_max_ghm']})"
     )
     ev = (
-        f"loss since 2000 {_fmt(loss)}, recent loss {_fmt(recent)}, BII {_fmt(bii)} "
-        f"(pool p75 {_fmt(bii_p75)}); stratum {stratum}"
+        f"loss since 2000 {_fmt(loss)}, recent loss {_fmt(recent)}, gHM {_fmt(ghm)}, "
+        f"land use {c.get('landuse_class')}; stratum {stratum}"
     )
     return score, ev, "H"
 

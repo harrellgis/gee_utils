@@ -20,7 +20,7 @@ Supported sources:
   soil moisture, OPERA DSWx surface water, MERIT Hydro HAND.
 - **Land cover and condition:** ESA WorldCover, Dynamic World, Hansen Global Forest
   Change, Meta/WRI 1 m canopy height, TNC Global Human Modification, BII
-  (Biodiversity Intactness Index), SBTN Natural Lands, Global Mangrove Watch,
+  (Biodiversity Intactness Index), Global Mangrove Watch,
   NASA Black Marble VIIRS (VNP46A2) nighttime lights, Google Satellite Embedding V1
   (AlphaEarth Foundations) annual 64-D embeddings.
 - **Terrain, soil and ecology:** Copernicus DEM/terrain (incl. TPI), iSDA Africa soil
@@ -250,12 +250,15 @@ deg = identify_degraded_sites(
 )
 
 ref.ranked                # GeoDataFrame: rank, role, rank_score, intactness, ...
+ref.pool                  # every final cell: pool_status, gate_reason, landuse_class
 ref.selection_matrix      # CER-K SOP 0/1/2 matrix with evidence and H/M/L confidence
 ref.layer_register        # SOP §7 layer and query register
 ref.warnings              # ladder expansion, relaxed gates, fallbacks, ...
 
 ref.screening.to_parquet("outputs/screening")   # reload: ScreeningTables.from_parquet
 export_site_selection(ref, "outputs", project="TGBS", site="ITF")
+# -> TGBS_ITF_reference_candidates_<date>_v1.gpkg, TGBS_ITF_reference_pool_<date>_v1.gpkg,
+#    plus ranked / selection-matrix / layer-register CSVs
 ```
 
 How it works:
@@ -267,37 +270,56 @@ How it works:
   to iSDA texture, at lower confidence.
 - **Environmental similarity.** MESS on condition-independent predictors (terrain,
   climate, soil texture, HAND).
-- **Condition.** Intactness or degradation from MODIS NDVI/NDMI/NBR state and trends, a
-  250 m fraction image (WorldCover or SBTN natural cover, Hansen loss, core area), gHM,
-  BII and WDPA. Only forest, riverine and bamboo classes use the forest integrity test
-  (median canopy height >= 5 m); woodland, wooded grassland and other open vegetation
-  are judged on human modification and natural cover, so intact does not mean "more
-  trees".
+- **Land-use history (absolute, shared by both workflows).** One Dynamic World
+  reduction per final cell gives the yearly label history from 2019 to `end_year`, and
+  each cell gets a `landuse_class`: `persistent_natural`, `converted` (with mean
+  conversion year), `persistent_modified`, `built`, `mixed` or `no_dw`. **Reference
+  cells must be persistently natural** (`tolerances.min_natural_persist` of the cell
+  natural in every year, or all but one with `natural_persist_years="all_but_one"`).
+  The gate runs inside each search-ladder rung, before scoring, thinning and the stop
+  rule, so a thin gated pool widens the search. Natural cover on final cells is the
+  pixel-level agreement of WorldCover natural and Dynamic World persistent natural
+  (corrects cropland that WorldCover maps as shrub or grass).
+- **Condition.** Within the eligible cells, intactness or degradation from MODIS
+  NDVI/NDMI/NBR state and trends, a 250 m fraction image (natural cover, Hansen loss,
+  core area), gHM, Dynamic World natural persistence and WDPA. Percentiles only order
+  cells; eligibility and the SOP integrity criterion are absolute: forest, riverine and
+  bamboo classes need median canopy height >= 5 m, other vegetation needs the land-use
+  gate and gHM < 0.4, so intact does not mean "more trees".
 - **Degraded sites are the 0% anchor** of the TGBS rescale (reference = 100%,
   degraded = 0%), not look-alikes of the focal baseline. Fine cells go through
   constrain → gate → rank:
   - **anchor constraint:** on NDVI and NDMI, a candidate must be no healthier than the
     focal site in the 3 years before `project_start_year`, and now no healthier than
     the focal site was at either time (`below_baseline`);
-  - **pathway gate:** the Satellite Embedding similarity to the focal site's pre-project
-    year (or a rule-based `degradation_type` profile) must reach `pathway_gate_pct`. It
-    filters on the *kind* of degradation and never ranks;
-  - **no built-up land** (except for `degradation_type="settlement"`): ESA WorldCover
-    built-up <= `max_built_frac` on every candidate, and a Dynamic World built-label
-    share <= `max_dw_built` on each rung's shortlist, which catches newer sprawl.
-    Cropland stays acceptable;
-  - **ranking** on state + trajectory only.
+  - **pathway test:** for conversion pathways (`generic`, `cropland`, `settlement`,
+    `mining`, `bare_soil`, `deforestation`) at least half the cell must have been
+    converted (Dynamic World natural -> crops, built or bare) by the end of the baseline
+    window, or be persistently modified. Such cells can never be references. For
+    pathways inside natural cover (`overgrazing`, `rangeland`) the Satellite Embedding
+    similarity to the focal site's pre-project year (or a rule-based profile) must
+    reach `pathway_gate_pct`, and cells near the ranked references are dropped. The
+    signature never ranks;
+  - **no built-up land** (except for `degradation_type="settlement"`): WorldCover
+    built-up <= `max_built_frac` (0.02) and a Dynamic World built-label share <=
+    `max_dw_built` (0.05) on every final cell, before thinning. The limits tolerate
+    scattered smallholder homesteads; cropland stays acceptable;
+  - **ranking** on state + trajectory only. gHM pressure is scored only for
+    `settlement`, so the ranking does not favour peri-urban cells.
 
   Each ranked site reports `focal_baseline_pct_ndvi` / `_ndmi` (where the focal
   baseline falls on that site's 0–100% scale) and `anchor_check="review"` above
   `anchor_review_pct`. Repeat the anchor check on the survey sensor before rescaling.
 - **Search order.** A coarse screening grid in the focal UTM zone is refined into
   focal-sized cells, and the search widens through tiers (25 / 50 / 150 km) only when
-  too few candidates pass. Reference shortlists are chosen to span the focal site's
-  environmental range.
+  too few eligible candidates pass, or (references) when a management unit (focal
+  class) has none. If the ladder is exhausted, the best gated-out cells fill the list
+  with `fallback=True` and their `gate_reason`. Reference shortlists are chosen to span
+  the focal site's environmental range.
 - **Earth Engine use.** Every reduction is memoised in `ScreeningTables`, and gating,
   scoring and ranking run in pandas. Reusing the tables (in memory or from parquet)
-  costs no further EECU and gives identical results.
+  costs no further EECU and gives identical results. Batches are sent in spatial
+  order and split automatically when Earth Engine reports "Object too large".
 
 VECEA and SoilGrids WRB are uploaded assets, not catalog datasets. Their IDs resolve as
 explicit argument → `EETOOLS_VECEA_ASSET` / `EETOOLS_SOILGRIDS_WRB_ASSET` environment

@@ -219,11 +219,12 @@ def test_baseline_state_and_focal_anchor(ee_session, small_aoi):
 
 
 @pytest.mark.slow
-def test_dw_built_share_band_and_range(ee_session, small_aoi):
-    """Degraded built-up filter: Dynamic World built-label share, focal-masked."""
+def test_dw_landuse_bands_ranges_and_disjoint_shares(ee_session, small_aoi):
+    """Land-use history family: band set, share ranges, converted + persistent <= 1."""
     from eetools.site_selection.predictors import (
         RunContext,
-        build_dw_built,
+        build_dw_landuse,
+        dw_landuse_bands,
         families,
         family_reducer,
         reduce_cells,
@@ -240,11 +241,15 @@ def test_dw_built_share_band_and_range(ee_session, small_aoi):
         state_start_year=2022,
         asset_ids={},
     )
-    img = build_dw_built(ctx)
-    assert img.bandNames().getInfo() == ["dw_built_share"]
-    fam = families(ctx)["dw_built"]
-    assert fam.bands == ("dw_built_share",) and fam.scale == 10
-    cells = _cells(["250_1200_39500"])
+    bands = dw_landuse_bands(ctx)
+    assert "dw_converted_by_2020" in bands and "dw_converted_by_2024" in bands
+    assert "dw_converted_by_2019" not in bands
+    img = build_dw_landuse(ctx)
+    assert img.bandNames().getInfo() == bands
+    fam = families(ctx)["dw_landuse"]
+    assert fam.bands == tuple(bands) and fam.scale == 30
+    # two 250 m cells inside the Kwale test AOI, clear of the focal buffer
+    cells = _cells(["250_2100_38116", "250_2101_38116"])
     df = reduce_cells(
         img,
         cells,
@@ -256,5 +261,17 @@ def test_dw_built_share_band_and_range(ee_session, small_aoi):
         tile_scale=4,
         single_name="mean",
     )
-    v = df["dw_built_share"].iloc[0]
-    assert pd.isna(v) or 0.0 <= v <= 1.0
+    df = df.apply(pd.to_numeric, errors="coerce")
+    assert (df["dw_valid_share"] > 0.5).all()  # land with Dynamic World coverage
+    shares = [b for b in bands if b != "dw_conversion_year"]
+    vals = df[shares].stack()
+    assert ((vals >= 0) & (vals <= 1)).all()
+    # 'all years' is stricter than 'all but one'; agreement band <= DW band
+    assert (df["dw_nat_share_all"] <= df["dw_nat_share_all_but_one"] + 1e-9).all()
+    assert (df["wc_dw_nat_share_all"] <= df["dw_nat_share_all"] + 1e-9).all()
+    # converted and persistently modified pixels are disjoint
+    tot = df["dw_mod_share_persist"] + df["dw_converted_by_2024"]
+    assert (tot <= 1 + 1e-9).all()
+    # cumulative converted shares never decrease
+    conv = df[[f"dw_converted_by_{y}" for y in range(2020, 2025)]]
+    assert (conv.diff(axis=1).iloc[:, 1:] >= -1e-9).all().all()

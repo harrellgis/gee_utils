@@ -26,8 +26,12 @@ from eetools.constants import (
     CHIRPS_NATIVE_SCALE_M,
     CORE_FRAC_RADIUS_M,
     DW_BUILT_LABEL,
-    DW_BUILT_SCALE_M,
     DW_COLLECTION,
+    DW_CROP_LABEL,
+    DW_LANDUSE_FIRST_YEAR,
+    DW_LANDUSE_SCALE_M,
+    DW_MODIFIED_LABELS,
+    DW_NATURAL_LABELS,
     DYNAMIC_WORLD_CONTEXT_BANDS,
     DYNAMIC_WORLD_CONTEXT_SCALE_M,
     EMBEDDING_REDUCE_SCALE_M,
@@ -68,7 +72,6 @@ from eetools.constants import (
     WORLDCOVER_CROPLAND,
     WORLDCOVER_WATER,
 )
-from eetools.sensors.bii.preprocessing import get_bii_image
 from eetools.sensors.canopy_height.preprocessing import get_canopy_height
 from eetools.sensors.chirps.preprocessing import (
     get_chirps_annual_totals,
@@ -77,11 +80,7 @@ from eetools.sensors.chirps.preprocessing import (
 from eetools.sensors.dem.preprocessing import get_copernicus_dem, get_tpi
 from eetools.sensors.hansen.preprocessing import get_forest_change_image
 from eetools.sensors.human_modification.preprocessing import get_human_modification
-from eetools.sensors.hydro.preprocessing import (
-    get_coast_distance,
-    get_hand,
-    get_sbtn_natural,
-)
+from eetools.sensors.hydro.preprocessing import get_coast_distance, get_hand
 from eetools.sensors.isda.preprocessing import get_soil_texture
 from eetools.sensors.modis.preprocessing import (
     annual_sens_slope,
@@ -136,7 +135,6 @@ class RunContext:
     asset_ids: dict[str, str]
     analysis_scale_m: int = 100
     tile_scale: int = 4
-    natural_mask: str = "worldcover"
     target_cover_classes: tuple[int, ...] | None = None
     coastal: bool = False
     class_set: list[int] = field(default_factory=list)
@@ -531,8 +529,10 @@ def build_fraction_image(ctx: RunContext) -> ee.Image:
     focal UTM grid with ``reduceResolution(mean)``; every cell is a multiple of 250 m,
     so cell means are exact area fractions. ``core_frac`` is a 1 km focal mean of the
     unmasked natural fraction (so a degraded focal site still counts as fragmentation
-    next to it), masked afterwards. gHM (90 m) is aggregated the same way; BII (1 km)
-    is resampled. WDPA shares are painted at 30 m and aggregated.
+    next to it), masked afterwards. gHM (90 m) is aggregated the same way. WDPA
+    shares are painted at 30 m and aggregated. ``natural_frac`` here is WorldCover
+    only; fine cells get the Dynamic World cropland correction from the
+    ``dw_landuse`` family (``core_frac`` does not).
 
     Args:
         ctx: RunContext.
@@ -540,7 +540,7 @@ def build_fraction_image(ctx: RunContext) -> ee.Image:
     Returns:
         ee.Image (250 m, focal UTM) with bands natural_frac, bare_frac, crop_frac,
         built_frac, water_frac, loss_since_2000_frac, recent_loss_frac,
-        forest_loss_frac, core_frac, ghm, bii, pa_share, pa_i_iv_share,
+        forest_loss_frac, core_frac, ghm, pa_share, pa_i_iv_share,
         pa_strict_share, pa_overlap.
     """
     outside = ctx.outside_mask()
@@ -555,11 +555,8 @@ def build_fraction_image(ctx: RunContext) -> ee.Image:
         ).reproject(p250)
 
     wc = _worldcover()
-    if ctx.natural_mask == "sbtn":
-        natural = get_sbtn_natural().select("natural").eq(1)
-    else:
-        classes = list(ctx.target_cover_classes or NATURAL_WORLDCOVER_CLASSES)
-        natural = wc.remap(classes, [1] * len(classes), 0)
+    classes = list(ctx.target_cover_classes or NATURAL_WORLDCOVER_CLASSES)
+    natural = wc.remap(classes, [1] * len(classes), 0)
     natural = natural.rename("natural_frac")
     lc = ee.Image.cat(
         [
@@ -601,13 +598,6 @@ def build_fraction_image(ctx: RunContext) -> ee.Image:
     ).setDefaultProjection(gfc.projection())
 
     ghm = get_human_modification()
-    bii = (
-        get_bii_image()
-        .select(["BII All"], ["bii"])
-        .reproject(p250)
-        .updateMask(outside)
-        .toFloat()
-    )
 
     pas = (
         ee.FeatureCollection(WDPA_POLYGONS_COLLECTION)
@@ -654,7 +644,6 @@ def build_fraction_image(ctx: RunContext) -> ee.Image:
             agg(hansen),
             core,
             agg(ghm),
-            bii,
             agg(pa),
         ]
     )
@@ -671,7 +660,6 @@ FRACTION_BANDS = [
     "forest_loss_frac",
     "core_frac",
     "ghm",
-    "bii",
     "pa_share",
     "pa_i_iv_share",
     "pa_strict_share",
@@ -750,34 +738,101 @@ def build_dw_context(ctx: RunContext) -> ee.Image:
     return col.mean().rename([f"dw_{b}" for b in DYNAMIC_WORLD_CONTEXT_BANDS])
 
 
-def build_dw_built(ctx: RunContext) -> ee.Image:
-    """Dynamic World built-label share image for the degraded built-up filter.
+def dw_landuse_years(ctx: RunContext) -> list[int]:
+    """Years of the Dynamic World land-use history: DW_LANDUSE_FIRST_YEAR..end_year."""
+    return list(range(DW_LANDUSE_FIRST_YEAR, int(ctx.end_year) + 1))
 
-    Per pixel: 1 where the most frequent Dynamic World label over the state window is
-    built, else 0 (pixels without observations stay masked); focal-masked. A cell mean
-    is the share of the cell that is mostly built. Label share, not mean built
-    probability, because the probability is non-zero almost everywhere (bare-soil
-    confusion). Reduced only on each rung's degraded shortlist.
+
+def dw_landuse_bands(ctx: RunContext) -> list[str]:
+    """Band names of :func:`build_dw_landuse` (they depend on end_year)."""
+    years = dw_landuse_years(ctx)
+    return [
+        "dw_valid_share",
+        "dw_nat_share_all",
+        "dw_nat_share_all_but_one",
+        "dw_mod_share_persist",
+        "wc_dw_nat_share_all",
+        "wc_dw_nat_share_all_but_one",
+        "dw_crop_share",
+        "dw_built_share",
+        "dw_conversion_year",
+        *[f"dw_converted_by_{y}" for y in years[1:]],
+    ]
+
+
+def build_dw_landuse(ctx: RunContext) -> ee.Image:
+    """Per-pixel Dynamic World land-use history; cell means are area shares.
+
+    From the most frequent DW label of each year (DW_LANDUSE_FIRST_YEAR..end_year,
+    ``n`` years; a year without observations counts as not natural and not modified):
+
+    - ``dw_valid_share``: observed in at least n - 1 years;
+    - ``dw_nat_share_all`` / ``dw_nat_share_all_but_one``: natural (trees, grass,
+      flooded vegetation, shrub) in all n / at least n - 1 years. Both are stored so
+      the reference gate's year rule is a pandas tolerance, not a re-reduction;
+    - ``dw_mod_share_persist``: modified (crops, built, bare) in at least n - 1 years;
+    - ``wc_dw_nat_share_*``: pixel-level agreement, WorldCover natural AND DW
+      persistently natural (the cropland correction of natural cover; exact, unlike a
+      combination of two cell fractions);
+    - ``dw_crop_share`` / ``dw_built_share``: crop / built label share of the most
+      frequent label over the state window;
+    - ``dw_converted_by_<y>``: converted natural -> modified in year <= y and still
+      modified in end_year (the first such transition counts), for each year after
+      the first. Pixels in ``dw_mod_share_persist`` are never counted as converted, so
+      the two shares add up without double counting. Per-year shares keep the
+      degraded baseline year out of the reduction;
+    - ``dw_conversion_year``: first transition year, masked to converted pixels (the
+      cell mean is the mean conversion year).
+
+    All bands are focal-masked. One reduction serves the reference gate, the
+    degraded pathway test, the built-up filter and the corrected natural cover.
 
     Args:
         ctx: RunContext.
 
     Returns:
-        ee.Image with a single 'dw_built_share' band (0/1).
+        ee.Image with the bands of :func:`dw_landuse_bands`.
     """
-    col = (
-        ee.ImageCollection(DW_COLLECTION)
-        .filterBounds(ctx.search_ee)
-        .filterDate(f"{ctx.state_start_year}-01-01", f"{ctx.end_year + 1}-01-01")
-        .select("label")
-    )
-    return (
-        col.mode()
-        .eq(DW_BUILT_LABEL)
-        .toFloat()
-        .rename("dw_built_share")
-        .updateMask(ctx.outside_mask())
-    )
+    years = dw_landuse_years(ctx)
+    n = len(years)
+    col = ee.ImageCollection(DW_COLLECTION).filterBounds(ctx.search_ee).select("label")
+    labels = [
+        col.filterDate(f"{y}-01-01", f"{y + 1}-01-01").mode().unmask(-1) for y in years
+    ]
+    nat = [_remap_in(lab, DW_NATURAL_LABELS, "nat") for lab in labels]
+    mod = [_remap_in(lab, DW_MODIFIED_LABELS, "mod") for lab in labels]
+    valid = [lab.gte(0).rename("valid").toFloat() for lab in labels]
+    nat_n = ee.ImageCollection(nat).sum()
+    mod_n = ee.ImageCollection(mod).sum()
+    valid_n = ee.ImageCollection(valid).sum()
+    nat_all = nat_n.gte(n)
+    nat_all1 = nat_n.gte(n - 1)
+    mod_persist = mod_n.gte(n - 1)
+    first = ee.Image.constant(0)
+    for i in range(n - 1, 0, -1):  # reversed, so the earliest transition wins
+        trans = nat[i - 1].And(mod[i]).And(mod[-1])
+        first = first.where(trans, years[i])
+    converted = first.gt(0).And(mod_persist.Not())
+    classes = list(ctx.target_cover_classes or NATURAL_WORLDCOVER_CLASSES)
+    wc_nat = _worldcover().remap(classes, [1] * len(classes), 0)
+    state = col.filterDate(
+        f"{ctx.state_start_year}-01-01", f"{ctx.end_year + 1}-01-01"
+    ).mode()
+    bands = [
+        valid_n.gte(n - 1).rename("dw_valid_share"),
+        nat_all.rename("dw_nat_share_all"),
+        nat_all1.rename("dw_nat_share_all_but_one"),
+        mod_persist.rename("dw_mod_share_persist"),
+        wc_nat.And(nat_all).rename("wc_dw_nat_share_all"),
+        wc_nat.And(nat_all1).rename("wc_dw_nat_share_all_but_one"),
+        state.eq(DW_CROP_LABEL).rename("dw_crop_share"),
+        state.eq(DW_BUILT_LABEL).rename("dw_built_share"),
+        first.updateMask(converted).rename("dw_conversion_year"),
+    ]
+    bands += [
+        converted.And(first.lte(y)).rename(f"dw_converted_by_{y}") for y in years[1:]
+    ]
+    return ee.Image.cat(bands).toFloat().updateMask(ctx.outside_mask())
 
 
 # --------------------------------------------------------------------------- #
@@ -901,7 +956,11 @@ def reduce_cells(
     """Reduce an image over grid cells in batches and pull a pandas table.
 
     One ``reduceRegions`` per batch with an explicit scale, CRS and tileScale (never
-    bestEffort); the table is pulled once per batch with ``computeFeatures``.
+    bestEffort); the table is pulled once per batch with ``computeFeatures``. Cells are
+    batched in numeric (ix, iy) order so each request is spatially compact (cell_id
+    strings sort "1000_1000_..." before "1000_190_..."). A batch that fails with Earth
+    Engine's "Object too large" is split in half and retried, down to single cells:
+    the limit depends on the request's spatial extent, not only on the cell count.
 
     Args:
         image: Image to reduce.
@@ -922,9 +981,8 @@ def reduce_cells(
     want = output_columns(bands, stats)
     if len(cells) == 0:
         return pd.DataFrame(columns=want, index=pd.Index([], name="cell_id"))
-    frames = []
-    for start in range(0, len(cells), batch_size):
-        chunk = cells.iloc[start : start + batch_size]
+
+    def run(chunk: pd.DataFrame) -> list[pd.DataFrame]:
         fc = image.reduceRegions(
             collection=cells_feature_collection(chunk, crs),
             reducer=reducer,
@@ -932,7 +990,21 @@ def reduce_cells(
             crs=crs,
             tileScale=tile_scale,
         )
-        frames.append(_pull(fc))
+        try:
+            return [_pull(fc)]
+        except Exception as exc:  # noqa: BLE001 - only the size limit is retried
+            if "Object too large" not in str(exc) or len(chunk) < 2:
+                raise
+            half = len(chunk) // 2
+            return run(chunk.iloc[:half]) + run(chunk.iloc[half:])
+
+    ordered = cells.assign(
+        _ix=pd.to_numeric(cells["ix"]), _iy=pd.to_numeric(cells["iy"])
+    ).sort_values(["_ix", "_iy"], kind="mergesort")
+    ordered = ordered.drop(columns=["_ix", "_iy"])
+    frames = []
+    for start in range(0, len(ordered), batch_size):
+        frames.extend(run(ordered.iloc[start : start + batch_size]))
     df = pd.concat(frames, ignore_index=True)
     df = _rename_reduced(df, bands, stats, single_name)
     df = df.set_index("cell_id")
@@ -1144,9 +1216,10 @@ def families(ctx: RunContext) -> dict[str, Family]:
         "canopy": Family(
             "canopy", ("canopy_height",), None, CANOPY_HEIGHT_REDUCE_SCALE_M, "median"
         ),
-        # Degraded built-up filter: shortlisted final cells only.
-        "dw_built": Family(
-            "dw_built", ("dw_built_share",), None, DW_BUILT_SCALE_M, "mean"
+        # Land-use history (reference gate, degraded pathway, built-up filter,
+        # corrected natural cover): every final cell of a rung, before thinning.
+        "dw_landuse": Family(
+            "dw_landuse", tuple(dw_landuse_bands(ctx)), None, DW_LANDUSE_SCALE_M, "mean"
         ),
         "labels": Family(
             "labels",
@@ -1172,7 +1245,7 @@ def family_image_fn(name: str, ctx: RunContext) -> Any:
         "rue": lambda: build_rue_trend(ctx),
         "viirs": lambda: build_viirs(ctx),
         "canopy": lambda: build_canopy(ctx),
-        "dw_built": lambda: build_dw_built(ctx),
+        "dw_landuse": lambda: build_dw_landuse(ctx),
         "labels": lambda: build_label_image(ctx),
     }[name]
 
