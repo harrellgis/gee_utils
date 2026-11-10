@@ -64,6 +64,20 @@ class EnvelopeTolerances:
             None -> 3 x n_candidates.
         exclude_max_share: A cell is dropped if more than this share lies inside the
             focal site + exclusion buffer (or exclude_fc).
+        min_natural_persist: Reference land-use gate: a final cell needs at least this
+            share of pixels that are Dynamic World natural in the required number of
+            years (``natural_persist_years``). Applied inside each rung before
+            scoring, thinning and the stop rule ([L]).
+        natural_persist_years: 'all_but_one' (default; tolerates one off-year label,
+            e.g. DW grass/shrub/crop swapping, or edge pixels in large cells) or 'all'
+            (natural in every year of the land-use history). Both shares are reduced,
+            so this never re-reduces. Default chosen on the v0.6.0 validation: at
+            TGBS_Kwale's 2.5 km cells the known Buda reference failed 'all' (median
+            0.77) and passed 'all_but_one' (0.92); Ecosia kept all 18 strict-PA cells
+            either way.
+        unit_coverage_stop: The search ladder stops only when the rung has enough
+            eligible thinned references *and* each management unit (focal class) has
+            at least one; False stops on the count alone (saves Tier 3 compute).
     """
 
     class_match: Literal["same", "group"] = "same"
@@ -79,8 +93,15 @@ class EnvelopeTolerances:
     relaxation: Literal["before_tier3", "after_tier3", "off"] = "before_tier3"
     min_screen_pool: int | None = None
     exclude_max_share: float = 0.5
+    min_natural_persist: float = 0.8
+    natural_persist_years: Literal["all", "all_but_one"] = "all_but_one"
+    unit_coverage_stop: bool = True
 
     def __post_init__(self) -> None:
+        _check_choice(
+            "natural_persist_years", self.natural_persist_years, ("all", "all_but_one")
+        )
+        _check_unit("min_natural_persist", self.min_natural_persist)
         _check_choice("class_match", self.class_match, ("same", "group"))
         _check_choice(
             "substrate_match", self.substrate_match, ("same", "related", "off")
@@ -107,7 +128,9 @@ class ReferenceWeights:
 
     For the forest stratum (forest, riverine, bamboo), ``forest_loss_shift`` moves from ``core`` to
     pct(1 - forest_loss_frac) and ``canopy_shift`` moves from ``performance`` to
-    pct(canopy_height_p50).
+    pct(canopy_height_p50). ``natural_persist`` scores the Dynamic World persistent-
+    natural share (it replaced BII in v0.6.0: BII did not separate intact from
+    degraded cells at the TGBS sites).
     """
 
     naturalness: float = 0.25
@@ -117,7 +140,7 @@ class ReferenceWeights:
     moisture: float = 0.05
     persistence: float = 0.05
     burn_persist: float = 0.05
-    bii: float = 0.10
+    natural_persist: float = 0.10
     protection: float = 0.10
     forest_loss_shift: float = 0.05
     canopy_shift: float = 0.05
@@ -151,6 +174,35 @@ class DegradedWeights:
 
     def __post_init__(self) -> None:
         _check_weights(self)
+
+
+def default_degraded_weights(degradation_type: str) -> DegradedWeights:
+    """Default DegradedWeights for a degradation pathway.
+
+    The gHM ``pressure`` term ranks peri-urban cells as more degraded, which pulls
+    picks toward built-up sprawl (2026-11-08 / 11-09 reviews). It is kept only for
+    ``degradation_type='settlement'``; for every other pathway its weight is 0 and the
+    remaining terms keep their proportions.
+
+    Args:
+        degradation_type: Degradation pathway.
+
+    Returns:
+        DegradedWeights.
+    """
+    w = DegradedWeights()
+    if degradation_type == "settlement":
+        return w
+    rest = 1.0 - w.pressure
+    return DegradedWeights(
+        perf_deficit=w.perf_deficit / rest,
+        moist_deficit=w.moist_deficit / rest,
+        unnatural=w.unnatural / rest,
+        pressure=0.0,
+        browning=w.browning / rest,
+        nbr_decline=w.nbr_decline / rest,
+        loss=w.loss / rest,
+    )
 
 
 def _check_choice(name: str, value: Any, allowed: tuple[str, ...]) -> None:
@@ -312,7 +364,9 @@ class SiteSelectionResult:
     Attributes:
         site_type: 'reference' or 'degraded'.
         ranked: Top-N proposed sites, rank 1..N (EPSG:4326 cell polygons).
-        pool: Every scored candidate of the final rung (for audit / plotting).
+        pool: Every final cell of the rung reached that passed the fine envelope
+            gate, with ``pool_status`` ('eligible' / 'gated_out'), ``gate_reason``
+            and ``landuse_class``. Only eligible cells carry scores.
         focal_profile: Focal samples of condition-independent predictors; column
             ``sample_set`` is 'mess' (native-scale MESS reference sample) or 'span'
             (joint sample used for environmental-range spanning).

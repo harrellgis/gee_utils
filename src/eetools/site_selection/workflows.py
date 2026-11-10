@@ -26,14 +26,15 @@ from eetools.constants import (
     COAST_PREDICTOR,
     COASTAL_MIN_LIMIT_M,
     COASTAL_TRIGGER_M,
+    CONVERSION_DEGRADATION_TYPES,
     DEFAULT_EXCLUDE_BUFFER_M,
     DEFAULT_FOCAL_SAMPLES,
     DEFAULT_REFERENCE_BUFFER_M,
     DEGRADATION_TYPE_PROFILES,
     DEGRADED_MAX_BUILT_FRAC,
     DEGRADED_MAX_DW_BUILT,
-    DW_BUILT_SHORTLIST_FACTOR,
     DW_COLLECTION,
+    DW_LANDUSE_FIRST_YEAR,
     DYNAMIC_WORLD_FIRST_YEAR,
     EMBEDDING_FIRST_YEAR,
     EMBEDDING_LATEST_YEAR,
@@ -54,7 +55,6 @@ from eetools.constants import (
     RECENT_LOSS_YEARS,
     RESOLVE_ECOREGIONS_COLLECTION,
     SATELLITE_EMBEDDING_COLLECTION,
-    SBTN_NATURAL_LANDS_IMAGE,
     STATE_WINDOW_YEARS,
     TERRACLIMATE_COLLECTION,
     TREND_WINDOW_YEARS,
@@ -102,18 +102,25 @@ from eetools.site_selection.scoring import (
     baseline_window,
     build_layer_register,
     build_selection_matrix,
+    conversion_pathway,
     degradation_score,
+    degraded_exclusion_reasons,
     degraded_exclusions,
-    dw_built_filter,
     focal_baseline_pct,
     forest_stratum,
+    gate_then_thin,
     intactness_flag,
     intactness_score,
+    landuse_history,
+    mandatory_criteria,
+    near_references,
+    pathway_example,
     pathway_gate,
     percentile_normalise,
-    rank_candidates,
     select_spanning_set,
     signature_from_rules,
+    sort_by_score,
+    stop_rule_met,
     thin_spatially,
     zero_star_likelihood,
 )
@@ -135,6 +142,7 @@ from eetools.site_selection.types import (
     ScreeningTables,
     SiteSelectionResult,
     dataclass_params,
+    default_degraded_weights,
 )
 
 SURVEY_PENDING = (
@@ -164,7 +172,6 @@ def identify_reference_sites(
     weights: ReferenceWeights | None = None,
     use_embeddings: bool = True,
     embed_pool: int = 100,
-    natural_mask: Literal["worldcover", "sbtn"] = "worldcover",
     require_protected: bool = False,
     span_environment: bool = True,
     span_score_floor: float = 0.5,
@@ -179,10 +186,17 @@ def identify_reference_sites(
     envelope gate (VECEA national class, SoilGrids WRB substrate, elevation +/-300 m,
     CHIRPS rainfall +/-25%, HAND, coast); Stage 2 MESS on condition-independent
     predictors; Stage 3 condition screen (MODIS NDVI/NDMI/NBR, 250 m fraction image,
-    gHM, BII, WDPA); Stage 3a refinement of the best coarse cells into focal-sized
-    cells; Stage 3b embedding similarity; ranking, thinning and SOP spanning, all
-    repeated per search-ladder rung until enough candidates pass. Only the Earth
-    Engine reductions cost EECU, and they are memoised in ``result.screening``.
+    gHM, WDPA); Stage 3a refinement of the best coarse cells into focal-sized cells;
+    the **land-use gate** (Dynamic World history: a final cell needs
+    ``tolerances.min_natural_persist`` of its pixels natural in every year, or all but
+    one, from 2019 to ``end_year``); Stage 3b embedding similarity; ranking, thinning
+    and SOP spanning. The gate runs before scoring, thinning and the stop rule, so a
+    thin gated pool widens the search ladder; the ladder stops when there are
+    ``n_candidates`` eligible references and every management unit has one (see
+    ``EnvelopeTolerances.unit_coverage_stop``). If the ladder is exhausted with fewer,
+    the best gated-out cells fill the list with ``fallback=True`` and their
+    ``gate_reason`` ("most intact available", R2, as an explicit fallback). Only the
+    Earth Engine reductions cost EECU, and they are memoised in ``result.screening``.
 
     Outputs are *proposed* candidates for field verification, never final
     designations. Survey-sensor confirmation (R7) is a separate step:
@@ -198,7 +212,9 @@ def identify_reference_sites(
         auto_seeds: 'wdpa_strict' uses Stage-1 survivors inside designated IUCN Ia-II
             areas as the embedding query when no seeds are given (Scenario A').
         target_cover_classes: Optional ESA WorldCover codes counted as natural cover
-            (default: tree, shrub, grass, herbaceous wetland, mangrove, moss).
+            (default: tree, shrub, grass, herbaceous wetland, mangrove, moss). Final
+            cells use the pixel-level agreement of these classes with Dynamic World
+            persistent natural cover (cropland correction).
         n_candidates: References wanted (>= 3 for the SOP; raised to the number of
             management units).
         tier_distances_km: Outer limits of search tiers 1-3 (km).
@@ -210,7 +226,6 @@ def identify_reference_sites(
         weights: ReferenceWeights (defaults if None).
         use_embeddings: Run the Stage 3b embedding step.
         embed_pool: Fine cells sent to the embedding step.
-        natural_mask: 'worldcover' (default) or 'sbtn' natural mask.
         require_protected: Keep only cells at least half inside designated WDPA areas.
         span_environment: Choose references that span the focal environment (SOP).
         span_score_floor: Eligible references must be in this top share of the pool.
@@ -245,7 +260,6 @@ def identify_reference_sites(
         ref_weights=weights,
         use_embeddings=use_embeddings,
         embed_pool=embed_pool,
-        natural_mask=natural_mask,
         require_protected=require_protected,
         span_environment=span_environment,
         span_score_floor=span_score_floor,
@@ -277,7 +291,6 @@ def identify_degraded_sites(
     reference_result: SiteSelectionResult | None = None,
     max_built_frac: float = DEGRADED_MAX_BUILT_FRAC,
     max_dw_built: float | None = DEGRADED_MAX_DW_BUILT,
-    natural_mask: Literal["worldcover", "sbtn"] = "worldcover",
     exclude_protected: bool = False,
     exclude_fc: ee.FeatureCollection | None = None,
     asset_overrides: dict[str, str] | None = None,
@@ -294,26 +307,32 @@ def identify_degraded_sites(
        state <= the focal site's, and its current state <= min(focal baseline,
        focal current). The baseline window is the 3 complete years before
        ``project_start_year``.
-    2. **Pathway gate (D2):** pct(signature_sim) >= ``pathway_gate_pct``. The
-       signature is the cosine similarity of mean Satellite Embeddings in
-       ``project_start_year - 1`` (``signature_mode='embedding'``), or a rule-based
-       profile of ``degradation_type`` (``'rules'``; forced, with a warning, for
-       baselines before 2017). It filters on the *kind* of degradation; it never
-       ranks, because a weight would penalise sites further along the same pathway.
-    3. **Rank** on STATE (productivity and moisture deficit, unnaturalness, pressure)
-       + TRAJECTORY (browning, NBR decline, loss).
+    2. **Pathway test.** For conversion pathways (generic, cropland, settlement,
+       mining, bare_soil, deforestation) it is absolute: at least half the cell was
+       converted by Dynamic World (natural -> crops, built or bare) at or before the
+       end of the baseline window, or is persistently modified (deforestation also
+       passes on Hansen loss >= 10%). Converted cells are then disjoint from the
+       reference land-use gate by construction. For pathways inside natural cover
+       (overgrazing, rangeland) the D2 gate stays: pct(signature_sim) >=
+       ``pathway_gate_pct``, and candidates within the thinning distance of
+       ``reference_result``'s ranked sites are dropped. The signature (Satellite
+       Embedding cosine similarity in ``project_start_year - 1``, or a rule-based
+       profile) is always reported and feeds the informational pathway matrix row; it
+       never ranks.
+    3. **Rank** on STATE (productivity and moisture deficit, unnaturalness, plus gHM
+       pressure for 'settlement' only) + TRAJECTORY (browning, NBR decline, loss).
 
     Each ranked site also reports ``focal_baseline_pct_<x>`` (where the focal
-    baseline falls on that site's 0-100% scale) and ``anchor_check='review'`` when
-    any exceeds ``anchor_review_pct``. If nothing passes D1, the most degraded
-    candidates are returned with ``below_baseline=False`` and a warning. Permanent
-    water is excluded. Unless ``degradation_type='settlement'``, built-up land is
-    excluded too, because GBS focal sites hold no built structures (cropland stays
-    acceptable): final cells need ESA WorldCover built-up <= ``max_built_frac``, and
-    the top ``DW_BUILT_SHORTLIST_FACTOR x n_candidates`` thinned cells of each rung
-    need a Dynamic World built-label share <= ``max_dw_built`` (catches built-up land
-    newer than WorldCover's 2021 snapshot). Both filters act before the stop rule, so
-    the search ladder widens when they empty a rung. Pass
+    baseline falls on that site's 0-100% scale), ``anchor_check='review'`` when any
+    exceeds ``anchor_review_pct``, its land-use class and its mean conversion year
+    (a cell converted after the baseline window is flagged ``pathway_example``). If
+    nothing passes D1, the most degraded candidates are returned with
+    ``below_baseline=False`` and a warning. Permanent water is excluded. Unless
+    ``degradation_type='settlement'``, built-up land is excluded too, because GBS
+    focal sites hold no built structures (cropland stays acceptable): every final cell
+    needs ESA WorldCover built-up <= ``max_built_frac`` and a Dynamic World
+    built-label share <= ``max_dw_built``. Every gate runs before thinning and the
+    stop rule, so the search ladder widens when gates empty a rung. Pass
     ``screening=reference_result.screening`` to reuse the reference run's reductions.
 
     Args:
@@ -321,8 +340,9 @@ def identify_degraded_sites(
         project_start_year: Year restoration started; sets the signature baseline year
             (the year before) and the anchor baseline window (3 years before).
         end_year: Last complete year of the condition window (default: last year).
-        degradation_type: Degradation pathway; drives rules-mode signatures and the
-            built-up exclusion.
+        degradation_type: Degradation pathway; selects the pathway test (conversion
+            vs inside natural cover), rules-mode signatures, the built-up exclusion
+            and whether gHM pressure is scored (settlement only).
         signature_mode: 'embedding' (default) or 'rules'.
         n_candidates: Degraded sites wanted.
         tier_distances_km: Outer limits of search tiers 1-3 (km).
@@ -331,20 +351,23 @@ def identify_degraded_sites(
         analysis_scale_m: Scale of the terrain/soil/HAND MESS predictors (m).
         screening: ScreeningTables from an earlier run on the same focal site.
         tolerances: EnvelopeTolerances (defaults if None).
-        weights: DegradedWeights (defaults if None).
+        weights: DegradedWeights (default: ``default_degraded_weights(degradation_type)``,
+            i.e. pressure 0 unless 'settlement').
         embed_pool: Anchor-constraint survivors sent to the embedding (pathway) step.
-        pathway_gate_pct: Minimum pct(signature_sim) to pass the pathway gate ([L]).
+        pathway_gate_pct: Minimum pct(signature_sim) to pass the D2 gate, pathways
+            inside natural cover only ([L]).
         anchor_review_pct: focal_baseline_pct above this flags anchor_check='review'
             ([L]).
         reference_result: Optional reference run on the same focal site; its ranked
             sites' mean NDVI/NDMI state is the 100% value for focal_baseline_pct
             (else the pool p90).
-        natural_mask: 'worldcover' (default) or 'sbtn'.
         max_built_frac: Maximum ESA WorldCover (2021) built-up fraction of a final
-            candidate cell ([L]; ignored for 'settlement').
+            candidate cell ([L]; ignored for 'settlement'). Default 0.02.
         max_dw_built: Maximum Dynamic World built-label share (most frequent label
-            over the state window) of a shortlisted cell ([L]); None disables the
-            Dynamic World filter. Ignored for 'settlement' and before the S2 era.
+            over the state window) of a final cell ([L]); None disables the
+            Dynamic World filter. Ignored for 'settlement'. Default 0.05: tolerates
+            scattered smallholder homesteads, while a cell up to 5% built changes
+            cell-mean NDVI/NDMI little next to the anchor gaps D1 selects on.
         exclude_protected: Drop cells at least half inside designated WDPA areas.
         exclude_fc: Optional areas to exclude.
         asset_overrides: Optional {'vecea': id, 'soilgrids_wrb': id}.
@@ -379,7 +402,6 @@ def identify_degraded_sites(
         reference_result=reference_result,
         max_built_frac=max_built_frac,
         max_dw_built=max_dw_built,
-        natural_mask=natural_mask,
         exclude_protected=exclude_protected,
         exclude_fc=exclude_fc,
         asset_overrides=asset_overrides,
@@ -505,7 +527,6 @@ def _condition_view(tab: pd.DataFrame, site_type: str, coarse: bool) -> pd.DataF
         "forest_loss_frac",
         "core_frac",
         "ghm",
-        "bii",
         "pa_share",
         "pa_i_iv_share",
         "pa_strict_share",
@@ -535,14 +556,14 @@ def _run(
 ) -> SiteSelectionResult:  # noqa: C901
     tol: EnvelopeTolerances = kw.get("tolerances") or EnvelopeTolerances()
     ref_w: ReferenceWeights = kw.get("ref_weights") or ReferenceWeights()
-    deg_w: DegradedWeights = kw.get("deg_weights") or DegradedWeights()
+    deg_w: DegradedWeights = kw.get("deg_weights") or default_degraded_weights(
+        kw.get("degradation_type", "generic")
+    )
     n_candidates = int(kw["n_candidates"])
     if n_candidates < 1:
         raise ValueError("n_candidates must be >= 1.")
     if kw.get("auto_seeds", "none") not in ("none", "wdpa_strict"):
         raise ValueError("auto_seeds must be 'none' or 'wdpa_strict'.")
-    if kw["natural_mask"] not in ("worldcover", "sbtn"):
-        raise ValueError("natural_mask must be 'worldcover' or 'sbtn'.")
     degradation_type = kw.get("degradation_type", "generic")
     if site_type == "degraded" and degradation_type not in DEGRADATION_TYPE_PROFILES:
         raise ValueError(
@@ -673,7 +694,6 @@ def _run(
         asset_ids=asset_ids,
         analysis_scale_m=int(kw["analysis_scale_m"]),
         tile_scale=int(kw["tile_scale"]),
-        natural_mask=kw["natural_mask"],
         target_cover_classes=tuple(tcc) if tcc else None,
         coastal=coastal,
         class_set=sets["class_set"],
@@ -705,8 +725,8 @@ def _run(
         "trend_start_year": trend_start,
         "state_start_year": state_start,
         "analysis_scale_m": int(kw["analysis_scale_m"]),
-        "natural_mask": kw["natural_mask"],
         "target_cover_classes": sorted(tcc) if tcc else None,
+        "dw_landuse_first_year": DW_LANDUSE_FIRST_YEAR,
         "asset_ids": asset_ids,
         "datasets": _dataset_ids(),
         "focal_class_min_share": tol.focal_class_min_share,
@@ -778,6 +798,19 @@ def _run(
     need_canopy = is_forest or ("canopy" in extra_layers and signature_mode == "rules")
     rung_log: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
+    units = _management_units(sets) if site_type == "reference" else {}
+    kw["_matrix_ctx"] = lambda sub_level_: _matrix_context(
+        site_type,
+        prof,
+        tol,
+        focal_area_m2,
+        is_forest,
+        sets,
+        relaxed=set(),
+        sub_level=sub_level_,
+        baseline_end_year=ctx.baseline_end_year,
+    )
+    kw["_sets"] = sets
 
     for rung in search_rungs(tol.relaxation):
         sub_level = tol.substrate_match
@@ -862,12 +895,29 @@ def _run(
         res["rung"] = rung
         res["sub_level"] = sub_level
         res["cls_level"] = cls_level
-        entry["thinned"] = int(len(res["thinned"]))
+        entry["thinned"] = int(res["n_eligible"])
+        covered: set[str] = set()
+        if units:
+            elig = res["thinned"].loc[~res["thinned"]["gate_fallback"]]
+            lab = _label_frame(elig, sets)
+            for _, row in lab.iterrows():
+                covered |= _unit_keys(row, sets, cls_level == "group")
+            entry["units_covered"] = sorted(covered)
         final = res
-        if len(res["thinned"]) >= n_candidates:
+        if stop_rule_met(
+            res["n_eligible"],
+            n_candidates,
+            units,
+            covered,
+            require_units=tol.unit_coverage_stop,
+        ):
             entry["outcome"] = "stop rule met"
             break
-        entry["outcome"] = "too few thinned candidates"
+        entry["outcome"] = (
+            "too few eligible thinned candidates"
+            if res["n_eligible"] < n_candidates
+            else f"management units missing: {sorted(set(units) - covered)}"
+        )
 
     if final is None:
         raise RuntimeError(
@@ -920,6 +970,100 @@ def _run(
     )
 
 
+def _matrix_context(
+    site_type: str,
+    prof: P.FocalProfile,
+    tol: EnvelopeTolerances,
+    focal_area_m2: float,
+    is_forest: bool,
+    sets: dict[str, Any],
+    *,
+    relaxed: set[str],
+    sub_level: str,
+    baseline_end_year: int | None,
+) -> MatrixContext:
+    """MatrixContext for the SOP selection matrix (shared by the gate and _assemble)."""
+    return MatrixContext(
+        site_type=site_type,
+        elevation=prof.elevation["median"],
+        elevation_p5=_nz(prof.elevation["p5"], prof.elevation["median"]),
+        elevation_p95=_nz(prof.elevation["p95"], prof.elevation["median"]),
+        rainfall=prof.rainfall["mean"],
+        rainfall_p5=_nz(prof.rainfall["p5"], prof.rainfall["mean"]),
+        rainfall_p95=_nz(prof.rainfall["p95"], prof.rainfall["mean"]),
+        elevation_tol_m=tol.elevation_tol_m,
+        rainfall_tol_frac=tol.rainfall_tol_frac,
+        focal_area_ha=focal_area_m2 / 1e4,
+        is_forest=is_forest,
+        class_fallback=sets["class_fallback"],
+        class_mosaic=sets["class_mosaic"],
+        substrate_fallback=sets["substrate_fallback"],
+        substrate_off=sub_level == "off",
+        relaxed_criteria=relaxed,
+        focal_class_label=(
+            f"PNV {sets['pnv_code']} / ECO_ID {sets['eco_id']}"
+            if sets["class_fallback"]
+            else ",".join(vecea_class_code(c) for c in sets["class_set"])
+        ),
+        focal_substrate_label=(
+            wrb_name(sets["wrb_code"]) if sets["wrb_code"] is not None else "n/a"
+        ),
+        baseline_end_year=baseline_end_year,
+    )
+
+
+def _label_frame(df: pd.DataFrame, sets: dict[str, Any]) -> pd.DataFrame:
+    """Majority national class and soil group columns from the label histograms."""
+    df = df.copy()
+    label_col = "pnv_biome" if sets["class_fallback"] else "vecea_class"
+    cls = [
+        _majority(v) for v in df.get(label_col, pd.Series(index=df.index, dtype=object))
+    ]
+    wrb = [
+        _majority(v)
+        for v in df.get("wrb_group", pd.Series(index=df.index, dtype=object))
+    ]
+    df["class_code"] = [c for c, _ in cls]
+    df["national_class"] = [
+        (
+            (vecea_class_code(c) if not sets["class_fallback"] else f"PNV_{c}")
+            if c is not None
+            else None
+        )
+        for c, _ in cls
+    ]
+    df["class_source"] = "pnv_ecoregion" if sets["class_fallback"] else "vecea"
+    df["wrb_code"] = [c for c, _ in wrb]
+    df["wrb_group"] = [wrb_name(c) if c is not None else None for c, _ in wrb]
+    df["requires_confirmation"] = True
+    return df
+
+
+def _management_units(sets: dict[str, Any]) -> dict[str, set[str]]:
+    """Management units (focal classes) that each need a reference."""
+    if sets["class_fallback"]:
+        return {"pnv_ecoregion": {"pnv_ecoregion"}}
+    if sets["class_mosaic"]:
+        return {}
+    return {vecea_class_code(c): {vecea_class_code(c)} for c in sets["class_set"]}
+
+
+def _unit_keys(row: pd.Series, sets: dict[str, Any], group_relaxed: bool) -> set[str]:
+    """Management units a labelled cell can stand for."""
+    if sets["class_fallback"]:
+        return {"pnv_ecoregion"} if row.get("pnv_eco_same_mean", 0) >= 0.5 else set()
+    code = row.get("class_code")
+    if code is None or pd.isna(code):
+        return set()
+    out = set()
+    for c in sets["class_set"]:
+        if int(code) == c or (
+            group_relaxed and vecea_group(int(code)) == vecea_group(c)
+        ):
+            out.add(vecea_class_code(c))
+    return out
+
+
 def _focal_anchor(
     ctx: P.RunContext, base_win: tuple[int, int] | None, warn: list[str]
 ) -> dict[str, float]:
@@ -970,7 +1114,7 @@ def _dataset_ids() -> dict[str, str]:
         "hansen": HANSEN_GFC_COLLECTION,
         "wdpa": WDPA_POLYGONS_COLLECTION,
         "embeddings": SATELLITE_EMBEDDING_COLLECTION,
-        "sbtn": SBTN_NATURAL_LANDS_IMAGE,
+        "dynamic_world": DW_COLLECTION,
     }
 
 
@@ -1102,6 +1246,16 @@ def _score_rung(  # noqa: C901, PLR0913
         level = "coarse"
     for fam in ("env", "ndvi", "nbar", "fraction"):
         ensure(level, fam, fcells)
+    dw_ok = ctx.end_year > DW_LANDUSE_FIRST_YEAR
+    if dw_ok:
+        # Land-use history on every final cell, before any gate or thinning.
+        ensure(level, "dw_landuse", fcells)
+    else:
+        rw.append(
+            f"Dynamic World land-use history unavailable (end_year {ctx.end_year} <= "
+            f"{DW_LANDUSE_FIRST_YEAR}): the reference land-use gate, the conversion "
+            "pathway test and the Dynamic World built-up filter are skipped."
+        )
     if site_type == "degraded" and ctx.baseline_start_year is not None:
         # Anchor constraint (D1): baseline-window state on the final cells only.
         ensure(level, "ndvi_base", fcells)
@@ -1131,17 +1285,82 @@ def _score_rung(  # noqa: C901, PLR0913
         errors="ignore",
     )
     pool = pool.join(fmess.scores)
-    pool = pool.loc[pool["mess"] >= tol.mess_floor].copy()
     view = _condition_view(pool, site_type, coarse=False)
     for c in view.columns:
         pool[c] = view[c]
-    pool = _apply_type_exclusions(pool, site_type, kw, degradation_type, final=True)
+    for p in predictors:
+        pool[f"pred_{p}"] = fpred[p].reindex(pool.index)
+
+    # ---- Land-use history (shared by both workflows) ---------------------------
+    max_dw = kw.get("max_dw_built") if site_type == "degraded" else None
+    hist = landuse_history(
+        pool,
+        end_year=ctx.end_year,
+        natural_persist_years=tol.natural_persist_years,
+        min_natural_persist=tol.min_natural_persist,
+        max_built_share=DEGRADED_MAX_DW_BUILT if max_dw is None else float(max_dw),
+        baseline_end_year=ctx.baseline_end_year if site_type == "degraded" else None,
+    )
+    for c in hist.columns:
+        pool[c] = hist[c]
+    # Cropland correction: pixel-level WorldCover natural AND DW persistent natural.
+    pool["wc_natural_frac"] = pool["natural_frac"]
+    corrected = pd.to_numeric(
+        pool.get(f"wc_dw_nat_share_{tol.natural_persist_years}"), errors="coerce"
+    )
+    use = corrected.notna() & (pool["landuse_class"] != "no_dw")
+    pool.loc[use, "natural_frac"] = corrected[use]
+
+    # ---- Gates (each cell keeps its first failing reason) -------------------------
+    reasons = pd.Series(None, index=pool.index, dtype=object)
+    reasons[~(pool["mess"] >= tol.mess_floor)] = "mess"
+    if site_type == "reference":
+        if kw.get("require_protected"):
+            prot = pd.to_numeric(pool["pa_share"], errors="coerce").fillna(0)
+            reasons[(prot < PA_EXCLUDE_MIN_SHARE) & reasons.isna()] = "not_protected"
+        if dw_ok:
+            cls = pool["landuse_class"]
+            reasons[(cls == "no_dw") & reasons.isna()] = "no_dw"
+            reasons[(cls != "persistent_natural") & reasons.isna()] = "natural_persist"
+        # A mandatory SOP 0 (e.g. integrity 0 from Hansen loss inside natural cover,
+        # which the land-use history cannot see) can never be selected: gate it
+        # before thinning so it cannot suppress neighbours or satisfy the stop rule.
+        open_ = reasons.isna()
+        if open_.any() and kw.get("_matrix_ctx") is not None:
+            mat = build_selection_matrix(
+                _label_frame(pool.loc[open_], kw["_sets"]),
+                kw["_matrix_ctx"](sub_level),
+            )
+            for crit in mandatory_criteria("reference", sub_level == "off"):
+                col = f"{crit}_score"
+                if col in mat:
+                    zero = mat.index[mat[col] == 0]
+                    reasons[zero.intersection(reasons.index[reasons.isna()])] = (
+                        f"sop_{crit}"
+                    )
+    else:
+        excl = degraded_exclusion_reasons(
+            pool,
+            final=True,
+            max_built_frac=float(kw.get("max_built_frac", DEGRADED_MAX_BUILT_FRAC)),
+            keep_built=degradation_type == "settlement",
+            exclude_protected=bool(kw.get("exclude_protected")),
+            max_dw_built=float(max_dw) if (dw_ok and max_dw is not None) else None,
+        )
+        reasons = reasons.where(reasons.notna(), excl)
+    if dw_ok and len(pool):
+        no_dw = float((pool["landuse_class"] == "no_dw").mean())
+        if no_dw > 0.25:
+            rw.append(
+                f"{no_dw:.0%} of final cells lack Dynamic World observations "
+                "(landuse_class 'no_dw'); they cannot pass the land-use tests."
+            )
+    pool_all = pool
+    pool = pool.loc[reasons.isna()].copy()
     pool["env_sim"] = percentile_normalise(pool["mess"])
     pool["ndvi_performance"] = (
         pool["ndvi_state"] / denom if denom and denom > 0 else np.nan
     )
-    for p in predictors:
-        pool[f"pred_{p}"] = fpred[p].reindex(pool.index)
 
     min_sep = 2.0 * (fine_size if k > 1 else screen)
     info: dict[str, Any] = {
@@ -1154,6 +1373,7 @@ def _score_rung(  # noqa: C901, PLR0913
         "coarse_stage2_survivors": int(len(surv2)),
         "refined_coarse_cells": int(len(top_ids)),
         "min_separation_m": min_sep,
+        "landuse_available": dw_ok,
     }
 
     if site_type == "reference":
@@ -1185,30 +1405,42 @@ def _score_rung(  # noqa: C901, PLR0913
             degradation_type,
             info,
             rw,
+            reasons=reasons,
+            dw_ok=dw_ok,
+            min_sep=min_sep,
         )
+    reasons[~reasons.index.isin(pool.index) & reasons.isna()] = "unscored"
+    pool_all = pool_all.assign(gate_reason=reasons)
 
-    thinned = (
-        rank_candidates(pool, "rank_score", min_sep)
-        if len(pool)
-        else pool.assign(rank=[])
+    # Gate, then thin: every gate above already removed its cells.
+    thinned = gate_then_thin(
+        pool, pd.Series(True, index=pool.index), "rank_score", min_sep
     )
-    if site_type == "degraded":
-        thinned = _filter_dw_built(
+    thinned["gate_fallback"] = False
+    n_eligible = int(len(thinned))
+    if site_type == "reference" and dw_ok and n_eligible < int(kw["n_candidates"]):
+        thinned = _reference_gate_fallback(
             thinned,
             pool,
-            fcells,
-            level,
-            store,
-            ensure,
-            ctx,
-            kw,
-            degradation_type,
-            info,
+            pool_all,
+            ref_w,
+            is_forest,
+            min_sep,
+            int(kw["n_candidates"]),
             rw,
         )
+    info["gate_reasons"] = {
+        str(k_): int(v) for k_, v in reasons.value_counts(dropna=True).items()
+    }
+    info["eligible_cells"] = int(len(pool))
+    info["landuse_classes"] = {
+        str(k_): int(v) for k_, v in pool_all["landuse_class"].value_counts().items()
+    }
     return {
         "pool": pool,
+        "pool_all": pool_all,
         "thinned": thinned,
+        "n_eligible": n_eligible,
         "level": level,
         "info": info,
         "warnings": rw,
@@ -1216,57 +1448,67 @@ def _score_rung(  # noqa: C901, PLR0913
     }
 
 
-def _filter_dw_built(
+def _reference_gate_fallback(
     thinned: pd.DataFrame,
     pool: pd.DataFrame,
-    fcells: pd.DataFrame,
-    level: str,
-    store: P.TableStore,
-    ensure: Any,
-    ctx: P.RunContext,
-    kw: dict[str, Any],
-    degradation_type: str,
-    info: dict[str, Any],
+    pool_all: pd.DataFrame,
+    w: ReferenceWeights,
+    is_forest: bool,
+    min_sep: float,
+    n_wanted: int,
     rw: list[str],
 ) -> pd.DataFrame:
-    """Dynamic World built-up filter on the rung's degraded shortlist (memoised).
+    """Fill a short reference list with the best gated-out cells (fallback=True).
 
-    Only the top ``DW_BUILT_SHORTLIST_FACTOR x n_candidates`` thinned cells are
-    reduced; the rest are not candidates on this rung, so a short result lets the
-    stop rule widen the search. Adds ``dw_built_share`` to the shortlisted pool rows.
+    Only cells that failed the land-use gate ('natural_persist' / 'no_dw') or a
+    mandatory SOP criterion ('sop_<criterion>') are considered, never environmental
+    gate failures. They are scored with the eligible cells (intactness over the union),
+    thinned against the selected cells, and appended after them with
+    ``gate_fallback=True`` and their ``gate_reason``. This makes "most intact
+    available" (TGBS R2) an explicit, flagged fallback instead of the default.
     """
-    max_dw = kw.get("max_dw_built")
-    if max_dw is None or degradation_type == "settlement" or not len(thinned):
-        info["dw_built_filter"] = {"applied": False}
+    gr = pool_all["gate_reason"].astype(object)
+    cand = pool_all.loc[
+        gr.isin(["natural_persist", "no_dw"]) | gr.fillna("").str.startswith("sop_")
+    ]
+    if not len(cand):
         return thinned
-    if ctx.end_year < DYNAMIC_WORLD_FIRST_YEAR:
-        info["dw_built_filter"] = {"applied": False, "reason": "end_year before S2 era"}
-        rw.append(
-            "Dynamic World built-up filter skipped (end_year before the S2 era); only the "
-            "WorldCover built-up filter applies."
-        )
+    union = pd.concat([pool, cand])
+    sc = intactness_score(union, w, is_forest)
+    env = percentile_normalise(union["mess"])
+    fb = cand.copy()
+    fb["intactness"] = sc.score.loc[cand.index]
+    for c in sc.components.columns:
+        fb[f"c_{c}"] = sc.components.loc[cand.index, c]
+    fb["intactness_flag"] = intactness_flag(fb)
+    fb["env_sim"] = env.loc[cand.index]
+    fb["rank_score"] = fb["intactness"] * (0.5 + 0.5 * fb["env_sim"])
+    fb["embed_sim"] = np.nan
+    fb["agree"] = np.nan
+    fb["embed_disagree"] = False
+    xs = list(thinned["cx"].astype(float))
+    ys = list(thinned["cy"].astype(float))
+    add: list[str] = []
+    for cid, r in sort_by_score(fb, "rank_score").iterrows():
+        if len(thinned) + len(add) >= n_wanted:
+            break
+        d = np.hypot(np.asarray(xs) - float(r["cx"]), np.asarray(ys) - float(r["cy"]))
+        if len(d) and np.any(d < min_sep - 1e-6):
+            continue
+        add.append(cid)
+        xs.append(float(r["cx"]))
+        ys.append(float(r["cy"]))
+    if not add:
         return thinned
-    k = DW_BUILT_SHORTLIST_FACTOR * int(kw["n_candidates"])
-    short = thinned.head(k)
-    ensure(level, "dw_built", fcells.loc[short.index])
-    shares = pd.to_numeric(
-        store.table(level).loc[short.index, "dw_built_share"], errors="coerce"
+    extra = fb.loc[add].assign(gate_fallback=True)
+    out = pd.concat([thinned, extra])
+    out["rank"] = np.arange(1, len(out) + 1)
+    rw.append(
+        f"Only {len(thinned)} references pass the land-use gate; {len(add)} gated-out "
+        "cells fill the list with fallback=True (most intact available, TGBS R2). "
+        "Check their gate_reason and landuse_class before use."
     )
-    kept, dropped = dw_built_filter(short, shares, float(max_dw))
-    pool.loc[short.index, "dw_built_share"] = shares
-    info["dw_built_filter"] = {
-        "applied": True,
-        "max_dw_built": float(max_dw),
-        "shortlist": int(len(short)),
-        "dropped": int(len(dropped)),
-        "kept": int(len(kept)),
-    }
-    if dropped:
-        rw.append(
-            f"Dynamic World built-up filter dropped {len(dropped)} of {len(short)} "
-            f"shortlisted cells (built-label share > {max_dw})."
-        )
-    return kept
+    return out
 
 
 def _join_new(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
@@ -1468,13 +1710,21 @@ def _rank_degraded(
     degradation_type: str,
     info: dict[str, Any],
     rw: list[str],
+    *,
+    reasons: pd.Series,
+    dw_ok: bool,
+    min_sep: float,
 ) -> pd.DataFrame:
-    """Constrain -> gate -> rank (spec §5.3, amended §0a).
+    """Constrain -> pathway test -> rank (spec §5.3, amended §0a and 2026-11-09).
 
-    D1 anchor constraint on the fine cells, then the pathway signature on the
-    survivors (embeddings for the top ``embed_pool`` survivors, or the rules
-    profile), the D2 gate, and state + trajectory ranking over what passes. D4
-    reports where the focal baseline falls on each candidate's 0-100% scale.
+    D1 anchor constraint on the fine cells; then the pathway test on the survivors:
+    absolute for conversion pathways (Dynamic World: modified at or before the end of
+    the baseline window), the relative D2 signature gate for pathways inside natural
+    cover (which also drop cells near ``reference_result``'s ranked sites); then state
+    + trajectory ranking over what passes. The signature is computed for the top
+    ``embed_pool`` survivors in every case (audit column, informational matrix row).
+    D4 reports where the focal baseline falls on each candidate's 0-100% scale.
+    ``reasons`` is updated in place for every cell dropped here.
     """
     focal: dict[str, float] = kw.get("_focal_anchor") or {}
     n_candidates = int(len(pool))
@@ -1494,10 +1744,37 @@ def _rank_degraded(
             "TGBS §4.1 fallback: the lowest-rated site available; review by hand."
         )
         survivors = pool
+    else:
+        reasons[pool.index[~pool["below_baseline"]]] = "below_baseline"
     pool = survivors.copy()
     n_anchor = int(pool["below_baseline"].sum())
 
-    # ---- Pathway signature on the survivors ------------------------------------
+    # ---- Which pathway test applies ---------------------------------------------
+    conv = (
+        conversion_pathway(
+            pool, degradation_type, forest_loss_frac=pool.get("forest_loss_frac")
+        )
+        if dw_ok
+        else None
+    )
+    pathway_test = "landuse" if conv is not None else "signature"
+    if degradation_type in CONVERSION_DEGRADATION_TYPES and not dw_ok:
+        rw.append(
+            "Conversion pathway test unavailable without Dynamic World; the relative "
+            "signature gate (D2) is used instead."
+        )
+    n_near = 0
+    ref_res = kw.get("reference_result")
+    if conv is None and ref_res is not None and len(ref_res.ranked) and len(pool):
+        # Inside natural cover, land-use classes cannot separate the two sets.
+        near = near_references(
+            pool, pd.DataFrame(ref_res.ranked[["cx", "cy"]]), min_sep
+        )
+        n_near = int(near.sum())
+        reasons[pool.index[near]] = "near_reference"
+        pool = pool.loc[~near].copy()
+
+    # ---- Pathway signature (gate for natural-cover pathways, audit otherwise) ----
     pool["signature_sim"] = np.nan
     if signature_mode == "rules":
         pool["signature_sim"] = signature_from_rules(
@@ -1517,23 +1794,37 @@ def _rank_degraded(
                 f"No Satellite Embedding over the focal site in {baseline_year}."
             )
         pool.loc[embed_ids, "signature_sim"] = embedding_query_similarity(emb, query)
-        pool = pool.loc[embed_ids].copy()
-
-    # ---- D2: pathway gate -------------------------------------------------------
+        if conv is None:
+            # The signature gate can only judge cells that have a signature.
+            reasons[pool.index.difference(embed_ids)] = "embed_pool"
+            pool = pool.loc[embed_ids].copy()
     pool["signature_pct"] = percentile_normalise(pool["signature_sim"])
-    pool["pathway_gate"] = pathway_gate(
-        pool["signature_pct"], float(kw["pathway_gate_pct"])
-    )
-    passed = pool["pathway_gate"] == "pass"
+
+    # ---- Pathway test -------------------------------------------------------------
+    if conv is not None:
+        passed = conv.reindex(pool.index, fill_value=False).astype(bool)
+        pool["pathway_gate"] = np.where(passed, "pass", "failed")
+        rule = (
+            "modified (Dynamic World) at or before the end of the baseline window "
+            f"({ctx.baseline_end_year})"
+        )
+    else:
+        pool["pathway_gate"] = pathway_gate(
+            pool["signature_pct"], float(kw["pathway_gate_pct"])
+        )
+        passed = pool["pathway_gate"] == "pass"
+        rule = f"pct(signature_sim) >= {kw['pathway_gate_pct']}"
     n_gate = int(passed.sum())
     if len(pool) and n_gate == 0:
         rw.append(
-            "No candidate passed the pathway gate (pct(signature_sim) >= "
-            f"{kw['pathway_gate_pct']}); candidates are ranked without it "
-            "(pathway_gate='failed')."
+            f"No candidate passed the pathway test ({rule}); candidates are ranked "
+            "without it (pathway_gate='failed')."
         )
     else:
+        reasons[pool.index[~passed]] = "pathway"
         pool = pool.loc[passed].copy()
+    pool["pathway_test"] = pathway_test
+    pool["pathway_example"] = pathway_example(pool)
 
     # ---- Rank: state + trajectory over the survivors --------------------------
     pool["env_sim"] = percentile_normalise(pool["mess"])
@@ -1576,8 +1867,11 @@ def _rank_degraded(
         "candidates": n_candidates,
         "below_baseline": int(anchor["below_baseline"].sum()) if n_candidates else 0,
         "fallback": anchor_fallback,
+        "pathway_test": pathway_test,
+        "pathway_rule": rule,
         "pathway_gate_pct": float(kw["pathway_gate_pct"]),
         "pathway_gate_passed": n_gate,
+        "near_reference_dropped": n_near,
         "anchor_survivors_scored": n_anchor,
         "anchor_review_pct": float(kw["anchor_review_pct"]),
         "reference_values": reference,
@@ -1621,87 +1915,27 @@ def _assemble(  # noqa: C901
     thinned: pd.DataFrame = final["thinned"].copy()
     relaxed: set[str] = final["relaxed"]
     info = final["info"]
-    label_col = "pnv_biome" if sets["class_fallback"] else "vecea_class"
-
-    def labels(df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        cls = [
-            _majority(v)
-            for v in df.get(label_col, pd.Series(index=df.index, dtype=object))
-        ]
-        wrb = [
-            _majority(v)
-            for v in df.get("wrb_group", pd.Series(index=df.index, dtype=object))
-        ]
-        df["class_code"] = [c for c, _ in cls]
-        df["national_class"] = [
-            (
-                (vecea_class_code(c) if not sets["class_fallback"] else f"PNV_{c}")
-                if c is not None
-                else None
-            )
-            for c, _ in cls
-        ]
-        df["class_source"] = "pnv_ecoregion" if sets["class_fallback"] else "vecea"
-        df["wrb_code"] = [c for c, _ in wrb]
-        df["wrb_group"] = [wrb_name(c) if c is not None else None for c, _ in wrb]
-        df["requires_confirmation"] = True
-        return df
-
-    thinned = labels(thinned)
-    units: dict[str, set[str]] = {}
-    if sets["class_fallback"]:
-        units = {"pnv_ecoregion": {"pnv_ecoregion"}}
-    elif sets["class_mosaic"]:
-        units = {}
-    else:
-        units = {vecea_class_code(c): {vecea_class_code(c)} for c in sets["class_set"]}
+    thinned = _label_frame(thinned, sets)
+    units = _management_units(sets)
     group_relaxed = final["cls_level"] == "group"
-
-    def unit_keys(row: pd.Series) -> set[str]:
-        if sets["class_fallback"]:
-            return (
-                {"pnv_ecoregion"} if row.get("pnv_eco_same_mean", 0) >= 0.5 else set()
-            )
-        code = row.get("class_code")
-        if code is None or pd.isna(code):
-            return set()
-        out = set()
-        for c in sets["class_set"]:
-            if int(code) == c or (
-                group_relaxed and vecea_group(int(code)) == vecea_group(c)
-            ):
-                out.add(vecea_class_code(c))
-        return out
-
-    thinned["unit_keys"] = [unit_keys(r) for _, r in thinned.iterrows()]
+    thinned["unit_keys"] = [
+        _unit_keys(r, sets, group_relaxed) for _, r in thinned.iterrows()
+    ]
     focal_class_label = (
         f"PNV {sets['pnv_code']} / ECO_ID {sets['eco_id']}"
         if sets["class_fallback"]
         else ",".join(vecea_class_code(c) for c in sets["class_set"])
     )
-    mctx = MatrixContext(
-        site_type=site_type,
-        elevation=prof.elevation["median"],
-        elevation_p5=_nz(prof.elevation["p5"], prof.elevation["median"]),
-        elevation_p95=_nz(prof.elevation["p95"], prof.elevation["median"]),
-        rainfall=prof.rainfall["mean"],
-        rainfall_p5=_nz(prof.rainfall["p5"], prof.rainfall["mean"]),
-        rainfall_p95=_nz(prof.rainfall["p95"], prof.rainfall["mean"]),
-        elevation_tol_m=tol.elevation_tol_m,
-        rainfall_tol_frac=tol.rainfall_tol_frac,
-        focal_area_ha=focal_area_m2 / 1e4,
-        is_forest=is_forest,
-        class_fallback=sets["class_fallback"],
-        class_mosaic=sets["class_mosaic"],
-        substrate_fallback=sets["substrate_fallback"],
-        substrate_off=final["sub_level"] == "off",
-        relaxed_criteria=relaxed,
-        focal_class_label=focal_class_label,
-        focal_substrate_label=(
-            wrb_name(sets["wrb_code"]) if sets["wrb_code"] is not None else "n/a"
-        ),
-        pool=pool,
+    mctx = _matrix_context(
+        site_type,
+        prof,
+        tol,
+        focal_area_m2,
+        is_forest,
+        sets,
+        relaxed=relaxed,
+        sub_level=final["sub_level"],
+        baseline_end_year=ctx.baseline_end_year,
     )
     matrix = build_selection_matrix(thinned, mctx)
     span_mode = None
@@ -1776,22 +2010,46 @@ def _assemble(  # noqa: C901
                         ranked[f"{c}_focal"] = dw.loc["__focal__", c]
             except Exception as exc:  # noqa: BLE001 - context only, never fatal
                 warn.append(f"Dynamic World ranked-site context failed: {exc}")
-        else:
+        elif ctx.end_year < DYNAMIC_WORLD_FIRST_YEAR:
             warn.append("Dynamic World context skipped (end_year before the S2 era).")
+        else:
+            warn.append(
+                "No degraded candidate survived the gates on the last rung "
+                f"(gate reasons: {info.get('gate_reasons')}). Check the pool file's "
+                "gate_reason column; consider wider tier_distances_km or tolerances."
+            )
     warn.append(SURVEY_PENDING)
 
     ranked["rung"] = final["rung"].label
     ranked["dist_to_focal_km"] = ranked["dist_to_focal_m"] / 1000.0
-    pool = pool.copy()
+    # Exported pool: every final cell of the rung, eligible (scored) or gated out.
+    pool_all: pd.DataFrame = final["pool_all"]
+    gated = pool_all.loc[~pool_all.index.isin(pool.index)]
+    pool = pd.concat(
+        [
+            pool.assign(pool_status="eligible", gate_reason=None),
+            gated.assign(pool_status="gated_out"),
+        ]
+    ).sort_index()
     pool["rung"] = final["rung"].label
     pool["dist_to_focal_km"] = pool["dist_to_focal_m"] / 1000.0
     pool["thinned_rank"] = thinned["rank"].reindex(pool.index)
-    pool = labels(pool)
+    pool = _label_frame(pool, sets)
     ranked = ranked.drop(columns=["unit_keys"], errors="ignore")
     ranked = ranked.join(
         matrix[["mandatory_met", "mandatory_met_relaxed", "fallback", "matrix_total"]],
         how="left",
     )
+    gate_fb = (
+        ranked["gate_fallback"].fillna(False).astype(bool)
+        if "gate_fallback" in ranked
+        else pd.Series(False, index=ranked.index)
+    )
+    ranked["gate_fallback"] = gate_fb
+    ranked["fallback"] = ranked["fallback"].fillna(False).astype(bool) | gate_fb
+    if "gate_reason" not in ranked:
+        ranked["gate_reason"] = None
+    ranked.loc[~gate_fb, "gate_reason"] = None
     drop_cols = [
         c for c in ranked.columns if c.startswith("_done_") or c.endswith("_v")
     ]
@@ -1831,7 +2089,7 @@ def _assemble(  # noqa: C901
         "refine_pool": kw["refine_pool"],
         "embed_pool": kw.get("embed_pool"),
         "analysis_scale_m": kw["analysis_scale_m"],
-        "natural_mask": kw["natural_mask"],
+        "dw_landuse_years": [DW_LANDUSE_FIRST_YEAR, ctx.end_year],
         "target_cover_classes": kw.get("target_cover_classes"),
         "tolerances": dataclass_params(tol),
         "weights": dataclass_params(ref_w if site_type == "reference" else deg_w),
@@ -1906,6 +2164,7 @@ def _assemble(  # noqa: C901
                 "reference_result_supplied": kw.get("reference_result") is not None,
                 "max_built_frac": kw.get("max_built_frac"),
                 "max_dw_built": kw.get("max_dw_built"),
+                "conversion_pathway": degradation_type in CONVERSION_DEGRADATION_TYPES,
             }
         )
     provenance = _provenance(ctx)
@@ -1933,14 +2192,47 @@ def _assemble(  # noqa: C901
     )
     extra.append(
         _reg(
-            "WorldCover snapshot (degradation after 2021 missed by land-cover terms)",
-            f"ESA WorldCover {WORLDCOVER_YEAR}",
+            "WorldCover snapshot: final-cell natural_frac corrected with Dynamic World "
+            "(pixel-level WorldCover natural AND DW persistent natural); the coarse "
+            "screen uses WorldCover only",
+            f"ESA WorldCover {WORLDCOVER_YEAR}; Dynamic World {DW_LANDUSE_FIRST_YEAR}-"
+            f"{ctx.end_year}",
             "M",
         )
     )
     extra.append(
-        _reg("core_frac kernel", "1 km focal mean of the 250 m natural fraction", "M")
+        _reg(
+            "core_frac kernel: 1 km focal mean of the 250 m WorldCover natural fraction "
+            "(Dynamic World cropland correction not applied)",
+            "matters little inside the land-use-gated reference pool",
+            "M",
+        )
     )
+    persist_rule = (
+        "every year" if tol.natural_persist_years == "all" else "all but one year"
+    )
+    extra.append(
+        _reg(
+            f"land-use history: Dynamic World natural in {persist_rule} "
+            f"{DW_LANDUSE_FIRST_YEAR}-{ctx.end_year}; classes {info.get('landuse_classes')}",
+            (
+                f"reference gate: persistent-natural share >= {tol.min_natural_persist}"
+                if site_type == "reference"
+                else "degraded pathway / built-up evidence"
+            )
+            + ("" if info.get("landuse_available") else " (not applied: no DW)"),
+            "L",
+        )
+    )
+    extra.append(
+        _reg(
+            "integrity 2 (non-forest): loss < 1%, recent loss <= 0.5%, land-use gate "
+            "passed, gHM < 0.4",
+            "absolute thresholds; gHM break from Kennedy et al. 2019 (moderate/high)",
+            "L",
+        )
+    )
+    extra.append(_reg("gate reasons (final rung)", str(info.get("gate_reasons")), "H"))
     if kw.get("screening") is not None:
         extra.append(_reg("ScreeningTables reused", f"created {store.created}", "H"))
     if site_type == "degraded":
@@ -1954,10 +2246,29 @@ def _assemble(  # noqa: C901
                 "M",
             )
         )
+        if anc.get("pathway_test") == "landuse":
+            extra.append(
+                _reg(
+                    f"pathway test: {anc.get('pathway_rule')}, modified share >= "
+                    "0.5 (conversion pathway)",
+                    "absolute, Dynamic World label history; signature_sim reported only",
+                    "M",
+                )
+            )
+        else:
+            extra.append(
+                _reg(
+                    f"pathway gate (D2): pct(signature_sim) >= {kw.get('pathway_gate_pct')}",
+                    "relative threshold, uncalibrated; cells within the thinning "
+                    f"distance of ranked references dropped ({anc.get('near_reference_dropped')})",
+                    "L",
+                )
+            )
         extra.append(
             _reg(
-                f"pathway gate (D2): pct(signature_sim) >= {kw.get('pathway_gate_pct')}",
-                "relative threshold, uncalibrated",
+                f"degraded weights: gHM pressure {deg_w.pressure:.3f}",
+                "0 unless degradation_type='settlement' (pressure favoured peri-urban "
+                "cells)",
                 "L",
             )
         )
@@ -1970,16 +2281,16 @@ def _assemble(  # noqa: C901
                     "L",
                 )
             )
-            dwf = info.get("dw_built_filter", {})
             extra.append(
                 _reg(
                     f"built-up filter: Dynamic World built-label share <= {kw.get('max_dw_built')} "
-                    "(shortlist)",
+                    "(every final cell, before thinning)",
                     (
-                        f"most frequent label over the state window; shortlist "
-                        f"{dwf.get('shortlist')}, dropped {dwf.get('dropped')}"
-                        if dwf.get("applied")
-                        else f"not applied ({dwf.get('reason', 'disabled')})"
+                        "most frequent label over the state window; tolerates scattered "
+                        "smallholder homesteads"
+                        if info.get("landuse_available")
+                        and kw.get("max_dw_built") is not None
+                        else "not applied"
                     ),
                     "L",
                 )
@@ -2053,10 +2364,9 @@ def _provenance(ctx: P.RunContext) -> dict[str, str]:
         "ESA WorldCover": f"{ESA_WC_COLLECTION} | {WORLDCOVER_YEAR}",
         "Hansen GFC": HANSEN_GFC_COLLECTION,
         "TNC gHM v3": f"{HUMAN_MODIFICATION_COLLECTION} | 2022",
-        "BII (bii4africa)": "sat-io BII 1 km",
         "WDPA": f"{WDPA_POLYGONS_COLLECTION} | non-commercial without UNEP-WCMC permission; attribution required",
         "Satellite Embedding V1": f"{SATELLITE_EMBEDDING_COLLECTION} | CC BY 4.0, attribution to Google and Google DeepMind",
-        "Dynamic World (ranked-site context only)": DW_COLLECTION,
+        "Dynamic World (land-use history; ranked-site context)": f"{DW_COLLECTION} | {DW_LANDUSE_FIRST_YEAR}-{ctx.end_year}",
         "VIIRS (settlement profile only)": VIIRS_NTL_COLLECTION,
         "Meta canopy height (forest strata)": "projects/sat-io/open-datasets/facebook/meta-canopy-height",
     }
@@ -2121,6 +2431,14 @@ def export_site_selection(
     """Write a result to local GPKG + CSV files (pure geopandas, no Earth Engine).
 
     Names follow the SOP convention ``<Project>_<Site>_<Product>_<YYYYMMDD>_v<n>``.
+    Candidates and pool are separate spatial files, so either can be reviewed on its
+    own over a basemap:
+
+    - ``<kind>_candidates`` (GPKG, layer 'candidates'): the ranked sites;
+    - ``<kind>_pool`` (GPKG, layer 'pool'): every final cell of the rung reached, with
+      ``pool_status`` ('eligible' / 'gated_out'), ``gate_reason`` and
+      ``landuse_class``;
+    - ``<kind>_ranked``, ``<kind>_selection_matrix``, ``<kind>_layer_register`` (CSV).
 
     Args:
         result: SiteSelectionResult.
@@ -2142,10 +2460,14 @@ def export_site_selection(
         return out / f"{project}_{site}_{product}_{stamp}_v{version}.{ext}"
 
     paths: dict[str, Path] = {}
-    gpkg = name(f"{kind}_sites", "gpkg")
-    _gpkg_safe(result.ranked).to_file(gpkg, layer="ranked", driver="GPKG")
-    _gpkg_safe(result.pool).to_file(gpkg, layer="pool", driver="GPKG")
-    paths["gpkg"] = gpkg
+    for product, layer, gdf in (
+        (f"{kind}_candidates", "candidates", result.ranked),
+        (f"{kind}_pool", "pool", result.pool),
+    ):
+        p = name(product, "gpkg")
+        p.unlink(missing_ok=True)  # one layer per file; never append to an old one
+        _gpkg_safe(gdf).to_file(p, layer=layer, driver="GPKG")
+        paths[product] = p
     for product, df in (
         (f"{kind}_ranked", pd.DataFrame(result.ranked.drop(columns="geometry"))),
         (f"{kind}_selection_matrix", result.selection_matrix),

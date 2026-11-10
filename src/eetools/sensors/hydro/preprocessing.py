@@ -10,8 +10,6 @@ from eetools.constants import (
     GMW_BAND,
     MERIT_HAND_BAND,
     MERIT_HYDRO_IMAGE,
-    SBTN_NATURAL_BAND,
-    SBTN_NATURAL_LANDS_IMAGE,
 )
 
 
@@ -90,21 +88,6 @@ def get_coast_distance(
         .clip(bounds)
     )
     return dist.rename("coast_dist").toFloat()
-
-
-def get_sbtn_natural(aoi: ee.Geometry | None = None) -> ee.Image:
-    """Load the SBTN Natural Lands 2020 natural/non-natural mask (30 m).
-
-    Args:
-        aoi: Optional ee.Geometry to clip to.
-
-    Returns:
-        ee.Image with a single 'natural' band (1 natural, 0 non-natural).
-    """
-    image = ee.Image(SBTN_NATURAL_LANDS_IMAGE).select([SBTN_NATURAL_BAND], ["natural"])
-    if aoi is not None:
-        image = image.clip(aoi)
-    return image
 
 
 def get_mangrove_extent_2020() -> ee.Image:

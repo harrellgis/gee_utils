@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
+Site-selection robustness release (vault: 2026-11-09 ITF run / condition review and the
+2026-11-09 robustness design review). Condition eligibility becomes absolute and
+time-aware; percentiles only order eligible cells. Fresh runs are needed: the
+`ScreeningTables` provenance key changed (`natural_mask` and SBTN removed, Dynamic World
+and `dw_landuse_first_year` added), so saved tables are rejected.
+
+### Added
+- `dw_landuse` reduction family: one 30 m reduction of yearly Dynamic World label modes
+  (2019 to `end_year`) on every final cell of each rung. Bands store year shares
+  (natural in all / all-but-one years, persistently modified, converted by each year,
+  mean conversion year, crop and built label shares, pixel-level WorldCover AND DW
+  natural agreement), so every threshold stays a pandas tolerance.
+- `scoring.landuse_history`: per-cell `landuse_class` (`persistent_natural`,
+  `converted`, `persistent_modified`, `built`, `mixed`, `no_dw`) read by both workflows.
+- Reference land-use gate (`EnvelopeTolerances.min_natural_persist = 0.8`,
+  `natural_persist_years = "all_but_one"` (default) or `"all"`), applied inside each rung before
+  scoring, thinning and the stop rule, so a thin gated pool widens the search ladder.
+- Absolute degraded pathway test for conversion pathways (`scoring.conversion_pathway`;
+  generic, cropland, settlement, mining, bare_soil, deforestation): modified by the end
+  of the baseline window. It replaces the relative D2 signature gate for those types and
+  makes the reference and degraded sets disjoint by construction. Pathways inside
+  natural cover (overgrazing, rangeland) keep D2 and drop cells within the thinning
+  distance of `reference_result`'s ranked sites. Ranked degraded sites report
+  `dw_conversion_year` and `pathway_example` (converted after the baseline window).
+- Reference cells with a mandatory SOP score of 0 (e.g. integrity 0 from Hansen loss
+  inside Dynamic World natural cover, which the land-use history cannot see) are gated
+  before thinning and the stop rule (`gate_reason="sop_<criterion>"`), so the ladder
+  widens instead of stopping on candidates that can never be selected.
+- Stop rule requires every management unit to have an eligible reference
+  (`EnvelopeTolerances.unit_coverage_stop`, default True; `scoring.stop_rule_met`). An
+  exhausted ladder fills the list with the best gated-out cells, flagged
+  `fallback=True` with their `gate_reason` (TGBS R2 "most intact available" as an
+  explicit fallback).
+- `result.pool` holds every final cell of the rung reached with `pool_status`
+  (`eligible` / `gated_out`), `gate_reason` and `landuse_class`.
+- `scoring.gate_then_thin`, `degraded_exclusion_reasons`, `near_references`,
+  `types.default_degraded_weights`.
+
+### Changed
+- **Breaking (exports):** `export_site_selection` writes candidates and pool as separate
+  GeoPackages, `<kind>_candidates_<date>_v<n>.gpkg` (layer `candidates`) and
+  `<kind>_pool_<date>_v<n>.gpkg` (layer `pool`), instead of one `<kind>_sites` file
+  with two layers. Returned keys are `<kind>_candidates` and `<kind>_pool`.
+- **Breaking (scores):** the SOP integrity criterion is absolute. Non-forest
+  integrity 2 needs loss < 1%, recent loss <= 0.5%, the land-use gate and gHM < 0.4
+  (Kennedy et al. 2019 moderate/high break) instead of pool p75 thresholds for BII and
+  1 - gHM; an unchanged candidate scores the same whatever the pool. Forest is unchanged
+  (canopy >= 5 m).
+- **Breaking (scores):** `ReferenceWeights.bii` is replaced by `natural_persist`
+  (0.10, pct of the Dynamic World persistent-natural share).
+- **Breaking (scores):** final-cell `natural_frac` is the pixel-level agreement of
+  WorldCover natural and Dynamic World persistent natural (cropland correction; Ecosia's
+  pineapple was mapped as shrub/grass). The raw value is kept as `wc_natural_frac`.
+  `core_frac` and the coarse screen still use WorldCover only (layer register, [M]).
+- **Breaking (scores):** the default degraded gHM `pressure` weight is 0 unless
+  `degradation_type="settlement"` (it ranked peri-urban cells as more degraded).
+- Built-up limits tolerate scattered smallholder homesteads: `max_built_frac` 0.01 ->
+  0.02 (WorldCover), `max_dw_built` 0.01 -> 0.05 (Dynamic World). The DW filter now
+  reads `dw_landuse` on every final cell before thinning, instead of a shortlist after
+  thinning (a rejected cell had already suppressed its valid neighbours; part of why
+  TGBS_ITF's degraded shortlist went from 12 cells to 1).
+- `intactness_flag` "weak" now means gHM >= 0.4 (was 0.3), the same break as the
+  integrity criterion.
+- `reduce_cells` sends batches in numeric (ix, iy) order and splits a batch in half
+  when Earth Engine reports "Object too large" (TGBS_ITF 1 km fine cells hit the 100 MB
+  limit on the WorldCover fraction bands).
+
+### Removed
+- **Breaking:** SBTN Natural Lands (`natural_mask="sbtn"`, `natural_mask` argument,
+  `sensors.hydro.get_sbtn_natural`, `SBTN_*` constants). It mapped 0% of the TGBS_Ecosia
+  and TGBS_ITF pools as natural, including Ol Donyo Sabuk's forest.
+- **Breaking:** BII from site selection (fraction band, intactness weight, integrity
+  row). It did not separate intact from degraded cells (AUC 0.48 at Ecosia against
+  strict protected-area cells, inverted at ITF). BII stays available elsewhere in
+  eetools.
+- The `dw_built` family, `scoring.dw_built_filter`, `DW_BUILT_SHORTLIST_FACTOR` and
+  `DW_BUILT_SCALE_M` (folded into `dw_landuse`).
+
 ### Fixed
 - Site-selection results no longer depend on what a reused `ScreeningTables` already
   holds. The Stage 3 coarse condition screen joined store values onto a snapshot taken

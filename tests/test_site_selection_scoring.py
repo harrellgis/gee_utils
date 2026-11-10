@@ -75,7 +75,7 @@ def _pool(n=20, seed=0):
             "ndmi_state": rng.random(n),
             "ndvi_trend": rng.normal(0, 0.01, n),
             "nbr_trend": rng.normal(0, 0.01, n),
-            "bii": rng.random(n),
+            "natural_persist": rng.random(n),
             "pa_overlap": rng.choice([0, 0, 0.5, 1], n),
             "forest_loss_frac": rng.random(n) * 0.1,
             "signature_sim": rng.uniform(0.9, 0.97, n),
@@ -302,7 +302,6 @@ def test_select_spanning_set_rank_fallback_and_units():
 
 
 def _ctx(**over):
-    pool = pd.DataFrame({"bii": np.linspace(0, 1, 21), "ghm": np.linspace(0, 1, 21)})
     base = dict(
         site_type="reference",
         elevation=1000.0,
@@ -322,7 +321,6 @@ def _ctx(**over):
         relaxed_criteria=set(),
         focal_class_label="Fb",
         focal_substrate_label="Ferralsols",
-        pool=pool,
     )
     base.update(over)
     return MatrixContext(**base)
@@ -338,7 +336,7 @@ def _cand(**over):
         rain_mean_annual=1000.0,
         loss_since_2000_frac=0.0,
         recent_loss_frac=0.0,
-        bii=0.9,
+        landuse_class="persistent_natural",
         ghm=0.05,
         natural_frac=0.95,
         effective_area_ha=100.0,
@@ -367,13 +365,12 @@ def test_matrix_integrity_exclusive_and_exhaustive():
     combos = itertools.product(
         [0.0, 0.005, 0.03, 0.08],
         [0.0, 0.003, 0.01],
-        [0.1, 0.9],
-        [0.05, 0.9],
-        [0.5, 0.9],
+        ["persistent_natural", "converted", "mixed"],
+        [0.05, 0.39, 0.41, 0.9],
     )
     rows = [
-        _cand(loss_since_2000_frac=a, recent_loss_frac=b, bii=c, ghm=d, natural_frac=e)
-        for a, b, c, d, e in combos
+        _cand(loss_since_2000_frac=a, recent_loss_frac=b, landuse_class=c, ghm=d)
+        for a, b, c, d in combos
     ]
     m = build_selection_matrix(pd.DataFrame(rows), _ctx())
     assert set(m["integrity_score"]) <= {0, 1, 2}
@@ -384,12 +381,32 @@ def test_matrix_integrity_exclusive_and_exhaustive():
     two = (
         (~zero)
         & (df["loss_since_2000_frac"] < 0.01)
-        & (df["bii"] >= 0.75)
-        & (1 - df["ghm"] >= 0.75)
-        & (df["natural_frac"] >= 0.8)
+        & (df["landuse_class"] == "persistent_natural")
+        & (df["ghm"] < 0.4)
     )
     assert (m.loc[two, "integrity_score"] == 2).all()
     assert (m.loc[~zero & ~two, "integrity_score"] == 1).all()
+
+
+def test_matrix_integrity_is_absolute_not_pool_relative():
+    """An unchanged candidate scores the same whatever else is in the pool."""
+    target = _cand(ghm=0.3)
+    alone = build_selection_matrix(pd.DataFrame([target], index=["t"]), _ctx())
+    crowd = pd.DataFrame(
+        [target] + [_cand(ghm=g) for g in (0.01, 0.02, 0.03)],
+        index=["t", "a", "b", "c"],
+    )
+    with_better = build_selection_matrix(crowd, _ctx())
+    assert alone.loc["t", "integrity_score"] == 2
+    assert with_better.loc["t", "integrity_score"] == 2
+    # forest stratum keeps the canopy rule and ignores the land-use class
+    f = build_selection_matrix(
+        pd.DataFrame(
+            [_cand(landuse_class="mixed", canopy_height_p50=12.0)], index=["f"]
+        ),
+        _ctx(is_forest=True),
+    )
+    assert f.loc["f", "integrity_score"] == 2
 
 
 def test_matrix_relaxation_eligibility_and_size():
@@ -534,24 +551,31 @@ def test_degraded_exclusions_thresholds():
     assert list(bare) == [False]
 
 
-def test_dw_built_filter_keeps_order_and_renumbers():
-    from eetools.site_selection.scoring import dw_built_filter
+def test_degraded_exclusion_reasons_and_dw_built():
+    from eetools.site_selection.scoring import degraded_exclusion_reasons
 
-    short = pd.DataFrame(
-        {"rank": [1, 2, 3, 4], "rank_score": [0.9, 0.8, 0.7, 0.6]},
-        index=["c1", "c2", "c3", "c4"],
+    pool = pd.DataFrame(
+        {
+            "water_frac": [0.6, 0.0, 0.0, 0.0, 0.0],
+            "built_frac": [0.0, 0.03, 0.0, 0.0, 0.0],
+            "dw_built_share": [0.0, 0.0, 0.06, 0.05, np.nan],
+        },
+        index=list("abcde"),
     )
-    shares = pd.Series({"c1": 0.30, "c2": 0.01, "c3": np.nan, "c4": 0.0})
-    kept, dropped = dw_built_filter(short, shares, 0.01)
-    assert dropped == ["c1"]
-    assert list(kept.index) == [
-        "c2",
-        "c3",
-        "c4",
-    ]  # NaN (no DW obs) kept; 0.01 inclusive
-    assert list(kept["rank"]) == [1, 2, 3]
-    assert kept.loc["c2", "dw_built_share"] == 0.01 and np.isnan(
-        kept.loc["c3", "dw_built_share"]
+    r = degraded_exclusion_reasons(
+        pool, final=True, max_built_frac=0.02, max_dw_built=0.05
     )
-    empty, gone = dw_built_filter(short, pd.Series(1.0, index=short.index), 0.01)
-    assert empty.empty and gone == list(short.index)
+    # water first; WorldCover before DW; 0.05 inclusive; NaN DW share kept
+    assert list(r.where(r.notna(), None)) == [
+        "water",
+        "built_wc",
+        "built_dw",
+        None,
+        None,
+    ]
+    no_dw = degraded_exclusion_reasons(pool, final=True, max_built_frac=0.02)
+    assert pd.isna(no_dw["c"])
+    settle = degraded_exclusion_reasons(
+        pool, final=True, max_built_frac=0.02, max_dw_built=0.05, keep_built=True
+    )
+    assert list(settle.dropna()) == ["water"]
