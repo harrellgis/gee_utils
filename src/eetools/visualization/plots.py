@@ -392,7 +392,7 @@ def gate_trial_table(
     rows = []
     for name, gate in gates.items():
         g = pd.Series(gate, index=cells.index).fillna(False).astype(bool)
-        row = {"gate": name}
+        row: dict[str, object] = {"gate": name}
         for key, m in groups.items():
             row[key] = f"{int((g & m).sum())}/{int(m.sum())}"
         row["overlap_left"] = int(
