@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
 Site-selection robustness release (vault: 2026-11-09 ITF run / condition review and the
 2026-11-09 robustness design review). Condition eligibility becomes absolute and
 time-aware; percentiles only order eligible cells. Fresh runs are needed: the
@@ -31,6 +33,10 @@ and `dw_landuse_first_year` added), so saved tables are rejected.
   natural cover (overgrazing, rangeland) keep D2 and drop cells within the thinning
   distance of `reference_result`'s ranked sites. Ranked degraded sites report
   `dw_conversion_year` and `pathway_example` (converted after the baseline window).
+- Reference cells with a mandatory SOP score of 0 (e.g. integrity 0 from Hansen loss
+  inside Dynamic World natural cover, which the land-use history cannot see) are gated
+  before thinning and the stop rule (`gate_reason="sop_<criterion>"`), so the ladder
+  widens instead of stopping on candidates that can never be selected.
 - Stop rule requires every management unit to have an eligible reference
   (`EnvelopeTolerances.unit_coverage_stop`, default True; `scoring.stop_rule_met`). An
   exhausted ladder fills the list with the best gated-out cells, flagged
@@ -64,6 +70,8 @@ and `dw_landuse_first_year` added), so saved tables are rejected.
   reads `dw_landuse` on every final cell before thinning, instead of a shortlist after
   thinning (a rejected cell had already suppressed its valid neighbours; part of why
   TGBS_ITF's degraded shortlist went from 12 cells to 1).
+- `intactness_flag` "weak" now means gHM >= 0.4 (was 0.3), the same break as the
+  integrity criterion.
 - `reduce_cells` sends batches in numeric (ix, iy) order and splits a batch in half
   when Earth Engine reports "Object too large" (TGBS_ITF 1 km fine cells hit the 100 MB
   limit on the WorldCover fraction bands).
