@@ -112,7 +112,9 @@ from eetools.site_selection.scoring import (
     intactness_flag,
     intactness_score,
     landuse_history,
+    mandatory_criteria,
     near_references,
+    pathway_example,
     pathway_gate,
     percentile_normalise,
     select_spanning_set,
@@ -797,6 +799,18 @@ def _run(
     rung_log: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
     units = _management_units(sets) if site_type == "reference" else {}
+    kw["_matrix_ctx"] = lambda sub_level_: _matrix_context(
+        site_type,
+        prof,
+        tol,
+        focal_area_m2,
+        is_forest,
+        sets,
+        relaxed=set(),
+        sub_level=sub_level_,
+        baseline_end_year=ctx.baseline_end_year,
+    )
+    kw["_sets"] = sets
 
     for rung in search_rungs(tol.relaxation):
         sub_level = tol.substrate_match
@@ -953,6 +967,48 @@ def _run(
         n_candidates,
         coarse_min_share,
         min_screen_pool,
+    )
+
+
+def _matrix_context(
+    site_type: str,
+    prof: P.FocalProfile,
+    tol: EnvelopeTolerances,
+    focal_area_m2: float,
+    is_forest: bool,
+    sets: dict[str, Any],
+    *,
+    relaxed: set[str],
+    sub_level: str,
+    baseline_end_year: int | None,
+) -> MatrixContext:
+    """MatrixContext for the SOP selection matrix (shared by the gate and _assemble)."""
+    return MatrixContext(
+        site_type=site_type,
+        elevation=prof.elevation["median"],
+        elevation_p5=_nz(prof.elevation["p5"], prof.elevation["median"]),
+        elevation_p95=_nz(prof.elevation["p95"], prof.elevation["median"]),
+        rainfall=prof.rainfall["mean"],
+        rainfall_p5=_nz(prof.rainfall["p5"], prof.rainfall["mean"]),
+        rainfall_p95=_nz(prof.rainfall["p95"], prof.rainfall["mean"]),
+        elevation_tol_m=tol.elevation_tol_m,
+        rainfall_tol_frac=tol.rainfall_tol_frac,
+        focal_area_ha=focal_area_m2 / 1e4,
+        is_forest=is_forest,
+        class_fallback=sets["class_fallback"],
+        class_mosaic=sets["class_mosaic"],
+        substrate_fallback=sets["substrate_fallback"],
+        substrate_off=sub_level == "off",
+        relaxed_criteria=relaxed,
+        focal_class_label=(
+            f"PNV {sets['pnv_code']} / ECO_ID {sets['eco_id']}"
+            if sets["class_fallback"]
+            else ",".join(vecea_class_code(c) for c in sets["class_set"])
+        ),
+        focal_substrate_label=(
+            wrb_name(sets["wrb_code"]) if sets["wrb_code"] is not None else "n/a"
+        ),
+        baseline_end_year=baseline_end_year,
     )
 
 
@@ -1266,6 +1322,22 @@ def _score_rung(  # noqa: C901, PLR0913
             cls = pool["landuse_class"]
             reasons[(cls == "no_dw") & reasons.isna()] = "no_dw"
             reasons[(cls != "persistent_natural") & reasons.isna()] = "natural_persist"
+        # A mandatory SOP 0 (e.g. integrity 0 from Hansen loss inside natural cover,
+        # which the land-use history cannot see) can never be selected: gate it
+        # before thinning so it cannot suppress neighbours or satisfy the stop rule.
+        open_ = reasons.isna()
+        if open_.any() and kw.get("_matrix_ctx") is not None:
+            mat = build_selection_matrix(
+                _label_frame(pool.loc[open_], kw["_sets"]),
+                kw["_matrix_ctx"](sub_level),
+            )
+            for crit in mandatory_criteria("reference", sub_level == "off"):
+                col = f"{crit}_score"
+                if col in mat:
+                    zero = mat.index[mat[col] == 0]
+                    reasons[zero.intersection(reasons.index[reasons.isna()])] = (
+                        f"sop_{crit}"
+                    )
     else:
         excl = degraded_exclusion_reasons(
             pool,
@@ -1388,13 +1460,17 @@ def _reference_gate_fallback(
 ) -> pd.DataFrame:
     """Fill a short reference list with the best gated-out cells (fallback=True).
 
-    Only cells that failed the land-use gate alone ('natural_persist' / 'no_dw') are
-    considered. They are scored with the eligible cells (intactness over the union),
+    Only cells that failed the land-use gate ('natural_persist' / 'no_dw') or a
+    mandatory SOP criterion ('sop_<criterion>') are considered, never environmental
+    gate failures. They are scored with the eligible cells (intactness over the union),
     thinned against the selected cells, and appended after them with
     ``gate_fallback=True`` and their ``gate_reason``. This makes "most intact
     available" (TGBS R2) an explicit, flagged fallback instead of the default.
     """
-    cand = pool_all.loc[pool_all["gate_reason"].isin(["natural_persist", "no_dw"])]
+    gr = pool_all["gate_reason"].astype(object)
+    cand = pool_all.loc[
+        gr.isin(["natural_persist", "no_dw"]) | gr.fillna("").str.startswith("sop_")
+    ]
     if not len(cand):
         return thinned
     union = pd.concat([pool, cand])
@@ -1748,12 +1824,7 @@ def _rank_degraded(
         reasons[pool.index[~passed]] = "pathway"
         pool = pool.loc[passed].copy()
     pool["pathway_test"] = pathway_test
-    cy = pd.to_numeric(pool.get("dw_conversion_year"), errors="coerce")
-    pool["pathway_example"] = (
-        (cy > ctx.baseline_end_year).fillna(False)
-        if ctx.baseline_end_year is not None and cy is not None
-        else False
-    )
+    pool["pathway_example"] = pathway_example(pool)
 
     # ---- Rank: state + trajectory over the survivors --------------------------
     pool["env_sim"] = percentile_normalise(pool["mess"])
@@ -1855,27 +1926,15 @@ def _assemble(  # noqa: C901
         if sets["class_fallback"]
         else ",".join(vecea_class_code(c) for c in sets["class_set"])
     )
-    mctx = MatrixContext(
-        site_type=site_type,
-        elevation=prof.elevation["median"],
-        elevation_p5=_nz(prof.elevation["p5"], prof.elevation["median"]),
-        elevation_p95=_nz(prof.elevation["p95"], prof.elevation["median"]),
-        rainfall=prof.rainfall["mean"],
-        rainfall_p5=_nz(prof.rainfall["p5"], prof.rainfall["mean"]),
-        rainfall_p95=_nz(prof.rainfall["p95"], prof.rainfall["mean"]),
-        elevation_tol_m=tol.elevation_tol_m,
-        rainfall_tol_frac=tol.rainfall_tol_frac,
-        focal_area_ha=focal_area_m2 / 1e4,
-        is_forest=is_forest,
-        class_fallback=sets["class_fallback"],
-        class_mosaic=sets["class_mosaic"],
-        substrate_fallback=sets["substrate_fallback"],
-        substrate_off=final["sub_level"] == "off",
-        relaxed_criteria=relaxed,
-        focal_class_label=focal_class_label,
-        focal_substrate_label=(
-            wrb_name(sets["wrb_code"]) if sets["wrb_code"] is not None else "n/a"
-        ),
+    mctx = _matrix_context(
+        site_type,
+        prof,
+        tol,
+        focal_area_m2,
+        is_forest,
+        sets,
+        relaxed=relaxed,
+        sub_level=final["sub_level"],
         baseline_end_year=ctx.baseline_end_year,
     )
     matrix = build_selection_matrix(thinned, mctx)
@@ -1951,8 +2010,14 @@ def _assemble(  # noqa: C901
                         ranked[f"{c}_focal"] = dw.loc["__focal__", c]
             except Exception as exc:  # noqa: BLE001 - context only, never fatal
                 warn.append(f"Dynamic World ranked-site context failed: {exc}")
-        else:
+        elif ctx.end_year < DYNAMIC_WORLD_FIRST_YEAR:
             warn.append("Dynamic World context skipped (end_year before the S2 era).")
+        else:
+            warn.append(
+                "No degraded candidate survived the gates on the last rung "
+                f"(gate reasons: {info.get('gate_reasons')}). Check the pool file's "
+                "gate_reason column; consider wider tier_distances_km or tolerances."
+            )
     warn.append(SURVEY_PENDING)
 
     ranked["rung"] = final["rung"].label

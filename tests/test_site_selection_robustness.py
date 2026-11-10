@@ -65,9 +65,15 @@ def test_landuse_history_classes_and_priority():
         "persistent_modified",
         "converted",
         "mixed",
-        "built",  # built beats natural
+        "persistent_natural",  # natural beats built (few % homesteads in a big cell)
         "no_dw",  # too few observations beats everything
     ]
+
+
+def test_landuse_history_built_class_for_non_natural_cells():
+    df = _landuse(dw_nat_share_all=[0.3, 0.3], dw_built_share=[0.2, 0.04])
+    h = landuse_history(df, end_year=END, max_built_share=0.05)
+    assert list(h["landuse_class"]) == ["built", "mixed"]
 
 
 def test_landuse_history_k_years_tolerance():
@@ -366,3 +372,64 @@ def test_export_writes_separate_candidate_and_pool_files(tmp_path):
     # re-export overwrites instead of appending
     export_site_selection(res, tmp_path, project="TGBS", site="T", run_date="20261110")
     assert len(gpd.read_file(pl, layer="pool")) == 2
+
+
+def test_selection_matrix_empty_keeps_summary_columns():
+    from eetools.site_selection.scoring import MatrixContext, build_selection_matrix
+
+    ctx = MatrixContext(
+        site_type="degraded",
+        elevation=1000.0,
+        elevation_p5=1000.0,
+        elevation_p95=1000.0,
+        rainfall=1000.0,
+        rainfall_p5=1000.0,
+        rainfall_p95=1000.0,
+        elevation_tol_m=300.0,
+        rainfall_tol_frac=0.25,
+        focal_area_ha=50.0,
+        is_forest=False,
+        class_fallback=False,
+        class_mosaic=False,
+        substrate_fallback=False,
+        substrate_off=False,
+        relaxed_criteria=set(),
+        focal_class_label="Be",
+        focal_substrate_label="Ferralsols",
+    )
+    m = build_selection_matrix(pd.DataFrame(index=pd.Index([], name="cell_id")), ctx)
+    assert m.empty
+    assert {
+        "mandatory_met",
+        "mandatory_met_relaxed",
+        "fallback",
+        "matrix_total",
+    } <= set(m.columns)
+
+
+def test_pathway_example_only_when_most_modification_is_recent():
+    from eetools.site_selection.scoring import pathway_example
+
+    h = pd.DataFrame(
+        {
+            # mostly persistent cropland + small recent conversion; mostly recent; old
+            "modified_share": [1.0, 0.9, 0.8],
+            "modified_by_baseline": [0.95, 0.2, 0.8],
+        }
+    )
+    assert list(pathway_example(h)) == [False, True, False]
+
+
+def test_reference_gate_fallback_accepts_sop_failures_as_last_resort():
+    from eetools.site_selection.workflows import _reference_gate_fallback
+
+    pool = _ref_cells(["e1"], [0.0], [0.95])
+    pool["rank_score"] = 0.9
+    thinned = pool.assign(rank=1, gate_fallback=False)
+    gated = _ref_cells(["logged"], [5000.0], [0.9], "sop_integrity")
+    pool_all = pd.concat([pool.assign(gate_reason=None), gated])
+    out = _reference_gate_fallback(
+        thinned, pool, pool_all, ReferenceWeights(), False, 500.0, 2, []
+    )
+    assert list(out.index) == ["e1", "logged"]
+    assert out.loc["logged", "gate_reason"] == "sop_integrity"

@@ -275,7 +275,8 @@ How it works:
   each cell gets a `landuse_class`: `persistent_natural`, `converted` (with mean
   conversion year), `persistent_modified`, `built`, `mixed` or `no_dw`. **Reference
   cells must be persistently natural** (`tolerances.min_natural_persist` of the cell
-  natural in every year, or all but one with `natural_persist_years="all_but_one"`).
+  natural in all but one year of the history, or every year with
+  `natural_persist_years="all"`).
   The gate runs inside each search-ladder rung, before scoring, thinning and the stop
   rule, so a thin gated pool widens the search. Natural cover on final cells is the
   pixel-level agreement of WorldCover natural and Dynamic World persistent natural

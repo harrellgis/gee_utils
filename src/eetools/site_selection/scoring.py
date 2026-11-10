@@ -349,7 +349,7 @@ def anchor_check(pcts: pd.DataFrame, threshold: float) -> pd.Series:
 
 
 def intactness_flag(df: pd.DataFrame) -> pd.Series:
-    """'weak' where absolute naturalness (1 - ghm) < 0.7 or natural_frac < 0.6.
+    """'weak' where gHM >= 0.4 (1 - ghm < 0.6, the integrity break) or natural_frac < 0.6.
 
     Args:
         df: Candidates with ghm and natural_frac.
@@ -534,9 +534,11 @@ def landuse_history(
     Classes, in priority order:
 
     - ``no_dw``: fewer than ``min_valid_share`` of pixels observed in n - 1 years;
-    - ``built``: Dynamic World built-label share > ``max_built_share``;
     - ``persistent_natural``: natural share (all / all-but-one years) >=
-      ``min_natural_persist``;
+      ``min_natural_persist``. It outranks ``built``: a large cell can be mostly
+      persistent natural cover and still hold a few percent of homesteads and roads;
+      built-up land is filtered separately for degraded runs (``dw_built_share``);
+    - ``built``: Dynamic World built-label share > ``max_built_share``;
     - ``converted`` / ``persistent_modified``: converted + persistently modified
       share >= ``min_modified_share``, labelled by the larger part;
     - ``mixed``: everything else.
@@ -590,8 +592,8 @@ def landuse_history(
     modified = out["modified_share"] >= min_modified_share
     cls[modified & (conv_end.fillna(0) >= persist.fillna(0))] = "converted"
     cls[modified & (conv_end.fillna(0) < persist.fillna(0))] = "persistent_modified"
-    cls[nat >= min_natural_persist] = "persistent_natural"
     cls[built > max_built_share] = "built"
+    cls[nat >= min_natural_persist] = "persistent_natural"
     cls[valid.isna() | (valid < min_valid_share)] = "no_dw"
     out["landuse_class"] = cls
     return out
@@ -634,6 +636,27 @@ def conversion_pathway(
         loss = pd.to_numeric(forest_loss_frac, errors="coerce").reindex(history.index)
         ok |= (loss >= forest_loss_min).fillna(False)
     return ok
+
+
+def pathway_example(history: pd.DataFrame) -> pd.Series:
+    """True where most of a cell's modification happened after the baseline window.
+
+    Such a cell was still largely natural at baseline, so it shows the pathway but sets
+    the baseline-year 0% too high: report it as a pathway example, not an anchor. A
+    cell that is mostly persistent cropland with a small recent conversion is not one.
+
+    Args:
+        history: Output of :func:`landuse_history` (modified_share,
+            modified_by_baseline).
+
+    Returns:
+        Boolean Series.
+    """
+    total = pd.to_numeric(history.get("modified_share"), errors="coerce")
+    by_base = pd.to_numeric(history.get("modified_by_baseline"), errors="coerce")
+    if total is None or by_base is None:
+        return pd.Series(False, index=history.index)
+    return ((total - by_base) > by_base).fillna(False)
 
 
 def near_references(
@@ -1262,11 +1285,7 @@ def build_selection_matrix(
                 f"{_fmt(c.get('converted_share'))}"
                 + (f" (mean year {int(round(cy))})" if pd.notna(cy) else "")
             )
-            if (
-                pd.notna(cy)
-                and ctx.baseline_end_year is not None
-                and cy > ctx.baseline_end_year
-            ):
+            if bool(c.get("pathway_example", False)):
                 land += (
                     f"; converted after the baseline window ({ctx.baseline_end_year}): "
                     "pathway example rather than anchor"
@@ -1290,7 +1309,19 @@ def build_selection_matrix(
     mat = pd.DataFrame.from_dict(rows, orient="index")
     mat.index.name = candidates.index.name or "cell_id"
     if mat.empty:
-        return mat
+        # No candidates (e.g. every cell gated out): keep the summary columns so
+        # callers can join and export an empty matrix.
+        empty = pd.DataFrame(
+            {
+                "mandatory_met": pd.Series(dtype=bool),
+                "mandatory_met_relaxed": pd.Series(dtype=bool),
+                "no_mandatory_zero": pd.Series(dtype=bool),
+                "fallback": pd.Series(dtype=bool),
+                "matrix_total": pd.Series(dtype=float),
+            }
+        )
+        empty.index.name = mat.index.name
+        return empty
     mand = mandatory_criteria(ctx.site_type, ctx.substrate_off)
     scores = mat[[f"{m}_score" for m in mand]]
     mat["mandatory_met"] = (scores == 2).all(axis=1)

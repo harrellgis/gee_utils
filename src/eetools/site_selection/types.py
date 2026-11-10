@@ -68,9 +68,13 @@ class EnvelopeTolerances:
             share of pixels that are Dynamic World natural in the required number of
             years (``natural_persist_years``). Applied inside each rung before
             scoring, thinning and the stop rule ([L]).
-        natural_persist_years: 'all' (natural in every year of the land-use history)
-            or 'all_but_one' (tolerates one off-year label, e.g. DW grass/shrub/crop
-            swapping in savanna). Both shares are reduced, so this never re-reduces.
+        natural_persist_years: 'all_but_one' (default; tolerates one off-year label,
+            e.g. DW grass/shrub/crop swapping, or edge pixels in large cells) or 'all'
+            (natural in every year of the land-use history). Both shares are reduced,
+            so this never re-reduces. Default chosen on the v0.6.0 validation: at
+            TGBS_Kwale's 2.5 km cells the known Buda reference failed 'all' (median
+            0.77) and passed 'all_but_one' (0.92); Ecosia kept all 18 strict-PA cells
+            either way.
         unit_coverage_stop: The search ladder stops only when the rung has enough
             eligible thinned references *and* each management unit (focal class) has
             at least one; False stops on the count alone (saves Tier 3 compute).
@@ -90,7 +94,7 @@ class EnvelopeTolerances:
     min_screen_pool: int | None = None
     exclude_max_share: float = 0.5
     min_natural_persist: float = 0.8
-    natural_persist_years: Literal["all", "all_but_one"] = "all"
+    natural_persist_years: Literal["all", "all_but_one"] = "all_but_one"
     unit_coverage_stop: bool = True
 
     def __post_init__(self) -> None:

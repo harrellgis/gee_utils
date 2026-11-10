@@ -1373,7 +1373,7 @@ SOP_MATRIX_THRESHOLDS = {
     "elevation_band_m": 150.0,
     "rainfall_band_frac": 0.125,
 }
-INTACTNESS_WEAK_NATURALNESS = 0.7  # 1 - ghm below this -> intactness_flag "weak"
+INTACTNESS_WEAK_NATURALNESS = 0.6  # 1 - ghm below this (gHM >= 0.4, the integrity break) -> "weak"
 INTACTNESS_WEAK_NATURAL_FRAC = 0.6
 ZERO_STAR_HIGH_PCT = 0.9
 ZERO_STAR_MODERATE_PCT = 0.75

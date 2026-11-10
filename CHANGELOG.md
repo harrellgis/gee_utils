@@ -22,7 +22,7 @@ and `dw_landuse_first_year` added), so saved tables are rejected.
 - `scoring.landuse_history`: per-cell `landuse_class` (`persistent_natural`,
   `converted`, `persistent_modified`, `built`, `mixed`, `no_dw`) read by both workflows.
 - Reference land-use gate (`EnvelopeTolerances.min_natural_persist = 0.8`,
-  `natural_persist_years = "all" | "all_but_one"`), applied inside each rung before
+  `natural_persist_years = "all_but_one"` (default) or `"all"`), applied inside each rung before
   scoring, thinning and the stop rule, so a thin gated pool widens the search ladder.
 - Absolute degraded pathway test for conversion pathways (`scoring.conversion_pathway`;
   generic, cropland, settlement, mining, bare_soil, deforestation): modified by the end
