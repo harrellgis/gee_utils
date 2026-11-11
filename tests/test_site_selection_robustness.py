@@ -433,3 +433,139 @@ def test_reference_gate_fallback_accepts_sop_failures_as_last_resort():
     )
     assert list(out.index) == ["e1", "logged"]
     assert out.loc["logged", "gate_reason"] == "sop_integrity"
+
+
+# --------------------------------------------------------------------------- #
+# Top candidates (0.6.1)                                                       #
+# --------------------------------------------------------------------------- #
+def test_sort_by_score_accepts_a_score_column_named_key():
+    from eetools.site_selection.scoring import sort_by_score
+
+    df = pd.DataFrame({"_key": [0.1, 0.9, 0.5]}, index=["c", "a", "b"])
+    out = sort_by_score(df, "_key")
+    assert list(out.index) == ["a", "b", "c"]  # by score, not by index
+    assert list(out.columns) == ["_key"]
+
+
+def _top_pool():
+    # five eligible cells on a line 1000 m apart, plus one gated-out cell
+    return pd.DataFrame(
+        {
+            "pool_status": ["eligible"] * 5 + ["gated_out"],
+            "intactness": [0.9, 0.8, 0.7, 0.6, 0.5, 0.99],
+            "env_sim": [0.1, 0.9, 0.8, 0.95, 0.2, 1.0],
+            "rank_score": [0.5, 0.75, 0.6, 0.6, 0.3, np.nan],
+            "cx": [0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0],
+            "cy": [0.0] * 6,
+        },
+        index=pd.Index(["a", "b", "c", "d", "e", "g"], name="cell_id"),
+    )
+
+
+def test_select_top_candidates_weights_condition_and_similarity_equally():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    shortlist = pd.DataFrame(
+        {"rank": [1], "role": ["primary"]}, index=pd.Index(["a"], name="cell_id")
+    )
+    top = select_top_candidates(
+        _top_pool(), "reference", 500.0, n=10, shortlist=shortlist
+    )
+    # intactness pct: a 1.0, b 0.8, c 0.6, d 0.4, e 0.2
+    # top_score = 0.5 * pct + 0.5 * env_sim: b 0.85, d 0.675, c 0.7, a 0.55, e 0.2
+    assert list(top.index) == ["b", "c", "d", "a", "e"]
+    assert list(top["top_rank"]) == [1, 2, 3, 4, 5]
+    assert "g" not in top.index  # gated-out cells never enter
+    assert top["top_score"].is_monotonic_decreasing
+    assert list(top.columns[:6]) == [
+        "top_rank",
+        "top_score",
+        "intactness_pct",
+        "proposed",
+        "proposed_rank",
+        "proposed_role",
+    ]
+    assert bool(top.loc["a", "proposed"]) and top.loc["a", "proposed_rank"] == 1
+    assert top.loc["a", "proposed_role"] == "primary"
+    assert not top.loc["b", "proposed"]
+
+
+def test_select_top_candidates_spaces_sites_and_caps_n():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    top = select_top_candidates(_top_pool(), "reference", 1500.0, n=2)
+    # b leads; c (1000 m away) and a (1000 m) are suppressed; d is next
+    assert list(top.index) == ["b", "d"]
+    assert not top["proposed"].any()
+
+
+def test_select_top_candidates_degraded_uses_degradation():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    pool = _top_pool().rename(columns={"intactness": "degradation"})
+    top = select_top_candidates(pool, "degraded", 500.0, condition_weight=1.0)
+    assert list(top.index) == ["a", "b", "c", "d", "e"]
+    assert "degradation_pct" in top.columns
+
+
+def test_select_top_candidates_ties_broken_by_rank_score():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    pool = _top_pool().iloc[:5].assign(intactness=0.5, env_sim=0.5)
+    top = select_top_candidates(pool, "reference", 500.0)
+    assert list(top.index[:2]) == ["b", "c"]  # rank_score 0.75, then 0.6 (c before d)
+
+
+def test_select_top_candidates_empty_pool():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    pool = _top_pool().assign(pool_status="gated_out")
+    top = select_top_candidates(pool, "reference", 500.0)
+    assert len(top) == 0 and "top_rank" in top.columns
+
+
+def test_export_writes_top_candidates_and_site_role(tmp_path):
+    from eetools.site_selection.types import ScreeningTables, SiteSelectionResult
+    from eetools.site_selection.workflows import export_site_selection
+
+    geom = [box(36.0, -1.0, 36.01, -0.99), box(36.02, -1.0, 36.03, -0.99)]
+    idx = pd.Index(["c1", "c2"], name="cell_id")
+    pool = gpd.GeoDataFrame(
+        {"pool_status": ["eligible", "gated_out"]}, geometry=geom, crs=4326, index=idx
+    )
+    top = gpd.GeoDataFrame(
+        {"top_rank": [1], "top_score": [0.9], "proposed": [True]},
+        geometry=geom[:1],
+        crs=4326,
+        index=idx[:1],
+    )
+    res = SiteSelectionResult(
+        site_type="degraded",
+        ranked=pool.iloc[:1].assign(rank=1),
+        pool=pool,
+        focal_profile=pd.DataFrame(),
+        params={"top_candidates_n": 10},
+        provenance={},
+        selection_matrix=pd.DataFrame({"cell_id": ["c1"]}),
+        layer_register=pd.DataFrame({"layer_or_query": ["x"]}),
+        screening=ScreeningTables.empty({}),
+        warnings=[],
+        top_candidates=top,
+    )
+    vec = tmp_path / "vectors"
+    paths = export_site_selection(
+        res,
+        tmp_path / "tables",
+        project="TGBS",
+        site="T",
+        run_date="20261111",
+        vector_folder=vec,
+    )
+    t = paths["degraded_top10"]
+    assert t == vec / "TGBS_T_degraded_top10_20261111_v1.gpkg"
+    assert paths["degraded_pool"].parent == vec
+    assert paths["degraded_ranked"].parent == tmp_path / "tables"
+    back = gpd.read_file(t, layer="top_candidates")
+    assert list(back["top_rank"]) == [1]
+    for product in ("degraded_candidates", "degraded_pool", "degraded_top10"):
+        assert set(gpd.read_file(paths[product])["site_role"]) == {"degraded"}

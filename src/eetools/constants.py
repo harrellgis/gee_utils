@@ -1378,5 +1378,10 @@ INTACTNESS_WEAK_NATURALNESS = 0.6
 INTACTNESS_WEAK_NATURAL_FRAC = 0.6
 ZERO_STAR_HIGH_PCT = 0.9
 ZERO_STAR_MODERATE_PCT = 0.75
+# Top-candidates file (2026-11-11 top-10 review): the best distinct eligible sites by
+# top_score = w * condition percentile (intactness / degradation) + (1 - w) * env_sim,
+# ties broken by rank_score, spaced like the shortlist. Equal weights are a choice. [L]
+TOP_CANDIDATES_N = 10
+TOP_CANDIDATES_CONDITION_WEIGHT = 0.5
 ZERO_STAR_MAX_PERFORMANCE = 0.5
 SPAN_ENV_COVERAGE_SD = 1.0  # env_coverage: focal samples within this RMS z-distance
