@@ -253,12 +253,14 @@ ref.ranked                # GeoDataFrame: rank, role, rank_score, intactness, ..
 ref.pool                  # every final cell: pool_status, gate_reason, landuse_class
 ref.selection_matrix      # CER-K SOP 0/1/2 matrix with evidence and H/M/L confidence
 ref.layer_register        # SOP §7 layer and query register
+ref.top_candidates        # best 10 distinct eligible sites by condition + similarity
 ref.warnings              # ladder expansion, relaxed gates, fallbacks, ...
 
 ref.screening.to_parquet("outputs/screening")   # reload: ScreeningTables.from_parquet
-export_site_selection(ref, "outputs", project="TGBS", site="ITF")
-# -> TGBS_ITF_reference_candidates_<date>_v1.gpkg, TGBS_ITF_reference_pool_<date>_v1.gpkg,
-#    plus ranked / selection-matrix / layer-register CSVs
+export_site_selection(ref, "outputs/tables", project="TGBS", site="ITF",
+                      vector_folder="outputs/vectors")
+# -> TGBS_ITF_reference_candidates_<date>_v1.gpkg, _reference_pool_..., _reference_top10_...
+#    (vectors, each with site_role) plus ranked / selection-matrix / layer-register CSVs
 ```
 
 How it works:
@@ -317,6 +319,11 @@ How it works:
   class) has none. If the ladder is exhausted, the best gated-out cells fill the list
   with `fallback=True` and their `gate_reason`. Reference shortlists are chosen to span
   the focal site's environmental range.
+- **Top candidates.** Besides the shortlist, each result holds the 10 best distinct
+  eligible sites by `top_score`, the mean of the condition percentile (intactness or
+  degradation) and `env_sim`, ties broken by `rank_score` and spaced like the shortlist.
+  `proposed` flags the shortlisted ones. Use it to swap a proposed site that fails the
+  basemap or field check.
 - **Earth Engine use.** Every reduction is memoised in `ScreeningTables`, and gating,
   scoring and ranking run in pandas. Reusing the tables (in memory or from parquet)
   costs no further EECU and gives identical results. Batches are sent in spatial

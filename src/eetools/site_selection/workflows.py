@@ -57,6 +57,8 @@ from eetools.constants import (
     SATELLITE_EMBEDDING_COLLECTION,
     STATE_WINDOW_YEARS,
     TERRACLIMATE_COLLECTION,
+    TOP_CANDIDATES_CONDITION_WEIGHT,
+    TOP_CANDIDATES_N,
     TREND_WINDOW_YEARS,
     VECEA_DOI,
     VECEA_EXCLUDED_CLASSES,
@@ -118,6 +120,7 @@ from eetools.site_selection.scoring import (
     pathway_gate,
     percentile_normalise,
     select_spanning_set,
+    select_top_candidates,
     signature_from_rules,
     sort_by_score,
     stop_rule_met,
@@ -2057,8 +2060,20 @@ def _assemble(  # noqa: C901
     pool = pool.drop(
         columns=[c for c in pool.columns if c.startswith("_done_") or c.endswith("_v")]
     )
+    # site_role on every vector output (focal / reference / degraded), for styling.
+    ranked["site_role"] = site_type
+    pool["site_role"] = site_type
+    top = select_top_candidates(
+        pool,
+        site_type,
+        float(info["min_separation_m"]),
+        n=TOP_CANDIDATES_N,
+        condition_weight=TOP_CANDIDATES_CONDITION_WEIGHT,
+        shortlist=ranked,
+    )
     ranked_gdf = cell_geodataframe(ranked, ctx.crs)
     pool_gdf = cell_geodataframe(pool, ctx.crs)
+    top_gdf = cell_geodataframe(top, ctx.crs)
     matrix_out = matrix.loc[ranked.index] if len(ranked) else matrix
     matrix_out = matrix_out.assign(rank=ranked["rank"]).reset_index()
 
@@ -2074,6 +2089,8 @@ def _assemble(  # noqa: C901
 
     params: dict[str, Any] = {
         "site_type": site_type,
+        "top_candidates_n": TOP_CANDIDATES_N,
+        "top_candidates_condition_weight": TOP_CANDIDATES_CONDITION_WEIGHT,
         "focal_geojson": geojson_of(focal_ll),
         "focal_area_ha": focal_area_m2 / 1e4,
         "grid_crs": ctx.crs,
@@ -2329,6 +2346,7 @@ def _assemble(  # noqa: C901
         layer_register=layer_register,
         screening=store.to_tables(),
         warnings=list(dict.fromkeys(warn)),
+        top_candidates=top_gdf,
     )
 
 
@@ -2427,6 +2445,7 @@ def export_site_selection(
     site: str = "Site",
     version: int = 1,
     run_date: str | None = None,
+    vector_folder: str | Path | None = None,
 ) -> dict[str, Path]:
     """Write a result to local GPKG + CSV files (pure geopandas, no Earth Engine).
 
@@ -2438,35 +2457,53 @@ def export_site_selection(
     - ``<kind>_pool`` (GPKG, layer 'pool'): every final cell of the rung reached, with
       ``pool_status`` ('eligible' / 'gated_out'), ``gate_reason`` and
       ``landuse_class``;
+    - ``<kind>_top<n>`` (GPKG, layer 'top_candidates'): the best distinct eligible
+      sites by ``top_score`` with ``proposed`` flagging the shortlist (results from
+      0.6.1 on; see ``scoring.select_top_candidates``);
     - ``<kind>_ranked``, ``<kind>_selection_matrix``, ``<kind>_layer_register`` (CSV).
+
+    Every spatial file carries ``site_role`` ('reference' or 'degraded') for styling.
 
     Args:
         result: SiteSelectionResult.
-        folder: Output directory (created if missing).
+        folder: Output directory for the CSV tables, and for the GeoPackages unless
+            ``vector_folder`` is given (created if missing).
         project: Project code for file names.
         site: Site code for file names.
         version: Version number.
         run_date: YYYYMMDD stamp (default today).
+        vector_folder: Output directory for the GeoPackages (default ``folder``).
 
     Returns:
         Dict of product name -> written path.
     """
     out = Path(folder)
     out.mkdir(parents=True, exist_ok=True)
+    vec = Path(vector_folder) if vector_folder is not None else out
+    vec.mkdir(parents=True, exist_ok=True)
     stamp = run_date or date.today().strftime("%Y%m%d")
     kind = result.site_type
 
     def name(product: str, ext: str) -> Path:
-        return out / f"{project}_{site}_{product}_{stamp}_v{version}.{ext}"
+        base = vec if ext == "gpkg" else out
+        return base / f"{project}_{site}_{product}_{stamp}_v{version}.{ext}"
 
-    paths: dict[str, Path] = {}
-    for product, layer, gdf in (
+    spatial = [
         (f"{kind}_candidates", "candidates", result.ranked),
         (f"{kind}_pool", "pool", result.pool),
-    ):
+    ]
+    top = result.top_candidates
+    if top is not None:
+        n_top = int(result.params.get("top_candidates_n", TOP_CANDIDATES_N))
+        spatial.append((f"{kind}_top{n_top}", "top_candidates", top))
+    paths: dict[str, Path] = {}
+    for product, layer, gdf in spatial:
         p = name(product, "gpkg")
         p.unlink(missing_ok=True)  # one layer per file; never append to an old one
-        _gpkg_safe(gdf).to_file(p, layer=layer, driver="GPKG")
+        out_gdf = gdf.copy()
+        if "site_role" not in out_gdf.columns:
+            out_gdf["site_role"] = kind
+        _gpkg_safe(out_gdf).to_file(p, layer=layer, driver="GPKG")
         paths[product] = p
     for product, df in (
         (f"{kind}_ranked", pd.DataFrame(result.ranked.drop(columns="geometry"))),

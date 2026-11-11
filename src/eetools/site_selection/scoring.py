@@ -29,6 +29,8 @@ from eetools.constants import (
     PREDICTOR_LABELS,
     SOP_MATRIX_THRESHOLDS,
     SPAN_ENV_COVERAGE_SD,
+    TOP_CANDIDATES_CONDITION_WEIGHT,
+    TOP_CANDIDATES_N,
     VECEA_FOREST_STRATUM_GROUPS,
     ZERO_STAR_HIGH_PCT,
     ZERO_STAR_MAX_PERFORMANCE,
@@ -687,6 +689,74 @@ def near_references(
     return near
 
 
+def select_top_candidates(
+    pool: pd.DataFrame,
+    site_type: str,
+    min_separation_m: float,
+    *,
+    n: int = TOP_CANDIDATES_N,
+    condition_weight: float = TOP_CANDIDATES_CONDITION_WEIGHT,
+    shortlist: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Best ``n`` distinct eligible sites, led by condition and environmental similarity.
+
+    ``top_score = condition_weight * pct(condition) + (1 - condition_weight) * env_sim``,
+    where the condition is ``intactness`` (reference) or ``degradation`` (degraded) and
+    both percentiles are over the eligible cells (``env_sim`` already is one). Ties are
+    broken by ``rank_score``, the score behind the shortlist's thinned rank. The cells
+    are then spaced with the shortlist rule (centroid distance >= ``min_separation_m``),
+    so every pick is a separate site. Unlike ``rank_score``, where similarity can at
+    most halve a score, condition and similarity carry the given weights. Pure pandas.
+
+    Args:
+        pool: Final cells indexed by cell_id with ``pool_status``, the condition score,
+            ``env_sim``, ``rank_score`` and grid centroids ``cx`` / ``cy``.
+        site_type: 'reference' or 'degraded'.
+        min_separation_m: Spacing distance (the shortlist's ``min_separation_m``).
+        n: Number of sites.
+        condition_weight: Weight of the condition percentile (0-1).
+        shortlist: Ranked (proposed) sites indexed by cell_id with ``rank`` (and
+            ``role``); used to flag proposed sites.
+
+    Returns:
+        Up to ``n`` cells in order with ``top_rank``, ``top_score``,
+        ``<condition>_pct``, ``proposed``, ``proposed_rank`` and ``proposed_role``
+        first, then the pool columns.
+    """
+    if not 0.0 <= condition_weight <= 1.0:
+        raise ValueError("condition_weight must be between 0 and 1.")
+    cond = "intactness" if site_type == "reference" else "degradation"
+    lead = ["top_rank", "top_score", f"{cond}_pct", "proposed", "proposed_rank"]
+    lead.append("proposed_role")
+    if "pool_status" not in pool or cond not in pool:
+        return pd.DataFrame(columns=lead + list(pool.columns))
+    elig = pool.loc[(pool["pool_status"] == "eligible") & pool[cond].notna()].copy()
+    if not len(elig):
+        return pd.DataFrame(columns=lead + list(pool.columns))
+    elig[f"{cond}_pct"] = elig[cond].rank(pct=True)
+    env = pd.to_numeric(elig.get("env_sim"), errors="coerce").fillna(0.0)
+    elig["top_score"] = (
+        condition_weight * elig[f"{cond}_pct"] + (1.0 - condition_weight) * env
+    )
+    tie = pd.to_numeric(elig.get("rank_score"), errors="coerce").rank(pct=True)
+    key = elig["top_score"] + 1e-9 * tie.fillna(0.0)
+    kept = thin_spatially(
+        elig.assign(top_sort_key=key), "top_sort_key", min_separation_m
+    )
+    top = elig.loc[kept[:n]].copy()
+    top["top_rank"] = np.arange(1, len(top) + 1)
+    if shortlist is not None and len(shortlist):
+        top["proposed"] = top.index.isin(shortlist.index)
+        top["proposed_rank"] = shortlist["rank"].reindex(top.index)
+        role = shortlist["role"] if "role" in shortlist else None
+        top["proposed_role"] = role.reindex(top.index) if role is not None else None
+    else:
+        top["proposed"] = False
+        top["proposed_rank"] = np.nan
+        top["proposed_role"] = None
+    return top[lead + [c for c in top.columns if c not in lead]]
+
+
 def gate_then_thin(
     pool: pd.DataFrame, eligible: pd.Series, score_col: str, min_separation_m: float
 ) -> pd.DataFrame:
@@ -780,6 +850,11 @@ def thin_spatially(
     return ordered.index[kept]
 
 
+# Temporary tie-break column; a reserved name so it never overwrites a score column
+# (it was "_key", which silently replaced a score column of that name).
+_TIEBREAK_COL = "__sort_by_score_index__"
+
+
 def sort_by_score(df: pd.DataFrame, score_col: str) -> pd.DataFrame:
     """Sort descending by score with the index as a deterministic tie-breaker.
 
@@ -790,9 +865,11 @@ def sort_by_score(df: pd.DataFrame, score_col: str) -> pd.DataFrame:
     Returns:
         Sorted copy.
     """
-    tmp = df.assign(_key=df.index.astype(str))
-    return tmp.sort_values([score_col, "_key"], ascending=[False, True]).drop(
-        columns="_key"
+    if score_col == _TIEBREAK_COL:
+        raise ValueError(f"score_col may not be named {_TIEBREAK_COL!r}")
+    tmp = df.assign(**{_TIEBREAK_COL: df.index.astype(str)})
+    return tmp.sort_values([score_col, _TIEBREAK_COL], ascending=[False, True]).drop(
+        columns=_TIEBREAK_COL
     )
 
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-11
+
+Site-selection top-candidates output (vault: 2026-11-11 top-10 ranking review). No change
+to eligibility, scores or the shortlist; saved `ScreeningTables` stay valid.
+
+### Added
+- `scoring.select_top_candidates`: the best distinct eligible sites by
+  `top_score = w * pct(condition) + (1 - w) * env_sim` (condition = intactness for
+  references, degradation for degraded sites; `w = TOP_CANDIDATES_CONDITION_WEIGHT`,
+  default 0.5), ties broken by `rank_score`, spaced with the shortlist rule. Condition
+  and similarity lead equally, whereas in `rank_score` similarity can at most halve a
+  score. Adds `top_rank`, `top_score`, `<condition>_pct`, `proposed`, `proposed_rank`
+  and `proposed_role`.
+- `SiteSelectionResult.top_candidates` (`TOP_CANDIDATES_N = 10` sites, recorded in
+  `params`), and `export_site_selection` writes it as `<kind>_top10` GPKG (layer
+  `top_candidates`).
+- `export_site_selection(..., vector_folder=)`: write the GeoPackages to a separate
+  folder from the CSV tables.
+- `site_role` (`reference` / `degraded`) on the candidates, pool and top-candidates
+  outputs, for styling.
+
+### Fixed
+- `scoring.sort_by_score` used a temporary column named `_key`, which silently replaced
+  a score column of that name and sorted by cell id instead. The temporary column now
+  has a reserved name, and passing that name as the score column raises.
+
 ## [0.6.0] - 2026-11-10
 
 Site-selection robustness release (vault: 2026-11-09 ITF run / condition review and the

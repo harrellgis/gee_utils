@@ -377,6 +377,9 @@ class SiteSelectionResult:
         screening: Raw per-cell reductions; pass as ``screening=`` to the other
             workflow on the same focal site.
         warnings: Human-readable warnings (ladder expanded, gate relaxed, ...).
+        top_candidates: The best distinct eligible sites by ``top_score`` (condition
+            percentile and ``env_sim``), with ``proposed`` flagging the shortlist; see
+            ``scoring.select_top_candidates``. None for results built before 0.6.1.
     """
 
     site_type: SiteType
@@ -389,6 +392,7 @@ class SiteSelectionResult:
     layer_register: pd.DataFrame
     screening: ScreeningTables
     warnings: list[str]
+    top_candidates: gpd.GeoDataFrame | None = None
 
 
 def dataclass_params(obj: Any) -> dict[str, Any]:
