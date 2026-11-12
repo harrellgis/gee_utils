@@ -1,7 +1,13 @@
+import fnmatch
 import hashlib
+import json
 import logging
 import math
 import re
+import warnings
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -17,6 +23,14 @@ from eetools.constants import (
     GCS_FIRST_SHARD_SUFFIX,
     GCS_PREFIX_ALLOWED_CHARS,
     GCS_TABLE_FORMATS,
+    MANIFEST_RESERVED_BAND_KEYS,
+    MANIFEST_VERSION,
+    SITE_EXPORT_DTYPE_BYTES,
+    SITE_EXPORT_DTYPES,
+    SITE_EXPORT_NAME_PATTERN,
+    SITE_EXPORT_SCALE_FACTOR,
+    SITE_EXPORT_UNSCALED_BANDS,
+    SITE_EXPORT_WARN_BYTES,
 )
 
 try:  # google-cloud-storage is needed for skip-if-exists checks and uploads only.
@@ -537,10 +551,10 @@ def sanitize_file_name_prefix(prefix: str) -> str:
     leading/trailing slashes are removed. EE appends the extension itself.
 
     Args:
-        prefix: Raw object prefix, e.g. ``"tgbs/ndvi/site 01_ndvi"``.
+        prefix: Raw object prefix, e.g. ``"proj/ndvi/site 01_ndvi"``.
 
     Returns:
-        str. The sanitised prefix, e.g. ``"tgbs/ndvi/site_01_ndvi"``.
+        str. The sanitised prefix, e.g. ``"proj/ndvi/site_01_ndvi"``.
 
     Raises:
         ValueError: If nothing usable is left after sanitising.
@@ -603,11 +617,22 @@ def snapped_transform(
         raise ValueError(f"scale must be > 0, got {scale}.")
     coords = ee.Geometry(region).bounds(max_error, ee.Projection(crs)).coordinates()
     ring = cast(list, coords.getInfo())[0]  # bounds() is one non-empty ring
+    return _transform_from_ring(ring, scale)
+
+
+def _transform_from_ring(ring: list[list[float]], scale: float) -> list[float]:
     xs = [pt[0] for pt in ring]
     ys = [pt[1] for pt in ring]
     x0 = round(math.floor(min(xs) / scale) * scale, 10)
     y0 = round(math.ceil(max(ys) / scale) * scale, 10)
     return [float(scale), 0.0, float(x0), 0.0, -float(scale), float(y0)]
+
+
+def _ring_pixel_count(ring: list[list[float]], transform: list[float]) -> int:
+    scale = transform[0]
+    width = math.ceil((max(pt[0] for pt in ring) - transform[2]) / scale)
+    height = math.ceil((transform[5] - min(pt[1] for pt in ring)) / scale)
+    return max(width, 0) * max(height, 0)
 
 
 def gcs_object_exists(bucket: str, name: str, project_id: str | None = None) -> bool:
@@ -617,7 +642,7 @@ def gcs_object_exists(bucket: str, name: str, project_id: str | None = None) -> 
 
     Args:
         bucket: Bucket name, without ``gs://``.
-        name: Full object name within the bucket, e.g. ``"tgbs/ndvi/s01_ndvi.tif"``.
+        name: Full object name within the bucket, e.g. ``"proj/ndvi/s01_ndvi.tif"``.
         project_id: GCP project for the client; falls back to the configured project.
 
     Returns:
@@ -837,3 +862,447 @@ def fetch_stack(
     if backend == "gcs_batch":
         return export_image_to_gcs(image, region, **kwargs)
     raise ValueError(f"backend must be one of {_FETCH_BACKENDS}, got {backend!r}.")
+
+
+# --------------------------------------------------------------------------- #
+# Per-site composite stacks + band manifest                                    #
+# --------------------------------------------------------------------------- #
+_SITE_NAME_RE = re.compile(f"^{SITE_EXPORT_NAME_PATTERN}$")
+_HASHED_MANIFEST_KEYS = (
+    "manifest_version",
+    "file",
+    "region_id",
+    "product",
+    "crs",
+    "crs_transform",
+    "dtype",
+    "nodata",
+    "bands",
+)
+
+
+@dataclass(frozen=True)
+class ExportRecord:
+    """Outcome of one per-site export from ``export_composites_per_site``.
+
+    Attributes:
+        region_id: The region's ``id_property`` value.
+        object_name: Object name of the (unsharded) tif in the bucket.
+        manifest_name: Object name of the JSON band manifest next to it.
+        manifest: The manifest dict (written to ``manifest_name`` when the task starts).
+        task: The export task, or None when skipped / pending.
+        status: ``"started"``, ``"unstarted"`` (``start=False``; call ``write_export_manifest`` after starting it), ``"skipped"`` (tif + matching manifest exist) or ``"pending"`` (matching manifest without its tif: an earlier export is still running or failed).
+    """
+
+    region_id: str
+    object_name: str
+    manifest_name: str
+    manifest: dict[str, Any]
+    task: ee.batch.Task | None
+    status: Literal["started", "unstarted", "skipped", "pending"]
+
+
+def _validate_site_name(value: Any, what: str) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or not _SITE_NAME_RE.match(value):
+        raise ValueError(
+            f"{what} {value!r} must match {SITE_EXPORT_NAME_PATTERN} (letters, digits, "
+            "underscores; no hyphens, which clash with EE's shard suffix)."
+        )
+    return value
+
+
+def _plain_number(value: float) -> float | int:
+    return int(value) if float(value).is_integer() else float(value)
+
+
+def build_band_entries(
+    bands: Sequence[str],
+    *,
+    scale_factor: float = SITE_EXPORT_SCALE_FACTOR,
+    unscaled_bands: Sequence[str] = SITE_EXPORT_UNSCALED_BANDS,
+    band_meta: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build the manifest band entries for a stack, in band order.
+
+    Each entry has ``index`` (1-based, following ``bands``), ``name``,
+    ``scale_factor`` (1 for ``unscaled_bands``) and ``offset`` (0), then every key of
+    ``band_meta[name]`` copied verbatim. eetools does not interpret those keys.
+
+    Args:
+        bands: Band names in stack order (``image.bandNames()``).
+        scale_factor: Factor applied to every band not in ``unscaled_bands``.
+        unscaled_bands: Bands stored as-is (``scale_factor`` 1), as exact names or case-sensitive fnmatch patterns; non-matching entries are ignored.
+        band_meta: Optional ``{band name: {key: value}}`` copied into the entries.
+
+    Returns:
+        list[dict]. One manifest band entry per band.
+
+    Raises:
+        ValueError: If ``band_meta`` names a band not in ``bands``, or sets a reserved key (``index``, ``name``, ``scale_factor``, ``offset``).
+    """
+    meta = dict(band_meta or {})
+    unknown = sorted(set(meta) - set(bands))
+    if unknown:
+        raise ValueError(f"band_meta names bands not in the image: {unknown}.")
+    unscaled = {
+        name
+        for name in bands
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in unscaled_bands)
+    }
+    entries: list[dict[str, Any]] = []
+    for index, name in enumerate(bands, start=1):
+        extra = dict(meta.get(name, {}))
+        clash = sorted(set(extra) & set(MANIFEST_RESERVED_BAND_KEYS))
+        if clash:
+            raise ValueError(
+                f"band_meta[{name!r}] may not set reserved keys {clash}; "
+                "they are derived from the export parameters."
+            )
+        factor = 1 if name in unscaled else _plain_number(scale_factor)
+        entry: dict[str, Any] = {
+            "index": index,
+            "name": name,
+            "scale_factor": factor,
+            "offset": 0,
+        }
+        entry.update(extra)
+        entries.append(entry)
+    return entries
+
+
+def manifest_params_hash(manifest: Mapping[str, Any]) -> str:
+    """SHA-256 of a manifest's export parameters and band list.
+
+    Hashes ``manifest_version``, ``file``, ``region_id``, ``product``, ``crs``,
+    ``crs_transform``, ``dtype``, ``nodata`` and ``bands`` (with all band
+    metadata), as canonical JSON. ``created``, ``eetools_version`` and the hash itself
+    are excluded, so re-running with the same parameters gives the same hash. It
+    says nothing about file content; integrity is the GCS MD5.
+
+    Args:
+        manifest: A manifest dict as built by ``build_site_manifest``.
+
+    Returns:
+        str. Hex SHA-256 digest.
+    """
+    payload = {key: manifest[key] for key in _HASHED_MANIFEST_KEYS}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_site_manifest(
+    *,
+    region_id: str,
+    product: str,
+    file: str,
+    crs: str,
+    crs_transform: Sequence[float],
+    dtype: str,
+    nodata: float,
+    bands: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Assemble the JSON band manifest for one per-site stack.
+
+    Args:
+        region_id: Region id the stack covers.
+        product: Product name.
+        file: Basename of the unsharded tif, e.g. ``"s01_s2.tif"``.
+        crs: CRS code of the stack.
+        crs_transform: EE-order affine ``[xScale, xShear, xTranslation, yShear, yScale, yTranslation]``.
+        dtype: Stored pixel type.
+        nodata: No-data value (of the stored values).
+        bands: Band entries from ``build_band_entries``.
+
+    Returns:
+        dict. The manifest, including ``manifest_version``, ``eetools_version``, ``params_hash`` and a UTC ``created`` timestamp.
+    """
+    from eetools import __version__
+
+    manifest: dict[str, Any] = {
+        "manifest_version": MANIFEST_VERSION,
+        "file": file,
+        "region_id": region_id,
+        "product": product,
+        "crs": crs,
+        "crs_transform": [_plain_number(v) for v in crs_transform],
+        "dtype": dtype,
+        "nodata": _plain_number(nodata),
+        "bands": bands,
+        "eetools_version": __version__,
+    }
+    manifest["params_hash"] = manifest_params_hash(manifest)
+    manifest["created"] = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    return manifest
+
+
+def _scale_stack(
+    image: ee.Image, entries: list[dict[str, Any]], dtype: str
+) -> ee.Image:
+    parts = []
+    for entry in entries:
+        band = image.select(entry["name"])
+        if entry["scale_factor"] != 1:
+            band = band.multiply(entry["scale_factor"])
+            if dtype == "int16":
+                band = band.round()  # the int16 cast would otherwise truncate
+        parts.append(band)
+    return ee.Image.cat(parts).rename([entry["name"] for entry in entries])
+
+
+def _region_info(
+    regions: ee.FeatureCollection, id_property: str, crs: str
+) -> list[tuple[Any, list[list[float]]]]:
+    proj = ee.Projection(crs)
+
+    def _info(feature: ee.Feature) -> ee.Feature:
+        feature = ee.Feature(feature)
+        ring = feature.geometry().bounds(1, proj).coordinates().get(0)
+        return ee.Feature(None, {"region_id": feature.get(id_property), "ring": ring})
+
+    # One request for every region's id and bounds, instead of one per region.
+    info = cast(dict, ee.FeatureCollection(regions).map(_info).getInfo())
+    props = [f["properties"] for f in info["features"]]
+    return [(p.get("region_id"), p["ring"]) for p in props]
+
+
+def _read_manifest(bucket: str, name: str) -> dict[str, Any] | None:
+    blob = _gcs_client(get_project()).bucket(bucket).blob(name)
+    if not blob.exists():
+        return None
+    return cast(dict, json.loads(blob.download_as_text()))
+
+
+def _export_objects(bucket: str, stem: str) -> list[Any]:
+    pattern = re.compile(re.escape(stem) + r"(\.tif|\.json|-\d{10}-\d{10}\.tif)$")
+    blobs = _gcs_client(get_project()).list_blobs(bucket, prefix=stem)
+    return [blob for blob in blobs if pattern.fullmatch(blob.name)]
+
+
+def write_export_manifest(bucket: str, record: ExportRecord) -> str:
+    """Write an export's JSON band manifest next to its tif.
+
+    ``export_composites_per_site`` calls this itself when it starts a task; call
+    it yourself after starting a task you created with ``start=False``.
+
+    Args:
+        bucket: Bucket the stack is exported to.
+        record: The record returned for that region.
+
+    Returns:
+        str. The manifest's ``gs://`` URI.
+
+    Raises:
+        ImportError: If google-cloud-storage is not installed (``eetools[gcs]``).
+    """
+    blob = _gcs_client(get_project()).bucket(bucket).blob(record.manifest_name)
+    blob.upload_from_string(
+        json.dumps(record.manifest, indent=2), content_type="application/json"
+    )
+    return f"gs://{bucket}/{record.manifest_name}"
+
+
+def _existing_state(
+    bucket: str, stem: str, params_hash: str, overwrite: bool
+) -> Literal["skipped", "pending"] | None:
+    tif_exists = any(
+        gcs_object_exists(bucket, name)
+        for name in (f"{stem}.tif", f"{stem}{GCS_FIRST_SHARD_SUFFIX}.tif")
+    )
+    old = _read_manifest(bucket, f"{stem}.json")
+    if old is None and not tif_exists:
+        return None
+    if old is not None and old.get("params_hash") == params_hash:
+        return "skipped" if tif_exists else "pending"
+    if not overwrite:
+        reason = "has no manifest" if old is None else "used different parameters"
+        raise ValueError(
+            f"gs://{bucket}/{stem}: the existing export {reason}. Pass "
+            "overwrite=True to replace it (its tif, shards and manifest are deleted)."
+        )
+    for blob in _export_objects(bucket, stem):
+        logger.info("Deleting stale gs://%s/%s", bucket, blob.name)
+        blob.delete()
+    return None
+
+
+def export_composites_per_site(
+    image: ee.Image,
+    regions: ee.FeatureCollection,
+    *,
+    id_property: str = "site_id",
+    product: str,
+    bucket: str,
+    prefix: str,
+    crs: str,
+    scale: float,
+    dtype: Literal["int16", "float32"] = "int16",
+    scale_factor: float = SITE_EXPORT_SCALE_FACTOR,
+    unscaled_bands: Sequence[str] = SITE_EXPORT_UNSCALED_BANDS,
+    nodata: float | None = None,
+    band_meta: Mapping[str, Mapping[str, Any]] | None = None,
+    skip_existing: bool = True,
+    overwrite: bool = False,
+    start: bool = True,
+) -> list[ExportRecord]:
+    """Export one multiband stack per region to Cloud Storage, each with a band manifest.
+
+    For each region (window polygon) the whole ``image`` is exported to
+    ``gs://<bucket>/<prefix>/<product>/<region_id>_<product>.tif`` on
+    ``snapped_transform(region, crs, scale)``, so all products of a project share
+    one grid. A JSON manifest ``<region_id>_<product>.json`` is written next to it.
+    Bands not in ``unscaled_bands`` are multiplied by ``scale_factor`` (and rounded
+    for int16) before the cast. eetools does not build windows or stack periods:
+    pass one image (``toBands()`` or explicit ``<metric>_<period>`` renames) and the
+    window polygons.
+
+    Manifest guarantees (consumers rely on them):
+
+    - band ``index`` is 1-based and follows ``image.bandNames()`` order;
+    - ``crs_transform`` is in EE order ``[xScale, xShear, xTranslation, yShear,
+      yScale, yTranslation]``, i.e. ``rasterio.Affine(*t)``, **not** the GDAL
+      geotransform order;
+    - decoding is ``physical = stored / scale_factor + offset``; ``offset`` is 0 in
+      v0.7; ``unscaled_bands`` have ``scale_factor`` 1; ``nodata`` applies to the
+      stored value;
+    - every ``band_meta[<band>]`` key is copied verbatim into that band's entry
+      (eetools interprets none of them); read bands by those fields, never by
+      parsing names (``clear_count`` contains an underscore);
+    - ``manifest_version`` (currently 1) is bumped on any breaking change;
+    - the manifest is written when the task starts, so it can exist before its tif
+      (treat that as pending); ``file`` is always the unsharded basename;
+    - ``params_hash`` covers the export parameters and band list
+      (``manifest_params_hash``), not the file content (that is the GCS MD5).
+
+    Skip logic (``skip_existing=True``): tif (or first shard) + manifest with the same
+    ``params_hash`` -> skipped; matching manifest without a tif -> pending (not
+    resubmitted); anything else that exists -> ValueError, unless ``overwrite=True``,
+    which deletes that region's tif, shards and manifest and exports again.
+    ``skip_existing=False`` exports without any check or deletion.
+
+    Makes two small ``getInfo`` calls (band names; all region ids and bounds).
+
+    Args:
+        image: Multiband image to export (one stack, all periods/indices).
+        regions: Window polygons, one export each; ``id_property`` must be unique.
+        id_property: Region property used as ``region_id`` in names and the manifest; values must match ``[A-Za-z0-9_]+``.
+        product: Product name, ``[A-Za-z0-9_]+``.
+        bucket: Destination bucket (no ``gs://``); always caller-supplied.
+        prefix: Object prefix above ``<product>/`` (sanitised like ``sanitize_file_name_prefix``).
+        crs: Output CRS, e.g. the project UTM zone.
+        scale: Pixel size in ``crs`` units.
+        dtype: ``"int16"`` (default) or ``"float32"``.
+        scale_factor: Stored = physical x scale_factor for scaled bands (default 10000).
+        unscaled_bands: Bands stored as-is, as exact names or fnmatch patterns. The default (``SITE_EXPORT_UNSCALED_BANDS``) matches ``clear_count``, ``clear_count_*`` and ``*_clear_count``; non-matching entries are ignored.
+        nodata: Stored no-data value; defaults to -32768 (int16) / -9999 (float32).
+        band_meta: Optional ``{band: {key: value}}`` copied into each band entry (e.g. ``metric``, ``period_type``, ``period``, ``unit``, ``source``).
+        skip_existing: Apply the skip logic above (default True).
+        overwrite: Replace an existing export whose parameters differ.
+        start: Start the tasks and write the manifests (default True). With False, nothing is written; start each task and then call ``write_export_manifest``.
+
+    Returns:
+        list[ExportRecord]. One record per region, in collection order.
+
+    Raises:
+        ValueError: For an invalid ``product``/``region_id`` name, duplicate region ids, unknown ``dtype``, non-positive ``scale``/``scale_factor``, bad ``band_meta``, or an existing export with other parameters (without ``overwrite``).
+        ImportError: If google-cloud-storage is missing and ``skip_existing`` or ``start`` needs it.
+    """
+    _validate_site_name(product, "product")
+    if dtype not in SITE_EXPORT_DTYPES:
+        raise ValueError(f"dtype must be one of {SITE_EXPORT_DTYPES}, got {dtype!r}.")
+    if scale <= 0 or scale_factor <= 0:
+        raise ValueError("scale and scale_factor must be > 0.")
+    if (skip_existing or start) and storage is None:
+        raise ImportError(_GCS_IMPORT_ERROR)
+    fill = _resolve_nodata(dtype, nodata)
+    base = sanitize_file_name_prefix(f"{prefix}/{product}")
+
+    image = ee.Image(image)
+    bands = cast(list, image.bandNames().getInfo())
+    entries = build_band_entries(
+        bands,
+        scale_factor=scale_factor,
+        unscaled_bands=unscaled_bands,
+        band_meta=band_meta,
+    )
+    stack = _scale_stack(image, entries, dtype)
+
+    infos = _region_info(regions, id_property, crs)
+    region_ids = [_validate_site_name(raw, id_property) for raw, _ in infos]
+    duplicates = sorted({rid for rid in region_ids if region_ids.count(rid) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate {id_property} values: {duplicates}.")
+
+    records: list[ExportRecord] = []
+    for (raw_id, ring), region_id in zip(infos, region_ids):
+        transform = _transform_from_ring(ring, scale)
+        basename = f"{region_id}_{product}"
+        stem = f"{base}/{basename}"
+        manifest = build_site_manifest(
+            region_id=region_id,
+            product=product,
+            file=f"{basename}.tif",
+            crs=crs,
+            crs_transform=transform,
+            dtype=dtype,
+            nodata=fill,
+            bands=entries,
+        )
+        size = len(bands) * _ring_pixel_count(ring, transform)
+        size *= SITE_EXPORT_DTYPE_BYTES[dtype]
+        if size > SITE_EXPORT_WARN_BYTES:
+            warnings.warn(
+                f"{basename}: ~{size / 1e9:.1f} GB uncompressed "
+                f"({len(bands)} bands); consider splitting the product.",
+                stacklevel=2,
+            )
+
+        state = (
+            _existing_state(bucket, stem, manifest["params_hash"], overwrite)
+            if skip_existing
+            else None
+        )
+        if state is not None:
+            logger.info("%s: %s", stem, state)
+            records.append(
+                ExportRecord(
+                    region_id, f"{stem}.tif", f"{stem}.json", manifest, None, state
+                )
+            )
+            continue
+
+        region = (
+            ee.FeatureCollection(regions)
+            .filter(ee.Filter.eq(id_property, raw_id))
+            .geometry()
+        )
+        task = export_image_to_gcs(
+            stack,
+            region,
+            bucket=bucket,
+            file_name_prefix=stem,
+            crs=crs,
+            crs_transform=transform,
+            dtype=dtype,
+            nodata=fill,
+            skip_existing=False,
+            start=start,
+        )
+        record = ExportRecord(
+            region_id,
+            f"{stem}.tif",
+            f"{stem}.json",
+            manifest,
+            task,
+            "started" if start else "unstarted",
+        )
+        if start:
+            write_export_manifest(bucket, record)
+        records.append(record)
+    return records

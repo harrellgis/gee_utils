@@ -28,6 +28,22 @@ Toward 0.7.0 (vault: 2026-11-12 eetools v0.7 TGBS build spec).
   `clear_count` band (`CLEAR_COUNT_BAND`): the number of unmasked observations of the
   first requested band per pixel. Default output is unchanged, and periods with no
   images are still dropped.
+- `export_composites_per_site` (E4): one multiband stack per region (window polygon)
+  to `gs://<bucket>/<prefix>/<product>/<region_id>_<product>.tif` on
+  `snapped_transform`, plus a JSON band manifest (`manifest_version` 1) next to it.
+  Bands are scaled by `scale_factor` (default 10000, rounded for int16) except
+  `unscaled_bands`, which are exact names or fnmatch patterns. The default
+  (`SITE_EXPORT_UNSCALED_BANDS`) matches `clear_count`, `clear_count_*` and
+  `*_clear_count`, so `<metric>_<period>` and `toBands()` names stay unscaled.
+  - Every `band_meta[<band>]` key is copied verbatim into the band entry.
+  - `region_id` and `product` must match `[A-Za-z0-9_]+`; anything else raises.
+  - `params_hash` (`manifest_params_hash`) covers the export parameters and band list.
+  - Skip logic: tif + matching manifest is skipped; a matching manifest without its
+    tif is pending; anything else raises unless `overwrite=True`, which deletes the
+    stale tif, shards and manifest first.
+  - Warns above ~1 GB per file.
+  - Returns `ExportRecord`s. Helpers: `build_band_entries`, `build_site_manifest`,
+    `write_export_manifest` (for `start=False`).
 - Optional `[gcs]` extra (`google-cloud-storage`). It stays a core dependency for now;
   without it, `skip_existing=True` and the uploads raise an ImportError that names the
   extra.
