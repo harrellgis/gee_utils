@@ -353,6 +353,27 @@ polls a task by ID. `upload_geotiff_to_asset` and `upload_shapefile_to_asset`
 ingest local files as Earth Engine assets. They stage the files in a Cloud Storage
 bucket you name, using the credentials Earth Engine already holds.
 
+`export_image_to_gcs` and `export_table_to_gcs` export to a Cloud Storage bucket you
+pass in. Images are written as cloud-optimised GeoTIFFs with a per-dtype no-data value
+(-32768 int16, 0 uint8, 65535 uint16, -9999 float32), on a `scale` or, preferably, a
+fixed `crs_transform` from `snapped_transform(region, crs, scale)` so every export of
+a project shares one pixel grid. Task descriptions and object names are sanitised and
+deterministic. With `skip_existing=True` (the default) an export whose file, or first
+shard (`<prefix>-0000000000-0000000000.tif`), already exists is skipped and `None` is
+returned. The check uses `google-cloud-storage` (`eetools[gcs]`). Earth Engine writes
+with the account that authenticated it, which needs `storage.objects.create` on the
+bucket.
+
+```python
+from eetools.io import export_image_to_gcs, snapped_transform
+
+transform = snapped_transform(window, "EPSG:32737", 10)
+task = export_image_to_gcs(
+    stack, window, bucket="my-bucket", file_name_prefix="proj/s2/site01_s2",
+    crs="EPSG:32737", crs_transform=transform, dtype="int16",
+)
+```
+
 ### Texture
 
 `eetools.sensors.texture` computes GLCM (Haralick) and first-order texture on any band,
@@ -392,7 +413,7 @@ src/eetools/
 ├── _config.py        # global project-id state
 ├── constants.py      # collection IDs, band maps, scale factors, mask thresholds, seasons
 ├── compositing.py    # single, period (annual/monthly), and seasonal composites
-├── io.py             # exports to Drive / EE assets, task status, GeoTIFF/shapefile uploads
+├── io.py             # exports to Drive / GCS / EE assets, task status, GeoTIFF/shapefile uploads
 ├── utils.py          # date validation/windows, clipping, joins, reducers, resampling
 ├── vectors.py        # local vector files -> ee.Geometry / site FeatureCollections
 ├── zonal.py          # region reductions, sampling, class areas, histograms

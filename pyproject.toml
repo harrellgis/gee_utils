@@ -28,6 +28,12 @@ Repository = "https://github.com/harrellgis/gee_utils"
 notebook = [
     "geemap>=0.37.2",
 ]
+# GCS skip-if-exists checks and per-site manifests. google-cloud-storage is still a
+# core dependency (the asset-upload helpers need it); declare `eetools[gcs]` in
+# downstream projects that rely on the GCS exports so it survives a future demotion.
+gcs = [
+    "google-cloud-storage>=2.0.0",
+]
 
 [dependency-groups]
 dev = [
