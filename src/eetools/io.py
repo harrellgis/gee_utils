@@ -23,6 +23,8 @@ from eetools.constants import (
     GCS_FIRST_SHARD_SUFFIX,
     GCS_PREFIX_ALLOWED_CHARS,
     GCS_TABLE_FORMATS,
+    GRID_REGION_INSET_PX,
+    GRID_SNAP_TOLERANCE_PX,
     MANIFEST_RESERVED_BAND_KEYS,
     MANIFEST_VERSION,
     SITE_EXPORT_DTYPE_BYTES,
@@ -621,18 +623,43 @@ def snapped_transform(
 
 
 def _transform_from_ring(ring: list[list[float]], scale: float) -> list[float]:
+    # Snap outward, but treat edges within GRID_SNAP_TOLERANCE_PX of a grid line as
+    # on it (floating-point noise from a round trip through EPSG:4326).
+    tol = GRID_SNAP_TOLERANCE_PX
     xs = [pt[0] for pt in ring]
     ys = [pt[1] for pt in ring]
-    x0 = round(math.floor(min(xs) / scale) * scale, 10)
-    y0 = round(math.ceil(max(ys) / scale) * scale, 10)
+    x0 = round(math.floor(min(xs) / scale + tol) * scale, 10)
+    y0 = round(math.ceil(max(ys) / scale - tol) * scale, 10)
     return [float(scale), 0.0, float(x0), 0.0, -float(scale), float(y0)]
 
 
-def _ring_pixel_count(ring: list[list[float]], transform: list[float]) -> int:
-    scale = transform[0]
-    width = math.ceil((max(pt[0] for pt in ring) - transform[2]) / scale)
-    height = math.ceil((transform[5] - min(pt[1] for pt in ring)) / scale)
-    return max(width, 0) * max(height, 0)
+def _grid_shape(ring: list[list[float]], transform: list[float]) -> tuple[int, int]:
+    """(width, height) in pixels of the snapped grid covering ``ring``."""
+    scale, x0, y0 = transform[0], transform[2], transform[5]
+    tol = GRID_SNAP_TOLERANCE_PX
+    width = math.ceil((max(pt[0] for pt in ring) - x0) / scale - tol)
+    height = math.ceil((y0 - min(pt[1] for pt in ring)) / scale - tol)
+    return max(width, 1), max(height, 1)
+
+
+def _grid_region(
+    transform: list[float], shape: tuple[int, int], crs: str
+) -> ee.Geometry:
+    """Planar rectangle in ``crs`` covering exactly the snapped grid's pixels.
+
+    Inset by a fraction of a pixel, so the export covers exactly ``shape`` pixels
+    starting at the transform origin, whatever EE does with edge slivers.
+    """
+    scale, x0, y0 = transform[0], transform[2], transform[5]
+    width, height = shape
+    inset = GRID_REGION_INSET_PX * scale
+    coords = [
+        x0 + inset,
+        y0 - height * scale + inset,
+        x0 + width * scale - inset,
+        y0 - inset,
+    ]
+    return ee.Geometry.Rectangle(coords, crs, False)
 
 
 def gcs_object_exists(bucket: str, name: str, project_id: str | None = None) -> bool:
@@ -1156,7 +1183,10 @@ def export_composites_per_site(
     For each region (window polygon) the whole ``image`` is exported to
     ``gs://<bucket>/<prefix>/<product>/<region_id>_<product>.tif`` on
     ``snapped_transform(region, crs, scale)``, so all products of a project share
-    one grid. A JSON manifest ``<region_id>_<product>.json`` is written next to it.
+    one grid. The export covers the whole pixels of that grid that the region's
+    bounds touch (a grid-aligned window gives exactly its own pixels; edges within
+    1e-6 px of a grid line count as on it), and the tif's transform equals the
+    manifest's. A JSON manifest ``<region_id>_<product>.json`` is written next to it.
     Bands not in ``unscaled_bands`` are multiplied by ``scale_factor`` (and rounded
     for int16) before the cast. eetools does not build windows or stack periods:
     pass one image (``toBands()`` or explicit ``<metric>_<period>`` renames) and the
@@ -1240,7 +1270,7 @@ def export_composites_per_site(
         raise ValueError(f"Duplicate {id_property} values: {duplicates}.")
 
     records: list[ExportRecord] = []
-    for (raw_id, ring), region_id in zip(infos, region_ids):
+    for (_, ring), region_id in zip(infos, region_ids):
         transform = _transform_from_ring(ring, scale)
         basename = f"{region_id}_{product}"
         stem = f"{base}/{basename}"
@@ -1254,8 +1284,8 @@ def export_composites_per_site(
             nodata=fill,
             bands=entries,
         )
-        size = len(bands) * _ring_pixel_count(ring, transform)
-        size *= SITE_EXPORT_DTYPE_BYTES[dtype]
+        shape = _grid_shape(ring, transform)
+        size = len(bands) * shape[0] * shape[1] * SITE_EXPORT_DTYPE_BYTES[dtype]
         if size > SITE_EXPORT_WARN_BYTES:
             warnings.warn(
                 f"{basename}: ~{size / 1e9:.1f} GB uncompressed "
@@ -1277,14 +1307,11 @@ def export_composites_per_site(
             )
             continue
 
-        region = (
-            ee.FeatureCollection(regions)
-            .filter(ee.Filter.eq(id_property, raw_id))
-            .geometry()
-        )
+        # Export over the snapped pixel rectangle, not the polygon, so the tif's
+        # origin and size are exactly those of the manifest's grid.
         task = export_image_to_gcs(
             stack,
-            region,
+            _grid_region(transform, shape, crs),
             bucket=bucket,
             file_name_prefix=stem,
             crs=crs,
