@@ -178,6 +178,16 @@ Static layers (`get_terrain`, `get_canopy_height`, `get_soil_carbon`,
 `get_land_cover`, `get_bii`, …) take an optional AOI and return a single
 `ee.Image`.
 
+`woody_fraction_from_chm(chm=None, heights_m=(2, 3, 5), crs=..., crs_transform=...)`
+(`eetools.sensors.canopy_height.preprocessing`) turns a fine canopy height model into
+the fraction of each output pixel covered by canopy at or above each height. The
+default CHM is the Meta 1 m one, and the output is 10 m by default. Bands:
+`woody_frac_h2`, `woody_frac_h3`, `woody_frac_h5` (`h2p5` for 2.5 m), and
+`chm_valid_frac`, the share of each pixel with valid CHM data. Values are float32 in
+[0, 1]. It uses `reduceResolution` with `maxPixels=256`, because EE's default of 64 is
+too small for 1 m to 10 m. Pass the same `crs_transform` you export with. The Meta CHM
+is a fused 2009-2020 baseline, so never difference it against another epoch.
+
 ### Sites, zonal statistics, and workflows
 
 Site boundaries are usually local files. `eetools.vectors` turns any format
