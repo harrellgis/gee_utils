@@ -4,7 +4,7 @@ import ee
 
 from eetools._config import configure, get_project
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 __all__ = ["configure", "initialize", "get_project", "__version__"]
 
 
