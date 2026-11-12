@@ -735,6 +735,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+gcs = [
+    { name = "google-cloud-storage" },
+]
 notebook = [
     { name = "geemap", version = "0.37.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "geemap", version = "0.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -756,6 +759,7 @@ requires-dist = [
     { name = "geemap", marker = "extra == 'notebook'", specifier = ">=0.37.2" },
     { name = "geopandas", specifier = ">=0.14.0" },
     { name = "google-cloud-storage", specifier = ">=2.0.0" },
+    { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.0.0" },
     { name = "matplotlib", specifier = ">=3.8.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pandas", specifier = ">=2.0.0" },
@@ -764,7 +768,7 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.0" },
     { name = "shapely", specifier = ">=2.0.0" },
 ]
-provides-extras = ["notebook"]
+provides-extras = ["gcs", "notebook"]
 
 [package.metadata.requires-dev]
 dev = [

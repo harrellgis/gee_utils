@@ -793,6 +793,35 @@ DEFAULT_MAX_PIXELS = 1e13
 DEFAULT_FILE_FORMAT = "GeoTIFF"
 DEFAULT_CRS = "EPSG:4326"
 
+#################### CLOUD STORAGE EXPORTS (eetools.io) ##########################
+# Per-dtype no-data value for GCS image exports. -9999 is a valid value in an int16
+# stack scaled by 10,000 (-0.9999), so int16 uses the type minimum instead. uint8 (RGB
+# quick-looks) uses 0; uint16 (counts, where 0 is valid) uses the type maximum.
+GCS_EXPORT_DTYPES: tuple[str, ...] = ("int16", "uint8", "uint16", "float32")
+GCS_EXPORT_NODATA: dict[str, float] = {
+    "int16": -32768,
+    "uint8": 0,
+    "uint16": 65535,
+    "float32": -9999,
+}
+# GCS exports default to a lower pixel cap than Drive (DEFAULT_MAX_PIXELS): a per-site
+# window that trips 1e10 is almost certainly a wrong scale or region.
+GCS_EXPORT_MAX_PIXELS = 1e10
+GCS_TABLE_FORMATS: dict[str, str] = {
+    "CSV": "csv",
+    "GeoJSON": "geojson",
+    "SHP": "shp",
+    "KML": "kml",
+}
+# EE splits large image exports into tiles named <prefix>-<row>-<col>.tif, with 10-digit
+# zero-padded pixel offsets; the first shard is always this suffix.
+GCS_FIRST_SHARD_SUFFIX = "-0000000000-0000000000"
+# EE batch task descriptions: at most 100 characters from this set.
+EE_DESCRIPTION_MAX_LENGTH = 100
+EE_DESCRIPTION_ALLOWED_CHARS = r"A-Za-z0-9.,:;_\-"
+# Cloud Storage object-name characters kept by the prefix sanitiser ("/" = folders).
+GCS_PREFIX_ALLOWED_CHARS = r"A-Za-z0-9._\-/"
+
 # Representative wet/dry season month ranges for tropical East-African sites.
 # Format: (start_month, end_month) inclusive; pass directly to build_seasonal_composites.
 # Override per AOI and region — these are illustrative defaults, not universal.

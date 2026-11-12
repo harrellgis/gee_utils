@@ -416,3 +416,302 @@ def test_upload_shapefile_to_asset_uploads_shp_and_sidecars(
     assert manifest["sources"] == [{"uris": ["gs://my-bucket/folder/vector.shp"]}]
     assert kwargs["allow_overwrite"] is False
     assert result == {"id": "TASK2"}
+
+
+# --------------------------------------------------------------------------- #
+# Cloud Storage exports                                                        #
+# --------------------------------------------------------------------------- #
+def _gcs_kwargs(mock_ee):
+    _, kwargs = mock_ee.batch.Export.image.toCloudStorage.call_args
+    return kwargs
+
+
+def test_export_image_to_gcs_builds_task_config_with_transform(mock_ee):
+    image = mock_ee.Image.return_value
+    transform = [10, 0, 500000, 0, -10, 9600000]
+
+    task = io.export_image_to_gcs(
+        "img",
+        "REGION",
+        bucket="my-bucket",
+        file_name_prefix="proj/ndvi/s01_ndvi",
+        crs="EPSG:32737",
+        crs_transform=transform,
+        dtype="int16",
+        skip_existing=False,
+    )
+
+    image.unmask.assert_called_once_with(-32768, sameFootprint=False)
+    image.unmask.return_value.toInt16.assert_called_once()
+    kwargs = _gcs_kwargs(mock_ee)
+    assert kwargs["image"] is image.unmask.return_value.toInt16.return_value
+    assert kwargs["bucket"] == "my-bucket"
+    assert kwargs["fileNamePrefix"] == "proj/ndvi/s01_ndvi"
+    assert kwargs["description"] == "proj_ndvi_s01_ndvi"
+    assert kwargs["region"] == "REGION"
+    assert kwargs["crs"] == "EPSG:32737"
+    assert kwargs["crsTransform"] == [10.0, 0.0, 500000.0, 0.0, -10.0, 9600000.0]
+    assert "scale" not in kwargs
+    assert kwargs["fileFormat"] == "GeoTIFF"
+    assert kwargs["formatOptions"] == {"cloudOptimized": True, "noData": -32768}
+    assert kwargs["maxPixels"] == 1e10
+    task.start.assert_called_once()
+    assert task is mock_ee.batch.Export.image.toCloudStorage.return_value
+
+
+def test_export_image_to_gcs_scale_and_float_default_nodata(mock_ee):
+    image = mock_ee.Image.return_value
+    io.export_image_to_gcs(
+        "img",
+        "REGION",
+        bucket="b",
+        file_name_prefix="p",
+        scale=30,
+        cloud_optimized=False,
+        skip_existing=False,
+    )
+    image.unmask.assert_called_once_with(-9999, sameFootprint=False)
+    image.unmask.return_value.toFloat.assert_called_once()
+    kwargs = _gcs_kwargs(mock_ee)
+    assert kwargs["scale"] == 30
+    assert "crsTransform" not in kwargs
+    assert kwargs["crs"] == "EPSG:4326"
+    assert kwargs["formatOptions"] == {"cloudOptimized": False, "noData": -9999}
+
+
+@pytest.mark.parametrize(
+    "dtype, cast_method, nodata",
+    [("uint8", "toUint8", 0), ("uint16", "toUint16", 65535)],
+)
+def test_export_image_to_gcs_dtype_defaults(mock_ee, dtype, cast_method, nodata):
+    image = mock_ee.Image.return_value
+    io.export_image_to_gcs(
+        "img",
+        "R",
+        bucket="b",
+        file_name_prefix="p",
+        scale=10,
+        dtype=dtype,
+        skip_existing=False,
+    )
+    image.unmask.assert_called_once_with(nodata, sameFootprint=False)
+    getattr(image.unmask.return_value, cast_method).assert_called_once()
+    assert _gcs_kwargs(mock_ee)["formatOptions"]["noData"] == nodata
+
+
+def test_export_image_to_gcs_explicit_nodata_overrides_default(mock_ee):
+    io.export_image_to_gcs(
+        "img",
+        "R",
+        bucket="b",
+        file_name_prefix="p",
+        scale=10,
+        dtype="int16",
+        nodata=-1,
+        skip_existing=False,
+    )
+    assert _gcs_kwargs(mock_ee)["formatOptions"]["noData"] == -1
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [{}, {"scale": 10, "crs_transform": [10, 0, 0, 0, -10, 0]}],
+    ids=["neither", "both"],
+)
+def test_export_image_to_gcs_scale_and_transform_mutually_exclusive(mock_ee, grid):
+    with pytest.raises(ValueError, match="exactly one"):
+        io.export_image_to_gcs(
+            "img", "R", bucket="b", file_name_prefix="p", skip_existing=False, **grid
+        )
+    mock_ee.batch.Export.image.toCloudStorage.assert_not_called()
+
+
+def test_export_image_to_gcs_rejects_bad_transform_and_dtype(mock_ee):
+    with pytest.raises(ValueError, match="6 elements"):
+        io.export_image_to_gcs(
+            "img",
+            "R",
+            bucket="b",
+            file_name_prefix="p",
+            crs_transform=[10, 0, 0],
+            skip_existing=False,
+        )
+    with pytest.raises(ValueError, match="dtype"):
+        io.export_image_to_gcs(
+            "img",
+            "R",
+            bucket="b",
+            file_name_prefix="p",
+            scale=10,
+            dtype="int8",
+            skip_existing=False,
+        )
+
+
+def test_export_image_to_gcs_start_false_returns_unstarted_task(mock_ee):
+    task = io.export_image_to_gcs(
+        "img",
+        "R",
+        bucket="b",
+        file_name_prefix="p",
+        scale=10,
+        skip_existing=False,
+        start=False,
+    )
+    task.start.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "existing",
+    ["proj/p.tif", "proj/p-0000000000-0000000000.tif"],
+    ids=["single-file", "first-shard"],
+)
+def test_export_image_to_gcs_skips_when_object_exists(mock_ee, existing):
+    with patch.object(
+        io, "gcs_object_exists", side_effect=lambda b, n: n == existing
+    ) as exists:
+        result = io.export_image_to_gcs(
+            "img", "R", bucket="b", file_name_prefix="proj/p", scale=10
+        )
+    assert result is None
+    assert exists.call_args_list[0].args == ("b", "proj/p.tif")
+    mock_ee.batch.Export.image.toCloudStorage.assert_not_called()
+
+
+def test_export_image_to_gcs_exports_when_nothing_exists(mock_ee):
+    with patch.object(io, "gcs_object_exists", return_value=False) as exists:
+        task = io.export_image_to_gcs(
+            "img", "R", bucket="b", file_name_prefix="proj/p", scale=10
+        )
+    assert exists.call_count == 2
+    task.start.assert_called_once()
+
+
+def test_skip_existing_without_storage_raises_clear_import_error(mock_ee):
+    with patch.object(io, "storage", None):
+        with pytest.raises(ImportError, match=r"eetools\[gcs\]"):
+            io.export_image_to_gcs(
+                "img", "R", bucket="b", file_name_prefix="p", scale=10
+            )
+    mock_ee.batch.Export.image.toCloudStorage.assert_not_called()
+
+
+def test_skip_existing_false_needs_no_storage(mock_ee):
+    with patch.object(io, "storage", None):
+        task = io.export_image_to_gcs(
+            "img", "R", bucket="b", file_name_prefix="p", scale=10, skip_existing=False
+        )
+    task.start.assert_called_once()
+
+
+def test_gcs_object_exists_uses_ee_credentials(mock_ee, mock_storage):
+    blob = mock_storage.Client.return_value.bucket.return_value.blob
+    blob.return_value.exists.return_value = True
+
+    assert io.gcs_object_exists("bkt", "a/b.tif", project_id="proj") is True
+    mock_storage.Client.assert_called_once_with(
+        project="proj",
+        credentials=mock_ee.data.get_persistent_credentials.return_value,
+    )
+    mock_storage.Client.return_value.bucket.assert_called_once_with("bkt")
+    blob.assert_called_once_with("a/b.tif")
+
+
+def test_export_table_to_gcs_builds_task(mock_ee):
+    task = io.export_table_to_gcs(
+        "FC",
+        bucket="b",
+        file_name_prefix="proj/rain/daily v2",
+        file_format="CSV",
+        selectors=["date", "region_id", "ppt_mm"],
+        skip_existing=False,
+    )
+    _, kwargs = mock_ee.batch.Export.table.toCloudStorage.call_args
+    assert kwargs["collection"] == "FC"
+    assert kwargs["bucket"] == "b"
+    assert kwargs["fileNamePrefix"] == "proj/rain/daily_v2"
+    assert kwargs["fileFormat"] == "CSV"
+    assert kwargs["selectors"] == ["date", "region_id", "ppt_mm"]
+    task.start.assert_called_once()
+
+
+def test_export_table_to_gcs_skip_and_bad_format(mock_ee):
+    with patch.object(io, "gcs_object_exists", return_value=True) as exists:
+        result = io.export_table_to_gcs(
+            "FC", bucket="b", file_name_prefix="t", file_format="GeoJSON"
+        )
+    assert result is None
+    exists.assert_called_once_with("b", "t.geojson")
+    with pytest.raises(ValueError, match="file_format"):
+        io.export_table_to_gcs(
+            "FC", bucket="b", file_name_prefix="t", file_format="XLSX"
+        )
+    mock_ee.batch.Export.table.toCloudStorage.assert_not_called()
+
+
+def test_sanitize_file_name_prefix():
+    assert io.sanitize_file_name_prefix("/a//b c/d(1)/") == "a/b_c/d_1_"
+    with pytest.raises(ValueError, match="empty"):
+        io.sanitize_file_name_prefix("///")
+
+
+def test_sanitize_task_description_deterministic_and_bounded():
+    assert io.sanitize_task_description("proj/ndvi/s 01") == "proj_ndvi_s_01"
+    long_a = "x" * 120 + "_site_a"
+    long_b = "x" * 120 + "_site_b"
+    out_a = io.sanitize_task_description(long_a)
+    assert len(out_a) == 100
+    assert out_a == io.sanitize_task_description(long_a)
+    assert out_a != io.sanitize_task_description(long_b)
+
+
+def test_snapped_transform_rounds_origin_outward(mock_ee):
+    ring = [
+        [500012.3, 9600001.0],
+        [500987.0, 9600001.0],
+        [500987.0, 9601995.2],
+        [500012.3, 9601995.2],
+        [500012.3, 9600001.0],
+    ]
+    coords = mock_ee.Geometry.return_value.bounds.return_value.coordinates
+    coords.return_value.getInfo.return_value = [ring]
+
+    transform = io.snapped_transform("REGION", "EPSG:32737", 10)
+
+    assert transform == [10.0, 0.0, 500010.0, 0.0, -10.0, 9602000.0]
+    mock_ee.Projection.assert_called_once_with("EPSG:32737")
+    mock_ee.Geometry.return_value.bounds.assert_called_once_with(
+        1, mock_ee.Projection.return_value
+    )
+
+
+def test_snapped_transform_rejects_non_positive_scale(mock_ee):
+    with pytest.raises(ValueError, match="scale"):
+        io.snapped_transform("REGION", "EPSG:32737", 0)
+
+
+def test_fetch_stack_dispatches_to_gcs_batch(mock_ee):
+    with patch.object(io, "export_image_to_gcs", return_value="TASK") as export:
+        result = io.fetch_stack("R", "IMG", bucket="b", file_name_prefix="p", scale=10)
+    assert result == "TASK"
+    export.assert_called_once_with(
+        "IMG", "R", bucket="b", file_name_prefix="p", scale=10
+    )
+    with pytest.raises(ValueError, match="backend"):
+        io.fetch_stack("R", "IMG", backend="compute_pixels")
+
+
+@pytest.mark.ee
+def test_snapped_transform_live_grid_origin(ee_session):
+    import ee as real_ee
+
+    region = real_ee.Geometry.Rectangle([39.20, -4.30, 39.22, -4.28])
+    transform = io.snapped_transform(region, "EPSG:32737", 10)
+
+    scale, _, x0, _, neg_scale, y0 = transform
+    assert (scale, neg_scale) == (10.0, -10.0)
+    assert x0 % 10 == 0 and y0 % 10 == 0
+    # Origin is outside (top-left of) the region's bounds in UTM 37S.
+    ring = region.bounds(1, real_ee.Projection("EPSG:32737")).coordinates().getInfo()[0]
+    assert x0 <= min(p[0] for p in ring) < x0 + 10
+    assert y0 - 10 < max(p[1] for p in ring) <= y0

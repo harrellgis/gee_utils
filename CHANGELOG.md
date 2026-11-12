@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Toward 0.7.0 (vault: 2026-11-12 eetools v0.7 TGBS build spec).
+
+### Added
+- Cloud Storage exports (E5) in `eetools.io`: `export_image_to_gcs` (cloud-optimised
+  GeoTIFF; exactly one of `scale` / `crs_transform`; `dtype` cast with per-dtype
+  no-data `GCS_EXPORT_NODATA`: -32768 int16, 0 uint8, 65535 uint16, -9999 float32;
+  `maxPixels` default 1e10) and `export_table_to_gcs` (CSV / GeoJSON / SHP / KML,
+  `selectors`). Both return the task, or `None` when skipped, and take `start=`.
+- `skip_existing=True` skips an export whose object (or first shard,
+  `<prefix>-0000000000-0000000000.tif`) already exists, via `gcs_object_exists`.
+- `snapped_transform(region, crs, scale)`: a `[scale, 0, x0, 0, -scale, y0]` transform
+  with the origin snapped to multiples of `scale`, so all exports share one grid.
+- `sanitize_file_name_prefix` / `sanitize_task_description`: deterministic names
+  (descriptions <= 100 chars; over-long ones are cut and given a short hash suffix).
+- `fetch_stack(region, image, backend="gcs_batch", **kw)`: back-end dispatcher (a
+  `computePixels` back-end is deferred).
+- Optional `[gcs]` extra (`google-cloud-storage`). It stays a core dependency for now;
+  without it, `skip_existing=True` and the uploads raise an ImportError that names the
+  extra.
+
 ## [0.6.2] - 2026-11-12
 
 Top-candidates follow-ups (vault: 2026-11-11 top-10 ranking review, section 7 decisions
