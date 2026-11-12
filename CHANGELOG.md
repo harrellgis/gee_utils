@@ -58,6 +58,12 @@ defaults.
     tif is pending; anything else raises unless `overwrite=True`, which deletes the
     stale tif, shards and manifest first.
   - Warns above ~1 GB per file.
+  - The export region is the snapped pixel rectangle (inset by 1/4 px), not the
+    polygon, so the tif's origin and size always equal the manifest's grid. Grid
+    edges within 1e-6 px of a grid line count as on it
+    (`GRID_SNAP_TOLERANCE_PX`). A grid-aligned window stored in EPSG:4326 came back
+    as 523229.9999999997 and would otherwise have snapped one pixel west, with a
+    sliver column.
   - Returns `ExportRecord`s. Helpers: `build_band_entries`, `build_site_manifest`,
     `write_export_manifest` (for `start=False`).
 - Optional `[gcs]` extra (`google-cloud-storage`). It stays a core dependency for now;

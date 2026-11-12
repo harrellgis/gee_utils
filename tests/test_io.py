@@ -1095,3 +1095,51 @@ def test_scale_stack_live_values_and_types(ee_session, first_value):
     assert first_value(stack, "NDVI") == 2500
     assert first_value(stack, "clear_count") == 3
     assert first_value(stack, "NDMI") == -1235  # rounded, not truncated
+
+
+# Grid-aligned 2 km window as it comes back from EE after a round trip through
+# EPSG:4326 (measured 2026-11-12): edges ~3e-10 m off the grid lines.
+ALIGNED_RING = [
+    [523229.9999999997, 9524000.0],
+    [525230.0000000003, 9524000.0],
+    [525230.0000000003, 9526000.0000000002],
+    [523229.9999999997, 9526000.0000000002],
+    [523229.9999999997, 9524000.0],
+]
+
+
+def test_transform_from_ring_tolerates_float_noise_on_grid_lines():
+    transform = io._transform_from_ring(ALIGNED_RING, 10)
+    assert transform == [10.0, 0.0, 523230.0, 0.0, -10.0, 9526000.0]
+    assert io._grid_shape(ALIGNED_RING, transform) == (200, 200)
+
+
+def test_transform_from_ring_still_snaps_real_offsets_outward():
+    # 1 mm (1e-4 px) west of the grid line is a real offset, not noise.
+    ring = [[523229.999, 9525995.0], [523250.0, 9525990.001]]
+    transform = io._transform_from_ring(ring, 10)
+    assert transform[2] == 523220.0
+    assert transform[5] == 9526000.0
+    assert io._grid_shape(ring, transform) == (3, 1)
+
+
+def test_grid_region_is_inset_planar_rectangle(mock_ee):
+    transform = [10.0, 0.0, 523230.0, 0.0, -10.0, 9526000.0]
+    region = io._grid_region(transform, (200, 100), "EPSG:32737")
+    mock_ee.Geometry.Rectangle.assert_called_once_with(
+        [523232.5, 9525002.5, 525227.5, 9525997.5], "EPSG:32737", False
+    )
+    assert region is mock_ee.Geometry.Rectangle.return_value
+
+
+def test_export_composites_per_site_exports_over_grid_region(site_export):
+    site_export["region_info"].return_value = [("s01", ALIGNED_RING)]
+    _run_site_export()
+    rectangle = site_export["ee"].Geometry.Rectangle
+    rectangle.assert_called_once_with(
+        [523232.5, 9524002.5, 525227.5, 9525997.5], "EPSG:32737", False
+    )
+    args, kwargs = site_export["export"].call_args
+    assert args[1] is rectangle.return_value
+    assert kwargs["crs_transform"] == [10.0, 0.0, 523230.0, 0.0, -10.0, 9526000.0]
+    site_export["ee"].FeatureCollection.return_value.filter.assert_not_called()

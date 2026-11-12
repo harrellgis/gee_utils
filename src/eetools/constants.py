@@ -846,6 +846,14 @@ SITE_EXPORT_UNSCALED_BANDS: tuple[str, ...] = (
     f"*_{CLEAR_COUNT_BAND}",
 )
 SITE_EXPORT_WARN_BYTES = 1e9  # warn above ~1 GB (bands x pixels x bytes) per file
+# Grid snapping: a bounds edge within this many pixels of a grid line counts as on it.
+# Grid-aligned windows round-tripped through EPSG:4326 (EE table storage) come back
+# ~1e-10 px off (523229.9999999997 for 523230); without the tolerance floor() would
+# move the origin a whole pixel and add a sliver column.
+GRID_SNAP_TOLERANCE_PX = 1e-6
+# The per-site export region is the snapped pixel rectangle shrunk by this fraction of
+# a pixel, so EE covers exactly the grid's pixels and the tif matches the manifest.
+GRID_REGION_INSET_PX = 0.25
 # Bump on any breaking change to the manifest shape; consumers refuse unknown versions.
 MANIFEST_VERSION = 1
 # Band-entry keys eetools owns; band_meta may not override them.
