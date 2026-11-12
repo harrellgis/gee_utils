@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-12
+
+Top-candidates follow-ups (vault: 2026-11-11 top-10 ranking review, section 7 decisions
+of 2026-11-12). Adds parameters and output columns only: no change to eligibility,
+scores, the shortlist or the top-candidates ranking; saved `ScreeningTables` stay valid.
+
+### Added
+- `identify_reference_sites` / `identify_degraded_sites(..., top_candidates_n=10,
+  top_candidates_condition_weight=0.5)`: size and weighting of the top-candidates file,
+  validated, recorded in `params` and the layer register.
+- SOP status in the exported pool: every eligible cell gets `mandatory_met` and each
+  automated `<criterion>_score` (0/1/2) of the selection matrix
+  (`scoring.sop_pool_columns`); gated-out cells stay blank. Spaced cells keep the
+  values of the shortlist matrix, so the pool and the selection-matrix CSV agree.
+- Top-candidates file leads with the absolute condition flags
+  (`scoring.TOP_CANDIDATE_FLAGS`: `intactness_flag` for references,
+  `zero_star_likelihood` / `anchor_check` for degraded sites) and `mandatory_met`,
+  then the SOP scores with the other pool columns. Shown, never used to filter or rank.
+- Warning when the eligible pool has fewer than 2 x `top_candidates_n` cells
+  (percentiles are relative to the pool).
+
 ## [0.6.1] - 2026-11-11
 
 Site-selection top-candidates output (vault: 2026-11-11 top-10 ranking review). No change

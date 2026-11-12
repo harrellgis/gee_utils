@@ -569,3 +569,67 @@ def test_export_writes_top_candidates_and_site_role(tmp_path):
     assert list(back["top_rank"]) == [1]
     for product in ("degraded_candidates", "degraded_pool", "degraded_top10"):
         assert set(gpd.read_file(paths[product])["site_role"]) == {"degraded"}
+
+
+def test_sop_pool_columns_keep_mandatory_met_and_automated_scores():
+    from eetools.site_selection.scoring import sop_pool_columns
+
+    matrix = pd.DataFrame(
+        {
+            "elevation_score": [2, 1],
+            "elevation_evidence": ["x", "y"],
+            "elevation_confidence": ["H", "H"],
+            "integrity_score": [2, 0],
+            "field_access_score": [np.nan, np.nan],
+            "field_access_evidence": ["for the team"] * 2,
+            "mandatory_met": [True, False],
+            "mandatory_met_relaxed": [True, False],
+            "matrix_total": [4, 1],
+        },
+        index=pd.Index(["a", "b"], name="cell_id"),
+    )
+    out = sop_pool_columns(matrix)
+    assert list(out.columns) == ["mandatory_met", "elevation_score", "integrity_score"]
+    assert list(out["integrity_score"]) == [2, 0]
+
+
+def test_select_top_candidates_shows_flags_and_sop_status_without_filtering():
+    from eetools.site_selection.scoring import select_top_candidates
+
+    pool = _top_pool().assign(
+        intactness_flag=["ok", "weak", "ok", "weak", "ok", "ok"],
+        mandatory_met=[True, False, True, False, True, np.nan],
+        elevation_score=[2, 1, 2, 1, 2, np.nan],
+    )
+    top = select_top_candidates(pool, "reference", 500.0)
+    assert list(top.index) == ["b", "c", "d", "a", "e"]  # ranking unchanged
+    assert list(top.columns[6:8]) == ["intactness_flag", "mandatory_met"]
+    assert top.loc["b", "intactness_flag"] == "weak"
+    assert "elevation_score" in top.columns
+
+    deg = pool.drop(columns="intactness_flag").rename(
+        columns={"intactness": "degradation"}
+    )
+    deg = deg.assign(zero_star_likelihood="high", anchor_check="ok")
+    top = select_top_candidates(deg, "degraded", 500.0)
+    assert list(top.columns[6:9]) == [
+        "zero_star_likelihood",
+        "anchor_check",
+        "mandatory_met",
+    ]
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [{"top_candidates_n": 0}, {"top_candidates_condition_weight": 1.5}],
+)
+def test_workflows_validate_top_candidate_parameters(kw):
+    from eetools.site_selection.workflows import (
+        identify_degraded_sites,
+        identify_reference_sites,
+    )
+
+    with pytest.raises(ValueError, match="top_candidates"):
+        identify_reference_sites(box(0, 0, 1, 1), **kw)
+    with pytest.raises(ValueError, match="top_candidates"):
+        identify_degraded_sites(box(0, 0, 1, 1), project_start_year=2022, **kw)

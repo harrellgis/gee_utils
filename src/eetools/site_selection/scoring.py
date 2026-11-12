@@ -721,13 +721,20 @@ def select_top_candidates(
     Returns:
         Up to ``n`` cells in order with ``top_rank``, ``top_score``,
         ``<condition>_pct``, ``proposed``, ``proposed_rank`` and ``proposed_role``
-        first, then the pool columns.
+        first, then the absolute condition flags (``TOP_CANDIDATE_FLAGS``) and
+        ``mandatory_met`` when the pool has them, then the other pool columns. Flags
+        are shown, never used to filter or rank.
     """
     if not 0.0 <= condition_weight <= 1.0:
         raise ValueError("condition_weight must be between 0 and 1.")
     cond = "intactness" if site_type == "reference" else "degradation"
     lead = ["top_rank", "top_score", f"{cond}_pct", "proposed", "proposed_rank"]
     lead.append("proposed_role")
+    lead += [
+        c
+        for c in (*TOP_CANDIDATE_FLAGS.get(site_type, ()), "mandatory_met")
+        if c in pool
+    ]
     if "pool_status" not in pool or cond not in pool:
         return pd.DataFrame(columns=lead + list(pool.columns))
     elig = pool.loc[(pool["pool_status"] == "eligible") & pool[cond].notna()].copy()
@@ -1421,6 +1428,35 @@ def build_selection_matrix(
     ]
     mat["matrix_total"] = mat[auto].sum(axis=1)
     return mat
+
+
+def sop_pool_columns(matrix: pd.DataFrame) -> pd.DataFrame:
+    """SOP status columns for the exported pool: ``mandatory_met`` + criterion scores.
+
+    Keeps ``mandatory_met`` and every automated ``<criterion>_score`` (0/1/2) of a
+    selection matrix; the human criteria (left blank for the team), the evidence and
+    the confidence columns stay in the selection-matrix CSV.
+
+    Args:
+        matrix: Output of ``build_selection_matrix``.
+
+    Returns:
+        DataFrame indexed like ``matrix`` with ``mandatory_met`` first.
+    """
+    scores = [
+        c
+        for c in matrix.columns
+        if c.endswith("_score") and not c.startswith(HUMAN_CRITERIA)
+    ]
+    cols = (["mandatory_met"] if "mandatory_met" in matrix else []) + scores
+    return matrix[cols].copy()
+
+
+# Absolute condition flags carried to the top-candidates file (flag, never filter).
+TOP_CANDIDATE_FLAGS = {
+    "reference": ("intactness_flag",),
+    "degraded": ("zero_star_likelihood", "anchor_check"),
+}
 
 
 def _integrity(c: pd.Series, ctx: MatrixContext) -> tuple:

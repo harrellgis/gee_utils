@@ -250,10 +250,13 @@ deg = identify_degraded_sites(
 )
 
 ref.ranked                # GeoDataFrame: rank, role, rank_score, intactness, ...
-ref.pool                  # every final cell: pool_status, gate_reason, landuse_class
+ref.pool                  # every final cell: pool_status, gate_reason, landuse_class;
+                          #   eligible cells also carry mandatory_met + SOP <criterion>_score
 ref.selection_matrix      # CER-K SOP 0/1/2 matrix with evidence and H/M/L confidence
 ref.layer_register        # SOP §7 layer and query register
-ref.top_candidates        # best 10 distinct eligible sites by condition + similarity
+ref.top_candidates        # best 10 distinct eligible sites by condition + similarity, with
+                          #   condition flags and SOP status shown (never filtered); set
+                          #   top_candidates_n / top_candidates_condition_weight on the call
 ref.warnings              # ladder expansion, relaxed gates, fallbacks, ...
 
 ref.screening.to_parquet("outputs/screening")   # reload: ScreeningTables.from_parquet

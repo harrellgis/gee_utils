@@ -122,6 +122,7 @@ from eetools.site_selection.scoring import (
     select_spanning_set,
     select_top_candidates,
     signature_from_rules,
+    sop_pool_columns,
     sort_by_score,
     stop_rule_met,
     thin_spatially,
@@ -182,6 +183,8 @@ def identify_reference_sites(
     exclude_fc: ee.FeatureCollection | None = None,
     asset_overrides: dict[str, str] | None = None,
     tile_scale: int = 4,
+    top_candidates_n: int = TOP_CANDIDATES_N,
+    top_candidates_condition_weight: float = TOP_CANDIDATES_CONDITION_WEIGHT,
 ) -> SiteSelectionResult:
     """Propose rank-ordered TGBS reference sites for a focal site.
 
@@ -236,6 +239,9 @@ def identify_reference_sites(
         exclude_fc: Optional areas to exclude (other projects, concessions).
         asset_overrides: Optional {'vecea': id, 'soilgrids_wrb': id}.
         tile_scale: reduceRegions tileScale.
+        top_candidates_n: Sites in ``result.top_candidates`` (the top-candidates file).
+        top_candidates_condition_weight: Weight of the condition percentile in the
+            top-candidates score (0-1); environmental similarity gets the rest.
 
     Returns:
         SiteSelectionResult with ranked/pool GeoDataFrames, the SOP selection matrix,
@@ -270,6 +276,8 @@ def identify_reference_sites(
         exclude_fc=exclude_fc,
         asset_overrides=asset_overrides,
         tile_scale=tile_scale,
+        top_candidates_n=top_candidates_n,
+        top_candidates_condition_weight=top_candidates_condition_weight,
     )
 
 
@@ -298,6 +306,8 @@ def identify_degraded_sites(
     exclude_fc: ee.FeatureCollection | None = None,
     asset_overrides: dict[str, str] | None = None,
     tile_scale: int = 4,
+    top_candidates_n: int = TOP_CANDIDATES_N,
+    top_candidates_condition_weight: float = TOP_CANDIDATES_CONDITION_WEIGHT,
 ) -> SiteSelectionResult:
     """Propose rank-ordered TGBS degraded (zero-star) sites for a focal site.
 
@@ -375,6 +385,9 @@ def identify_degraded_sites(
         exclude_fc: Optional areas to exclude.
         asset_overrides: Optional {'vecea': id, 'soilgrids_wrb': id}.
         tile_scale: reduceRegions tileScale.
+        top_candidates_n: Sites in ``result.top_candidates`` (the top-candidates file).
+        top_candidates_condition_weight: Weight of the condition percentile in the
+            top-candidates score (0-1); environmental similarity gets the rest.
 
     Returns:
         SiteSelectionResult (site_type 'degraded').
@@ -409,6 +422,8 @@ def identify_degraded_sites(
         exclude_fc=exclude_fc,
         asset_overrides=asset_overrides,
         tile_scale=tile_scale,
+        top_candidates_n=top_candidates_n,
+        top_candidates_condition_weight=top_candidates_condition_weight,
     )
 
 
@@ -565,6 +580,15 @@ def _run(
     n_candidates = int(kw["n_candidates"])
     if n_candidates < 1:
         raise ValueError("n_candidates must be >= 1.")
+    top_n = int(kw.get("top_candidates_n", TOP_CANDIDATES_N))
+    if top_n < 1:
+        raise ValueError("top_candidates_n must be >= 1.")
+    top_w = float(
+        kw.get("top_candidates_condition_weight", TOP_CANDIDATES_CONDITION_WEIGHT)
+    )
+    if not 0.0 <= top_w <= 1.0:
+        raise ValueError("top_candidates_condition_weight must be in [0, 1].")
+    kw["top_candidates_n"], kw["top_candidates_condition_weight"] = top_n, top_w
     if kw.get("auto_seeds", "none") not in ("none", "wdpa_strict"):
         raise ValueError("auto_seeds must be 'none' or 'wdpa_strict'.")
     degradation_type = kw.get("degradation_type", "generic")
@@ -2038,6 +2062,17 @@ def _assemble(  # noqa: C901
     pool["dist_to_focal_km"] = pool["dist_to_focal_m"] / 1000.0
     pool["thinned_rank"] = thinned["rank"].reindex(pool.index)
     pool = _label_frame(pool, sets)
+    # SOP status for every eligible cell (gated cells stay blank), so a swap can be
+    # checked from the pool alone. Spaced cells keep their shortlist-matrix values.
+    elig_ids = pool.index[pool["pool_status"] == "eligible"]
+    if len(elig_ids):
+        sop = sop_pool_columns(build_selection_matrix(pool.loc[elig_ids], mctx))
+        if len(matrix):
+            shared = sop.index.intersection(matrix.index)
+            sop.loc[shared] = sop_pool_columns(matrix).loc[shared, sop.columns]
+        pool = pool.drop(columns=list(sop.columns), errors="ignore").join(
+            sop, how="left"
+        )
     ranked = ranked.drop(columns=["unit_keys"], errors="ignore")
     ranked = ranked.join(
         matrix[["mandatory_met", "mandatory_met_relaxed", "fallback", "matrix_total"]],
@@ -2063,12 +2098,23 @@ def _assemble(  # noqa: C901
     # site_role on every vector output (focal / reference / degraded), for styling.
     ranked["site_role"] = site_type
     pool["site_role"] = site_type
+    top_n = int(kw.get("top_candidates_n", TOP_CANDIDATES_N))
+    top_w = float(
+        kw.get("top_candidates_condition_weight", TOP_CANDIDATES_CONDITION_WEIGHT)
+    )
+    n_elig = int((pool["pool_status"] == "eligible").sum())
+    if n_elig < 2 * top_n:
+        warn.append(
+            f"Small eligible pool for the top-{top_n} file: {n_elig} eligible cells "
+            f"(< 2 x {top_n}). Percentiles are relative to this pool, so low-ranked "
+            "picks may be weak sites; read the condition flags and mandatory_met."
+        )
     top = select_top_candidates(
         pool,
         site_type,
         float(info["min_separation_m"]),
-        n=TOP_CANDIDATES_N,
-        condition_weight=TOP_CANDIDATES_CONDITION_WEIGHT,
+        n=top_n,
+        condition_weight=top_w,
         shortlist=ranked,
     )
     ranked_gdf = cell_geodataframe(ranked, ctx.crs)
@@ -2089,8 +2135,8 @@ def _assemble(  # noqa: C901
 
     params: dict[str, Any] = {
         "site_type": site_type,
-        "top_candidates_n": TOP_CANDIDATES_N,
-        "top_candidates_condition_weight": TOP_CANDIDATES_CONDITION_WEIGHT,
+        "top_candidates_n": top_n,
+        "top_candidates_condition_weight": top_w,
         "focal_geojson": geojson_of(focal_ll),
         "focal_area_ha": focal_area_m2 / 1e4,
         "grid_crs": ctx.crs,
@@ -2250,6 +2296,16 @@ def _assemble(  # noqa: C901
         )
     )
     extra.append(_reg("gate reasons (final rung)", str(info.get("gate_reasons")), "H"))
+    extra.append(
+        _reg(
+            f"top candidates: n={params['top_candidates_n']}, top_score = "
+            f"{params['top_candidates_condition_weight']} x pct(condition) + "
+            f"{1 - params['top_candidates_condition_weight']:.2g} x env_sim",
+            "relative (within the eligible pool), spaced like the shortlist; condition "
+            "flags and mandatory_met shown, never filtered",
+            "L",
+        )
+    )
     if kw.get("screening") is not None:
         extra.append(_reg("ScreeningTables reused", f"created {store.created}", "H"))
     if site_type == "degraded":
