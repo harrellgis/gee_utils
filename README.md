@@ -380,6 +380,20 @@ task = export_image_to_gcs(
 )
 ```
 
+`export_composites_per_site(image, windows_fc, product=..., bucket=..., prefix=...,
+crs=..., scale=...)` exports one stack per window to
+`<prefix>/<product>/<region_id>_<product>.tif` on the snapped grid, with a JSON band
+manifest beside it. Read bands through the manifest, never by name or position:
+- Band entries carry a 1-based `index`, `name`, `scale_factor`, `offset`, and every key
+  you pass in `band_meta` (e.g. `metric`, `period_type`, `period`, `unit`, `source`).
+- Decode with `physical = stored / scale_factor + offset`, after masking `nodata`
+  (-32768 for int16 stacks).
+- `crs_transform` is in EE / `rasterio.Affine` order.
+
+Region ids and product names must match `[A-Za-z0-9_]+`. Re-running with the same
+parameters skips finished exports. Different parameters raise an error unless you pass
+`overwrite=True`.
+
 ### Texture
 
 `eetools.sensors.texture` computes GLCM (Haralick) and first-order texture on any band,

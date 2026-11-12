@@ -715,3 +715,383 @@ def test_snapped_transform_live_grid_origin(ee_session):
     ring = region.bounds(1, real_ee.Projection("EPSG:32737")).coordinates().getInfo()[0]
     assert x0 <= min(p[0] for p in ring) < x0 + 10
     assert y0 - 10 < max(p[1] for p in ring) <= y0
+
+
+# --------------------------------------------------------------------------- #
+# Per-site composite stacks + band manifest                                    #
+# --------------------------------------------------------------------------- #
+RING = [
+    [500012.0, 9600001.0],
+    [502003.0, 9600001.0],
+    [502003.0, 9601995.0],
+    [500012.0, 9601995.0],
+    [500012.0, 9600001.0],
+]
+BANDS = ["NDVI_2022_dry_jf", "clear_count_2022_dry_jf", "0_clear_count", "EVI"]
+
+
+def _manifest(**overrides):
+    params = dict(
+        region_id="s01",
+        product="s2",
+        file="s01_s2.tif",
+        crs="EPSG:32737",
+        crs_transform=[10, 0, 500010, 0, -10, 9602000],
+        dtype="int16",
+        nodata=-32768,
+        bands=io.build_band_entries(["NDVI", "clear_count"]),
+    )
+    params.update(overrides)
+    return io.build_site_manifest(**params)
+
+
+def test_build_band_entries_order_scaling_and_meta_passthrough():
+    meta = {
+        "NDVI_2022_dry_jf": {
+            "metric": "NDVI",
+            "period_type": "dry_window",
+            "period": "2022-01/2022-02",
+            "unit": "",
+            "source": "COPERNICUS/S2_SR_HARMONIZED",
+            "anything_else": {"nested": [1, 2]},
+        }
+    }
+    entries = io.build_band_entries(BANDS, band_meta=meta)
+
+    assert [e["index"] for e in entries] == [1, 2, 3, 4]
+    assert [e["name"] for e in entries] == BANDS
+    # Default unscaled patterns catch bare, <metric>_<period> and toBands() names.
+    assert [e["scale_factor"] for e in entries] == [10000, 1, 1, 10000]
+    assert all(e["offset"] == 0 for e in entries)
+    first = entries[0]
+    for key, value in meta["NDVI_2022_dry_jf"].items():
+        assert first[key] == value
+    assert set(entries[3]) == {"index", "name", "scale_factor", "offset"}
+
+
+def test_build_band_entries_exact_unscaled_and_errors():
+    entries = io.build_band_entries(
+        ["a", "b"], scale_factor=100, unscaled_bands=["b", "missing"]
+    )
+    assert [e["scale_factor"] for e in entries] == [100, 1]
+    with pytest.raises(ValueError, match="not in the image"):
+        io.build_band_entries(["a"], band_meta={"zzz": {"unit": "m"}})
+    with pytest.raises(ValueError, match="reserved"):
+        io.build_band_entries(["a"], band_meta={"a": {"scale_factor": 5}})
+
+
+def test_manifest_shape_and_version():
+    manifest = _manifest()
+    assert manifest["manifest_version"] == 1
+    assert manifest["file"] == "s01_s2.tif"
+    assert manifest["crs_transform"] == [10, 0, 500010, 0, -10, 9602000]
+    assert manifest["nodata"] == -32768
+    assert manifest["created"].endswith("Z")
+    assert manifest["params_hash"] == io.manifest_params_hash(manifest)
+    from eetools import __version__
+
+    assert manifest["eetools_version"] == __version__
+
+
+def test_params_hash_stable_and_sensitive_to_every_parameter():
+    base = _manifest()
+    again = _manifest()
+    again["created"] = "1999-01-01T00:00:00Z"
+    assert io.manifest_params_hash(again) == base["params_hash"]
+
+    variants = [
+        {"region_id": "s02", "file": "s02_s2.tif"},
+        {"product": "s2b"},
+        {"crs": "EPSG:32736"},
+        {"crs_transform": [10, 0, 500020, 0, -10, 9602000]},
+        {"dtype": "float32"},
+        {"nodata": -9999},
+        {"bands": io.build_band_entries(["NDVI", "clear_count", "EVI"])},
+        {"bands": io.build_band_entries(["NDVI", "clear_count"], scale_factor=1000)},
+        {
+            "bands": io.build_band_entries(
+                ["NDVI", "clear_count"], band_meta={"NDVI": {"unit": "x"}}
+            )
+        },
+    ]
+    hashes = {_manifest(**v)["params_hash"] for v in variants}
+    assert base["params_hash"] not in hashes
+    assert len(hashes) == len(variants)
+
+
+def test_scale_stack_scales_rounds_and_keeps_order(mock_ee):
+    image = MagicMock(name="image")
+    selected = {}
+    image.select.side_effect = lambda name: selected.setdefault(name, MagicMock())
+    entries = io.build_band_entries(["NDVI", "clear_count"])
+
+    out = io._scale_stack(image, entries, "int16")
+
+    ndvi, count = selected["NDVI"], selected["clear_count"]
+    ndvi.multiply.assert_called_once_with(10000)
+    ndvi.multiply.return_value.round.assert_called_once_with()
+    count.multiply.assert_not_called()
+    (parts,), _ = mock_ee.Image.cat.call_args
+    assert parts == [ndvi.multiply.return_value.round.return_value, count]
+    mock_ee.Image.cat.return_value.rename.assert_called_once_with(
+        ["NDVI", "clear_count"]
+    )
+    assert out is mock_ee.Image.cat.return_value.rename.return_value
+
+
+def test_scale_stack_float32_does_not_round(mock_ee):
+    image = MagicMock(name="image")
+    io._scale_stack(image, io.build_band_entries(["NDVI"]), "float32")
+    image.select.return_value.multiply.return_value.round.assert_not_called()
+
+
+@pytest.fixture
+def site_export(mock_ee, mock_storage):
+    """Patch the EE / GCS touch points of export_composites_per_site."""
+    mock_ee.Image.return_value.bandNames.return_value.getInfo.return_value = [
+        "NDVI_2022",
+        "clear_count_2022",
+    ]
+    with (
+        patch.object(io, "_scale_stack", return_value="STACK") as scale_stack,
+        patch.object(
+            io, "_region_info", return_value=[("s01", RING), ("s02", RING)]
+        ) as region_info,
+        patch.object(io, "_existing_state", return_value=None) as existing,
+        patch.object(io, "export_image_to_gcs") as export,
+        patch.object(io, "write_export_manifest") as write,
+    ):
+        yield {
+            "ee": mock_ee,
+            "scale_stack": scale_stack,
+            "region_info": region_info,
+            "existing": existing,
+            "export": export,
+            "write": write,
+        }
+
+
+def _run_site_export(**kwargs):
+    params = dict(
+        product="s2",
+        bucket="bkt",
+        prefix="proj/stacks",
+        crs="EPSG:32737",
+        scale=10,
+    )
+    params.update(kwargs)
+    return io.export_composites_per_site("IMG", "REGIONS", **params)
+
+
+def test_export_composites_per_site_one_export_and_manifest_per_region(site_export):
+    meta = {"NDVI_2022": {"metric": "NDVI", "period_type": "annual", "period": "2022"}}
+    records = _run_site_export(band_meta=meta)
+
+    assert [r.region_id for r in records] == ["s01", "s02"]
+    assert [r.status for r in records] == ["started", "started"]
+    assert records[0].object_name == "proj/stacks/s2/s01_s2.tif"
+    assert records[0].manifest_name == "proj/stacks/s2/s01_s2.json"
+    site_export["region_info"].assert_called_once_with(
+        "REGIONS", "site_id", "EPSG:32737"
+    )
+
+    export = site_export["export"]
+    assert export.call_count == 2
+    args, kwargs = export.call_args_list[0]
+    assert args[0] == "STACK"
+    assert kwargs["file_name_prefix"] == "proj/stacks/s2/s01_s2"
+    assert kwargs["crs_transform"] == [10.0, 0.0, 500010.0, 0.0, -10.0, 9602000.0]
+    assert kwargs["dtype"] == "int16"
+    assert kwargs["nodata"] == -32768
+    assert kwargs["skip_existing"] is False
+    assert kwargs["start"] is True
+    assert records[0].task is export.return_value
+
+    manifest = records[0].manifest
+    assert manifest["file"] == "s01_s2.tif"
+    assert [b["name"] for b in manifest["bands"]] == ["NDVI_2022", "clear_count_2022"]
+    assert [b["scale_factor"] for b in manifest["bands"]] == [10000, 1]
+    assert manifest["bands"][0]["period_type"] == "annual"
+    assert site_export["write"].call_count == 2
+    site_export["write"].assert_any_call("bkt", records[1])
+
+
+def test_export_composites_per_site_start_false_writes_no_manifest(site_export):
+    records = _run_site_export(start=False, skip_existing=False)
+    assert [r.status for r in records] == ["unstarted", "unstarted"]
+    site_export["write"].assert_not_called()
+    site_export["existing"].assert_not_called()
+    assert site_export["export"].call_args.kwargs["start"] is False
+
+
+@pytest.mark.parametrize("state", ["skipped", "pending"])
+def test_export_composites_per_site_skips_existing(site_export, state):
+    site_export["existing"].return_value = state
+    records = _run_site_export()
+    assert [r.status for r in records] == [state, state]
+    assert all(r.task is None for r in records)
+    site_export["export"].assert_not_called()
+    site_export["write"].assert_not_called()
+    first_call = site_export["existing"].call_args_list[0].args
+    assert first_call[:2] == ("bkt", "proj/stacks/s2/s01_s2")
+    assert first_call[3] is False  # overwrite
+
+
+@pytest.mark.parametrize("bad", ["site-01", "site 01", "", 1.5, None])
+def test_export_composites_per_site_rejects_bad_region_ids(site_export, bad):
+    site_export["region_info"].return_value = [(bad, RING)]
+    with pytest.raises(ValueError, match=r"A-Za-z0-9_"):
+        _run_site_export()
+    site_export["export"].assert_not_called()
+
+
+def test_export_composites_per_site_accepts_integer_ids(site_export):
+    site_export["region_info"].return_value = [(7, RING)]
+    records = _run_site_export()
+    assert records[0].object_name == "proj/stacks/s2/7_s2.tif"
+
+
+@pytest.mark.parametrize("product", ["s2-dry", "s2.dry", "s2/dry"])
+def test_export_composites_per_site_rejects_bad_product(site_export, product):
+    with pytest.raises(ValueError, match="product"):
+        _run_site_export(product=product)
+    site_export["region_info"].assert_not_called()
+
+
+def test_export_composites_per_site_rejects_duplicates_and_bad_args(site_export):
+    site_export["region_info"].return_value = [("s01", RING), ("s01", RING)]
+    with pytest.raises(ValueError, match="Duplicate"):
+        _run_site_export()
+    with pytest.raises(ValueError, match="dtype"):
+        _run_site_export(dtype="uint8")
+    with pytest.raises(ValueError, match="scale"):
+        _run_site_export(scale=0)
+    site_export["export"].assert_not_called()
+
+
+def test_export_composites_per_site_needs_storage(site_export):
+    with patch.object(io, "storage", None):
+        with pytest.raises(ImportError, match=r"eetools\[gcs\]"):
+            _run_site_export()
+    site_export["export"].assert_not_called()
+
+
+def test_export_composites_per_site_float32_nodata(site_export):
+    records = _run_site_export(dtype="float32")
+    assert site_export["export"].call_args.kwargs["nodata"] == -9999
+    assert records[0].manifest["nodata"] == -9999
+
+
+def test_export_composites_per_site_size_warning(site_export):
+    huge = [[0.0, 0.0], [400000.0, 0.0], [400000.0, 400000.0], [0.0, 400000.0]]
+    site_export["region_info"].return_value = [("big", huge)]
+    with pytest.warns(UserWarning, match="GB"):
+        _run_site_export()
+
+
+@pytest.fixture
+def gcs_state():
+    """Control which objects exist and what the old manifest holds."""
+    with (
+        patch.object(io, "gcs_object_exists") as exists,
+        patch.object(io, "_read_manifest") as read,
+        patch.object(io, "_export_objects") as objects,
+    ):
+        yield exists, read, objects
+
+
+def test_existing_state_nothing_there(gcs_state):
+    exists, read, _ = gcs_state
+    exists.return_value = False
+    read.return_value = None
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) is None
+
+
+def test_existing_state_matching_hash(gcs_state):
+    exists, read, _ = gcs_state
+    read.return_value = {"params_hash": "H"}
+    exists.side_effect = lambda b, n: n == "p/s01_s2-0000000000-0000000000.tif"
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) == "skipped"
+    exists.side_effect = None
+    exists.return_value = False
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) == "pending"
+
+
+@pytest.mark.parametrize(
+    "old, tif, reason",
+    [
+        ({"params_hash": "OLD"}, True, "different parameters"),
+        (None, True, "no manifest"),
+    ],
+)
+def test_existing_state_mismatch_raises_without_overwrite(gcs_state, old, tif, reason):
+    exists, read, objects = gcs_state
+    exists.return_value = tif
+    read.return_value = old
+    with pytest.raises(ValueError, match=reason):
+        io._existing_state("b", "p/s01_s2", "H", overwrite=False)
+    objects.assert_not_called()
+
+
+def test_existing_state_overwrite_deletes_stale_objects(gcs_state):
+    exists, read, objects = gcs_state
+    exists.return_value = True
+    read.return_value = {"params_hash": "OLD"}
+    stale = [MagicMock(name="tif"), MagicMock(name="json")]
+    objects.return_value = stale
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=True) is None
+    objects.assert_called_once_with("b", "p/s01_s2")
+    for blob in stale:
+        blob.delete.assert_called_once_with()
+
+
+def test_export_objects_matches_only_this_stem(mock_ee, mock_storage):
+    names = [
+        "p/s01_s2.tif",
+        "p/s01_s2.json",
+        "p/s01_s2-0000000000-0000065536.tif",
+        "p/s01_s2b.tif",
+        "p/s01_s2_old.tif",
+    ]
+    blobs = []
+    for name in names:
+        blob = MagicMock()
+        blob.name = name
+        blobs.append(blob)
+    mock_storage.Client.return_value.list_blobs.return_value = blobs
+    found = [b.name for b in io._export_objects("b", "p/s01_s2")]
+    assert found == names[:3]
+
+
+def test_write_and_read_manifest_round_trip(mock_ee, mock_storage):
+    blob = mock_storage.Client.return_value.bucket.return_value.blob.return_value
+    record = io.ExportRecord(
+        "s01", "p/s01_s2.tif", "p/s01_s2.json", {"manifest_version": 1}, None, "started"
+    )
+    uri = io.write_export_manifest("b", record)
+    assert uri == "gs://b/p/s01_s2.json"
+    (payload,) = blob.upload_from_string.call_args.args
+    assert blob.upload_from_string.call_args.kwargs == {
+        "content_type": "application/json"
+    }
+
+    blob.exists.return_value = True
+    blob.download_as_text.return_value = payload
+    assert io._read_manifest("b", "p/s01_s2.json") == {"manifest_version": 1}
+    blob.exists.return_value = False
+    assert io._read_manifest("b", "p/s01_s2.json") is None
+
+
+@pytest.mark.ee
+def test_scale_stack_live_values_and_types(ee_session, first_value):
+    image = ee_session.Image.constant([0.25, 3, -0.123456]).rename(
+        ["NDVI", "clear_count", "NDMI"]
+    )
+    image = image.addBands(image.select("clear_count").toUint16(), overwrite=True)
+    entries = io.build_band_entries(image.bandNames().getInfo())
+    stack = io._scale_stack(image, entries, "int16").toInt16()
+
+    assert stack.bandNames().getInfo() == ["NDVI", "clear_count", "NDMI"]
+    assert first_value(stack, "NDVI") == 2500
+    assert first_value(stack, "clear_count") == 3
+    assert first_value(stack, "NDMI") == -1235  # rounded, not truncated

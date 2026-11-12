@@ -821,6 +821,30 @@ GCS_TABLE_FORMATS: dict[str, str] = {
 # EE splits large image exports into tiles named <prefix>-<row>-<col>.tif, with 10-digit
 # zero-padded pixel offsets; the first shard is always this suffix.
 GCS_FIRST_SHARD_SUFFIX = "-0000000000-0000000000"
+# Per-site composite stacks (export_composites_per_site) and their JSON band manifest.
+# region ids and product names are restricted (not sanitised) so object names stay
+# predictable and a hyphen can never be confused with EE's shard suffix.
+SITE_EXPORT_NAME_PATTERN = r"[A-Za-z0-9_]+"
+SITE_EXPORT_DTYPES: tuple[str, ...] = ("int16", "float32")
+SITE_EXPORT_DTYPE_BYTES: dict[str, int] = {"int16": 2, "float32": 4}
+SITE_EXPORT_SCALE_FACTOR = 10000  # stored = round(physical * 10000) for int16 stacks
+# Bands stored unscaled (scale_factor 1), as exact names or fnmatch patterns: the bare
+# clear_count band, <metric>_<period> names and toBands() "<i>_clear_count" prefixes.
+SITE_EXPORT_UNSCALED_BANDS: tuple[str, ...] = (
+    CLEAR_COUNT_BAND,
+    f"{CLEAR_COUNT_BAND}_*",
+    f"*_{CLEAR_COUNT_BAND}",
+)
+SITE_EXPORT_WARN_BYTES = 1e9  # warn above ~1 GB (bands x pixels x bytes) per file
+# Bump on any breaking change to the manifest shape; consumers refuse unknown versions.
+MANIFEST_VERSION = 1
+# Band-entry keys eetools owns; band_meta may not override them.
+MANIFEST_RESERVED_BAND_KEYS: tuple[str, ...] = (
+    "index",
+    "name",
+    "scale_factor",
+    "offset",
+)
 # EE batch task descriptions: at most 100 characters from this set.
 EE_DESCRIPTION_MAX_LENGTH = 100
 EE_DESCRIPTION_ALLOWED_CHARS = r"A-Za-z0-9.,:;_\-"
