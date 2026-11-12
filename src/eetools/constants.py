@@ -793,6 +793,11 @@ DEFAULT_MAX_PIXELS = 1e13
 DEFAULT_FILE_FORMAT = "GeoTIFF"
 DEFAULT_CRS = "EPSG:4326"
 
+#################### COMPOSITING (eetools.compositing) ##########################
+# Optional per-pixel band: number of unmasked (clear, valid) observations behind a
+# composite, counted on the first requested band. uint16, never rescaled on export.
+CLEAR_COUNT_BAND = "clear_count"
+
 #################### CLOUD STORAGE EXPORTS (eetools.io) ##########################
 # Per-dtype no-data value for GCS image exports. -9999 is a valid value in an int16
 # stack scaled by 10,000 (-0.9999), so int16 uses the type minimum instead. uint8 (RGB

@@ -252,3 +252,120 @@ def test_build_composite_selects_bands(ee_session):
     )
     composite = build_composite(col, bands=["a"])
     assert composite.bandNames().getInfo() == ["a"]
+
+
+# --------------------------------------------------------------------------- #
+# clear_count band
+# --------------------------------------------------------------------------- #
+def test_composite_without_clear_count_is_unchanged():
+    from unittest.mock import MagicMock
+
+    from eetools.compositing import _composite
+
+    col = MagicMock(name="collection")
+    out = _composite(col, ["NDVI", "EVI"], "median", add_clear_count=False)
+    assert out is col.median.return_value
+    col.select.assert_not_called()
+    col.median.return_value.addBands.assert_not_called()
+
+
+def test_composite_with_clear_count_counts_first_band_as_uint16():
+    from unittest.mock import MagicMock
+
+    from eetools.compositing import _composite
+    from eetools.constants import CLEAR_COUNT_BAND
+
+    col = MagicMock(name="collection")
+    out = _composite(col, ["NDVI", "EVI"], "mean", add_clear_count=True)
+
+    col.select.assert_called_once_with("NDVI")
+    count = col.select.return_value.count
+    count.assert_called_once_with()
+    count.return_value.toUint16.assert_called_once_with()
+    rename = count.return_value.toUint16.return_value.rename
+    rename.assert_called_once_with(CLEAR_COUNT_BAND)
+    col.mean.return_value.addBands.assert_called_once_with(rename.return_value)
+    assert out is col.mean.return_value.addBands.return_value
+    assert CLEAR_COUNT_BAND == "clear_count"
+
+
+@pytest.fixture
+def masked_triplet(ee_session):
+    """Three 2021 images of band 'b'; the first is masked west of lon 0, so a
+    western pixel has 2 clear observations and an eastern pixel has 3."""
+    ee = ee_session
+    west_masked = ee.Image.pixelLonLat().select("longitude").gte(0)
+    images = []
+    for i, (value, date) in enumerate(
+        [(0.2, "2021-04-01"), (0.4, "2021-04-10"), (0.6, "2021-04-20")]
+    ):
+        img = ee.Image.constant(value).toFloat().rename("b")
+        if i == 0:
+            img = img.updateMask(west_masked)
+        images.append(img.set("system:time_start", ee.Date(date).millis()))
+    return ee.ImageCollection(images)
+
+
+def _value_at(ee, image, band, lon):
+    return (
+        image.select(band)
+        .reduceRegion(ee.Reducer.first(), ee.Geometry.Point([lon, 0]), scale=1000)
+        .get(band)
+        .getInfo()
+    )
+
+
+@pytest.mark.ee
+def test_build_composite_clear_count_values_and_type(ee_session, masked_triplet):
+    from eetools.compositing import build_composite
+
+    composite = build_composite(masked_triplet, ["b"], add_clear_count=True)
+    assert composite.bandNames().getInfo() == ["b", "clear_count"]
+    assert _value_at(ee_session, composite, "clear_count", -0.5) == 2
+    assert _value_at(ee_session, composite, "clear_count", 0.5) == 3
+    band_type = composite.select("clear_count").bandTypes().getInfo()["clear_count"]
+    assert band_type["precision"] == "int"
+    assert (band_type["min"], band_type["max"]) == (0, 65535)
+
+
+@pytest.mark.ee
+def test_period_and_seasonal_composites_clear_count(ee_session, masked_triplet):
+    from eetools.compositing import (
+        build_period_composites,
+        build_seasonal_composites,
+    )
+
+    period = build_period_composites(
+        masked_triplet,
+        ["b"],
+        "2020-01-01",
+        "2022-01-01",
+        temporal_scale="annual",
+        add_clear_count=True,
+    )
+    assert period.size().getInfo() == 1  # empty 2020 still dropped
+    first = ee_session.Image(period.first())
+    assert first.bandNames().getInfo() == ["b", "clear_count"]
+    assert _value_at(ee_session, first, "clear_count", -0.5) == 2
+
+    seasonal = build_seasonal_composites(
+        masked_triplet,
+        ["b"],
+        start_year=2021,
+        end_year=2021,
+        season_months=(3, 5),
+        season_name="wet",
+        add_clear_count=True,
+    )
+    s_first = ee_session.Image(seasonal.first())
+    assert _value_at(ee_session, s_first, "clear_count", 0.5) == 3
+
+    default = build_seasonal_composites(
+        masked_triplet,
+        ["b"],
+        start_year=2021,
+        end_year=2021,
+        season_months=(3, 5),
+        season_name="wet",
+    )
+    assert ee_session.Image(default.first()).bandNames().getInfo() == ["b"]

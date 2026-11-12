@@ -1,5 +1,7 @@
 import ee
 
+from eetools.constants import CLEAR_COUNT_BAND
+
 # --------------------------------------------------------------------------- #
 # Private helpers                                                              #
 # --------------------------------------------------------------------------- #
@@ -19,6 +21,23 @@ def _apply_stat(collection: ee.ImageCollection, composite_stat: str) -> ee.Image
     if composite_stat == "sum":
         return collection.sum()
     raise ValueError(f"Unsupported composite_stat: {composite_stat}")
+
+
+def _composite(
+    collection: ee.ImageCollection,
+    bands: list[str],
+    composite_stat: str,
+    add_clear_count: bool,
+) -> ee.Image:
+    # `collection` is already band-selected. clear_count counts the unmasked
+    # observations of the first band per pixel (masked = cloud/shadow/invalid).
+    composite = _apply_stat(collection, composite_stat)
+    if not add_clear_count:
+        return composite
+    clear_count = (
+        collection.select(bands[0]).count().toUint16().rename(CLEAR_COUNT_BAND)
+    )
+    return composite.addBands(clear_count)
 
 
 def _time_windows(
@@ -91,6 +110,7 @@ def build_composite(
     collection: ee.ImageCollection,
     bands: list[str],
     composite_stat: str = "median",
+    add_clear_count: bool = False,
 ) -> ee.Image:
     """Reduce an ImageCollection to a single composite image.
 
@@ -105,15 +125,23 @@ def build_composite(
         bands: List of band names to select before compositing.
         composite_stat: Statistic used to combine images; one of 'mean',
             'median', or 'sum' (default 'median').
+        add_clear_count: Add a uint16 'clear_count' band: the number of
+            unmasked observations of the first band in ``bands`` per pixel
+            (cloud-free valid observations when the collection is cloud-masked).
 
     Returns:
-        ee.Image of the composited bands.
+        ee.Image of the composited bands (plus 'clear_count' if requested).
 
     Raises:
         ValueError: If composite_stat is not 'mean', 'median', or 'sum'.
     """
     _validate_composite_stat(composite_stat)
-    return _apply_stat(ee.ImageCollection(collection).select(bands), composite_stat)
+    return _composite(
+        ee.ImageCollection(collection).select(bands),
+        bands,
+        composite_stat,
+        add_clear_count,
+    )
 
 
 def build_period_composites(
@@ -123,6 +151,7 @@ def build_period_composites(
     end_date: str | ee.Date,
     temporal_scale: str = "annual",
     composite_stat: str = "median",
+    add_clear_count: bool = False,
 ) -> ee.ImageCollection:
     """Build annual or monthly composites from an ImageCollection, producing one
     composite per period with data.
@@ -134,9 +163,10 @@ def build_period_composites(
         end_date: Compositing end date as a string or ee.Date.
         temporal_scale: Temporal aggregation window; either 'annual' or 'monthly' (default 'annual').
         composite_stat: Statistic used to combine images within each window; one of 'mean', 'median', or 'sum' (default 'median').
+        add_clear_count: Add a uint16 'clear_count' band per composite: the number of unmasked observations of the first band in ``bands`` per pixel in that period (image_count only counts scenes).
 
     Returns:
-        ee.ImageCollection of composite images, one per period, each with date, year, month, day, image_count, temporal_scale, and composite_stat properties.
+        ee.ImageCollection of composite images, one per period with data (empty periods are dropped), each with date, year, month, day, image_count, temporal_scale, and composite_stat properties.
     """
     _validate_composite_stat(composite_stat)
 
@@ -155,7 +185,7 @@ def build_period_composites(
         )
         subset = collection.filterDate(window_start, window_end)
         image_count = subset.size()
-        composite = _apply_stat(subset, composite_stat)
+        composite = _composite(subset, bands, composite_stat, add_clear_count)
 
         return ee.Image(
             ee.Algorithms.If(
@@ -188,6 +218,7 @@ def build_seasonal_composites(
     season_months: tuple[int, int],
     season_name: str,
     composite_stat: str = "median",
+    add_clear_count: bool = False,
 ) -> ee.ImageCollection:
     """Build per-year seasonal composites by filtering each year's collection to a
     fixed window of consecutive months.
@@ -210,6 +241,9 @@ def build_seasonal_composites(
             (e.g. 'wet', 'dry').
         composite_stat: Statistic used to combine images; one of 'mean',
             'median', or 'sum' (default 'median').
+        add_clear_count: Add a uint16 'clear_count' band per composite: the
+            number of unmasked observations of the first band in ``bands`` per
+            pixel in that season window.
 
     Returns:
         ee.ImageCollection of per-year composites, one per year with imagery in
@@ -237,7 +271,7 @@ def build_seasonal_composites(
         window_end = ee.Date.fromYMD(year, end_month, 1).advance(1, "month")
         subset = col.filterDate(window_start, window_end)
         image_count = subset.size()
-        composite = _apply_stat(subset, composite_stat)
+        composite = _composite(subset, bands, composite_stat, add_clear_count)
         return ee.Image(
             ee.Algorithms.If(
                 image_count.gt(0),
