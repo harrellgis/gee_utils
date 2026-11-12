@@ -41,7 +41,9 @@ def woody_fraction_band_names(heights_m: Sequence[float]) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def get_canopy_height(aoi: ee.Geometry | None = None) -> ee.Image:
+def get_canopy_height(
+    aoi: ee.Geometry | None = None, *, pin_projection: bool = False
+) -> ee.Image:
     """Load the Meta/WRI 1m global canopy height mosaic, optionally clipped to an AOI.
 
     The source asset is a tiled ee.ImageCollection; tiles are mosaicked to a single
@@ -51,15 +53,16 @@ def get_canopy_height(aoi: ee.Geometry | None = None) -> ee.Image:
 
     Args:
         aoi: Optional area of interest as ee.Geometry; if provided, the image is clipped to it.
+        pin_projection: Set the mosaic's default projection to its tiles' native (~1 m) projection. A bare ``mosaic()`` has none, which ``reduceResolution`` rejects; pass True before aggregating.
 
     Returns:
         ee.Image with a single 'canopy_height' band (metres), clipped to aoi when provided.
     """
-    canopy = (
-        ee.ImageCollection(META_CANOPY_HEIGHT_COLLECTION)
-        .mosaic()
-        .select([META_CANOPY_HEIGHT_BAND], ["canopy_height"])
-    )
+    collection = ee.ImageCollection(META_CANOPY_HEIGHT_COLLECTION)
+    canopy = collection.mosaic().select([META_CANOPY_HEIGHT_BAND], ["canopy_height"])
+    if pin_projection:
+        native = collection.first().select(META_CANOPY_HEIGHT_BAND).projection()
+        canopy = canopy.setDefaultProjection(native)
     if aoi is not None:
         canopy = canopy.clip(aoi)
     return canopy
@@ -126,13 +129,7 @@ def woody_fraction_from_chm(
     if chm is None:
         # mosaic() has no usable default projection, which reduceResolution
         # rejects; pin the mosaic to the native (~1 m) projection of its tiles.
-        native = (
-            ee.ImageCollection(META_CANOPY_HEIGHT_COLLECTION)
-            .first()
-            .select(META_CANOPY_HEIGHT_BAND)
-            .projection()
-        )
-        chm = get_canopy_height().setDefaultProjection(native)
+        chm = get_canopy_height(pin_projection=True)
     height = ee.Image(chm).select(0)
 
     def _to_grid(image: ee.Image) -> ee.Image:

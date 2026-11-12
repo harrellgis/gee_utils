@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-12
+
+Baseline-layer registry over a study extent (E6, vault: 2026-11-12 eetools v0.7 build
+spec).
+
+### Added
+- `workflows.BaselineLayerSpec` and `BASELINE_LAYER_REGISTRY`: 12 layers, each with
+  a builder, `export_scale_m`, `native_scale_m`, `categorical`, `resample` (mean or
+  mode), `dataset_id`, `version`, `licence`, `unit` and `band`. Metadata lives in
+  `constants.BASELINE_LAYER_METADATA`. Licences were checked against the EE catalog
+  and the vault dataset pages.
+  - The nine existing layers, with `canopy_height` exported at **10 m mean**,
+    `land_cover` at 10 m and `bii_all` at 1 km.
+  - New opt-in layers (`BASELINE_EXTRA_LAYER_NAMES`): `forest_lossyear` (Hansen
+    v1.13, codes 1-25 = 2001-2025, categorical, 30 m), `soilgrids_wrb`
+    (categorical, 230 m, CC BY 4.0) and `human_modification` (TNC gHM v3 2022,
+    90 m).
+  - VECEA stays out (licence unresolved).
+- `baseline_layer_register(layers=None)`: one metadata row per layer, for a data
+  register.
+- `export_baseline_layers(..., dest="gcs", bucket=, prefix=, skip_existing=,
+  start=)`: one COG per layer at `gs://<bucket>/<prefix>/<layer>.tif`, on
+  `snapped_transform(region, crs, scale)`. Categorical layers are written as int16,
+  continuous ones as float32. A projected `crs` is required.
+- Layers exported coarser than their native scale are aggregated with
+  `reduceResolution` (mean for continuous, mode for categorical). This applies to
+  Drive exports too.
+- `pin_projection=` on `get_canopy_height` and `get_land_cover`, because a bare
+  `mosaic()` has no default projection to aggregate from.
+- `aoi=None` (unclipped) is now allowed in `get_forest_2000`,
+  `get_forest_loss_image` and `get_forest_loss_year_image`.
+
+### Changed
+- **`build_baseline_layers(region, layers=None, clip=False)` no longer clips by
+  default.** A positional call still returns the same nine layers. Pass
+  `clip=True` for the old behaviour. `run_baseline_assessment` does this, so its
+  layers and summaries are unchanged.
+- **The default baseline export scale is now each layer's registry
+  `export_scale_m`**, replacing the uniform 30 m. Pass
+  `scale_dict=DEFAULT_BASELINE_EXPORT_SCALE` for the old scales. A `scale_dict`
+  that omits a registry layer now falls back to the registry, and only layers
+  outside the registry need an explicit scale.
+- `export_baseline_layers` exports every key of `layers` by default.
+- The `aoi=` keyword on `build_baseline_layers` / `export_baseline_layers` is
+  deprecated in favour of `region=`, and still works with a `DeprecationWarning`.
+
+### Notes
+- iSDA total carbon is stored log-encoded (`g/kg = exp(x / 10) - 1`). The registry
+  records this in `unit`; `get_soil_carbon` still returns the raw values.
+
 ## [0.7.0] - 2026-11-12
 
 Generic export and compositing additions for per-site stacks (vault: 2026-11-12

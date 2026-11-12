@@ -1,4 +1,8 @@
-from collections.abc import Callable
+import math
+import warnings
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 
 import ee
 
@@ -8,19 +12,32 @@ from eetools.compositing import (
 )
 from eetools.constants import (
     BASELINE_CONTINUOUS_LAYERS,
+    BASELINE_EXTRA_LAYER_NAMES,
+    BASELINE_LAYER_METADATA,
     BASELINE_LAYER_NAMES,
-    DEFAULT_BASELINE_EXPORT_SCALE,
+    BASELINE_RESAMPLE_MAX_PIXELS_CAP,
     DEFAULT_CRS,
     DEFAULT_MIN_PIXELS_PER_REGION,
     ESA_CLASS_MAP,
 )
-from eetools.io import export_image_list_to_drive, export_table_to_drive
-from eetools.sensors.bii.preprocessing import get_bii
+from eetools.io import (
+    export_image_list_to_drive,
+    export_image_to_gcs,
+    export_table_to_drive,
+    snapped_transform,
+)
+from eetools.sensors.bii.preprocessing import get_bii_image
 from eetools.sensors.canopy_height.preprocessing import get_canopy_height
 from eetools.sensors.dem.preprocessing import get_terrain
 from eetools.sensors.esa.preprocessing import get_land_cover
-from eetools.sensors.hansen.preprocessing import get_forest_2000, get_forest_loss_image
+from eetools.sensors.hansen.preprocessing import (
+    get_forest_2000,
+    get_forest_loss_image,
+    get_forest_loss_year_image,
+)
+from eetools.sensors.human_modification.preprocessing import get_human_modification
 from eetools.sensors.isda.preprocessing import get_soil_carbon
+from eetools.sensors.soilgrids.preprocessing import get_soilgrids_wrb
 from eetools.site_selection.workflows import (  # noqa: F401 (re-exported entry points)
     identify_degraded_sites,
     identify_reference_sites,
@@ -168,36 +185,170 @@ def run_site_timeseries(
 # --------------------------------------------------------------------------- #
 
 
-def build_baseline_layers(aoi: ee.Geometry) -> dict[str, ee.Image]:
-    """Build the static baseline layer stack for an AOI: terrain, canopy height,
-    land cover, soil carbon, biodiversity intactness, and Hansen forest-change.
+@dataclass(frozen=True)
+class BaselineLayerSpec:
+    """One static baseline layer: how to build it, how to export it, and its
+    dataset metadata for a data register.
 
-    Mirrors the TGBS_Kwale baseline notebook's ``build_baseline_layers``: a fixed
-    set of single-purpose static datasets, each clipped to the AOI and returned
-    under a stable key so callers can summarize or export any subset. See
-    :func:`run_baseline_assessment` for the full build -> summarize -> export
-    workflow.
+    Attributes:
+        name: Registry key (also the export file name).
+        builder: Callable(region) -> unclipped single-band ee.Image. The region is passed for builders that need it; most ignore it.
+        export_scale_m: Default export pixel size in metres.
+        native_scale_m: Source pixel size; exports coarser than this are aggregated with ``resample``.
+        categorical: Class codes (exported as int16) rather than continuous values (float32).
+        resample: Aggregation when coarsening: ``"mean"`` (continuous), ``"mode"`` (categorical) or ``"nearest"`` (no aggregation).
+        dataset_id: Source EE asset / collection ID.
+        version: Dataset version or epoch.
+        licence: Licence / terms of use.
+        unit: Unit of the band values.
+        band: Output band name.
+    """
+
+    name: str
+    builder: Callable[[ee.Geometry], ee.Image]
+    export_scale_m: float
+    native_scale_m: float
+    categorical: bool
+    resample: Literal["mean", "mode", "nearest"]
+    dataset_id: str
+    version: str
+    licence: str
+    unit: str
+    band: str
+
+
+def _terrain_band(band: str) -> Callable[[ee.Geometry], ee.Image]:
+    def _build(region: ee.Geometry) -> ee.Image:
+        return get_terrain().select(band)
+
+    return _build
+
+
+_BASELINE_BUILDERS: dict[str, Callable[[ee.Geometry], ee.Image]] = {
+    "dem": _terrain_band("elevation"),
+    "slope": _terrain_band("slope"),
+    "hillshade": _terrain_band("hillshade"),
+    "canopy_height": lambda region: get_canopy_height(pin_projection=True),
+    "land_cover": lambda region: get_land_cover(pin_projection=True),
+    "soil_carbon": lambda region: get_soil_carbon(),
+    "bii_all": lambda region: get_bii_image("1km").select("BII All"),
+    "forest_2000": lambda region: get_forest_2000(),
+    "forest_loss": lambda region: get_forest_loss_image(),
+    "forest_lossyear": lambda region: get_forest_loss_year_image(),
+    "soilgrids_wrb": lambda region: get_soilgrids_wrb(),
+    "human_modification": lambda region: get_human_modification(),
+}
+
+
+def _build_registry() -> dict[str, BaselineLayerSpec]:
+    registry: dict[str, BaselineLayerSpec] = {}
+    for name, meta in BASELINE_LAYER_METADATA.items():
+        fields = cast(dict[str, Any], meta)
+        registry[name] = BaselineLayerSpec(
+            name=name, builder=_BASELINE_BUILDERS[name], **fields
+        )
+    expected = list(BASELINE_LAYER_NAMES) + list(BASELINE_EXTRA_LAYER_NAMES)
+    if list(registry) != expected:  # constants out of sync: fail at import
+        raise RuntimeError(
+            f"BASELINE_LAYER_METADATA keys {list(registry)} != {expected}."
+        )
+    return registry
+
+
+# Every static baseline layer, keyed by name, in canonical order: the nine default
+# layers (BASELINE_LAYER_NAMES) then the opt-in extras (BASELINE_EXTRA_LAYER_NAMES).
+BASELINE_LAYER_REGISTRY: dict[str, BaselineLayerSpec] = _build_registry()
+
+
+def _resolve_layer_names(layers: Sequence[str] | None) -> list[str]:
+    names = list(BASELINE_LAYER_NAMES) if layers is None else list(layers)
+    unknown = [name for name in names if name not in BASELINE_LAYER_REGISTRY]
+    if unknown:
+        raise ValueError(
+            f"Unknown baseline layer(s) {unknown}; "
+            f"choose from {list(BASELINE_LAYER_REGISTRY)}."
+        )
+    return names
+
+
+def baseline_layer_register(layers: Sequence[str] | None = None) -> list[dict]:
+    """Dataset metadata of baseline layers, one row per layer, for a data register.
 
     Args:
-        aoi: Area of interest as ee.Geometry; every layer is clipped to it.
+        layers: Registry keys; defaults to every layer in ``BASELINE_LAYER_REGISTRY``.
 
     Returns:
-        dict mapping BASELINE_LAYER_NAMES keys ('dem', 'slope', 'hillshade',
-        'canopy_height', 'land_cover', 'soil_carbon', 'bii_all', 'forest_2000',
-        'forest_loss') to single-band ee.Images.
+        list[dict]. Per layer: name, dataset_id, version, licence, unit, band, categorical, native_scale_m, export_scale_m, resample.
+
+    Raises:
+        ValueError: If a name is not in the registry.
     """
-    terrain = get_terrain(aoi=aoi)
-    return {
-        "dem": terrain.select("elevation"),
-        "slope": terrain.select("slope"),
-        "hillshade": terrain.select("hillshade"),
-        "canopy_height": get_canopy_height(aoi=aoi),
-        "land_cover": get_land_cover(aoi=aoi),
-        "soil_carbon": get_soil_carbon(aoi=aoi),
-        "bii_all": get_bii(aoi, "BII All", "1km"),
-        "forest_2000": get_forest_2000(aoi),
-        "forest_loss": get_forest_loss_image(aoi),
-    }
+    names = list(BASELINE_LAYER_REGISTRY) if layers is None else layers
+    rows = []
+    for name in _resolve_layer_names(names):
+        spec = BASELINE_LAYER_REGISTRY[name]
+        rows.append(
+            {
+                "name": spec.name,
+                "dataset_id": spec.dataset_id,
+                "version": spec.version,
+                "licence": spec.licence,
+                "unit": spec.unit,
+                "band": spec.band,
+                "categorical": spec.categorical,
+                "native_scale_m": spec.native_scale_m,
+                "export_scale_m": spec.export_scale_m,
+                "resample": spec.resample,
+            }
+        )
+    return rows
+
+
+def build_baseline_layers(
+    region: ee.Geometry | None = None,
+    layers: Sequence[str] | None = None,
+    clip: bool = False,
+    *,
+    aoi: ee.Geometry | None = None,
+) -> dict[str, ee.Image]:
+    """Build static baseline layers from the registry over a region.
+
+    Each layer comes from its ``BASELINE_LAYER_REGISTRY`` builder: terrain, canopy
+    height, land cover, soil carbon, biodiversity intactness and Hansen
+    forest-change by default, plus the opt-in ``forest_lossyear``,
+    ``soilgrids_wrb`` and ``human_modification``. Layers are unclipped unless
+    ``clip=True``; pass the study extent (e.g. bbox of all sites + buffer) as the
+    export region instead. See :func:`run_baseline_assessment` for the full
+    build -> summarize -> export workflow.
+
+    Args:
+        region: Region the layers are built for (and clipped to when ``clip=True``).
+        layers: Registry keys to build; defaults to the nine ``BASELINE_LAYER_NAMES`` (dem, slope, hillshade, canopy_height, land_cover, soil_carbon, bii_all, forest_2000, forest_loss).
+        clip: Clip every layer to ``region`` (default False; before 0.7.1 layers were always clipped).
+        aoi: Deprecated alias for ``region``.
+
+    Returns:
+        dict mapping each requested layer name to a single-band ee.Image.
+
+    Raises:
+        ValueError: If a layer name is unknown, both ``region`` and ``aoi`` are given, or neither is given while ``clip=True``.
+    """
+    if aoi is not None:
+        if region is not None:
+            raise ValueError("Pass region, not both region and aoi.")
+        warnings.warn(
+            "build_baseline_layers(aoi=...) is deprecated; use region=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        region = aoi
+    if clip and region is None:
+        raise ValueError("clip=True needs a region.")
+    out: dict[str, ee.Image] = {}
+    for name in _resolve_layer_names(layers):
+        image = BASELINE_LAYER_REGISTRY[name].builder(cast(ee.Geometry, region))
+        out[name] = image.clip(region) if clip else image
+    return out
 
 
 def summarize_baseline_layers(
@@ -272,56 +423,145 @@ def summarize_baseline_layers(
     return stats_fc
 
 
+def _prepare_baseline_export(image: ee.Image, name: str, scale: float) -> ee.Image:
+    # Aggregate (mean / mode) when exporting coarser than the source; at or below
+    # native scale EE's default nearest-neighbour resampling is used. Layers not in
+    # the registry are exported as they are.
+    spec = BASELINE_LAYER_REGISTRY.get(name)
+    if spec is None or spec.resample == "nearest":
+        return image
+    ratio = scale / spec.native_scale_m
+    if ratio <= 1.001:
+        return image
+    reducer = ee.Reducer.mean() if spec.resample == "mean" else ee.Reducer.mode()
+    max_pixels = min(math.ceil(ratio + 1) ** 2, BASELINE_RESAMPLE_MAX_PIXELS_CAP)
+    return image.reduceResolution(reducer=reducer, maxPixels=max_pixels)
+
+
 def export_baseline_layers(
     layers: dict[str, ee.Image],
-    aoi: ee.Geometry,
-    export_folder: str,
+    region: ee.Geometry | None = None,
+    export_folder: str | None = None,
     layer_names: list[str] | None = None,
-    scale_dict: dict[str, int] | None = None,
+    scale_dict: dict[str, float] | None = None,
     crs: str = DEFAULT_CRS,
-) -> dict:
-    """Export a selected subset of baseline layers to Drive as individual GeoTIFFs.
+    *,
+    dest: Literal["drive", "gcs"] = "drive",
+    bucket: str | None = None,
+    prefix: str | None = None,
+    skip_existing: bool = True,
+    start: bool = True,
+    aoi: ee.Geometry | None = None,
+) -> dict[str, Any]:
+    """Export baseline layers, one GeoTIFF per layer, to Drive or Cloud Storage.
+
+    Each layer is exported at its registry ``export_scale_m`` (override per layer
+    with ``scale_dict``). When that is coarser than the layer's native scale it is
+    aggregated first with ``reduceResolution``: mean for continuous layers, mode for
+    categorical ones (e.g. canopy height 1 m -> 10 m mean by default).
+
+    ``dest="gcs"`` writes cloud-optimised GeoTIFFs to
+    ``gs://<bucket>/<prefix>/<layer>.tif`` on ``snapped_transform(region, crs,
+    scale)`` (categorical layers as int16 with no-data -32768, continuous as float32
+    with -9999), skipping layers that already exist when ``skip_existing``. ``crs``
+    must then be a projected CRS (e.g. the project UTM zone), because the scale is
+    in metres.
 
     Args:
         layers: Layer dict as returned by :func:`build_baseline_layers`.
-        aoi: Export region as ee.Geometry, shared by every layer.
-        export_folder: Google Drive folder name to write all files into.
-        layer_names: Layer keys to export; defaults to every key in
-            BASELINE_LAYER_NAMES (all baseline layers).
-        scale_dict: Per-layer export scale in metres, keyed by layer name;
-            defaults to DEFAULT_BASELINE_EXPORT_SCALE (uniform 30m).
-        crs: Coordinate reference system applied to every export (default
-            DEFAULT_CRS).
+        region: Export region shared by every layer (e.g. bbox of all sites + buffer).
+        export_folder: Google Drive folder (required for ``dest="drive"``).
+        layer_names: Layer keys to export; defaults to every key of ``layers``.
+        scale_dict: Per-layer export scale in metres; layers it omits use the registry ``export_scale_m``.
+        crs: Output CRS (default DEFAULT_CRS; pass a projected CRS for ``dest="gcs"``).
+        dest: ``"drive"`` (default) or ``"gcs"``.
+        bucket: Cloud Storage bucket (required for ``dest="gcs"``).
+        prefix: Object prefix (required for ``dest="gcs"``).
+        skip_existing: ``dest="gcs"`` only: skip layers whose tif already exists.
+        start: ``dest="gcs"`` only: start the tasks (Drive tasks always start).
+        aoi: Deprecated alias for ``region``.
 
     Returns:
-        dict mapping each exported layer name to its started ee.batch.Task.
+        dict mapping each exported layer name to its ee.batch.Task (``None`` for a skipped GCS layer).
 
     Raises:
-        ValueError: If layer_names or scale_dict names a layer not present in
-            layers.
+        ValueError: If a layer is missing from ``layers``, has no scale (not in the registry or ``scale_dict``), ``dest`` is unknown, a destination argument is missing, or ``dest="gcs"`` is used with EPSG:4326.
     """
-    layer_names = layer_names if layer_names is not None else list(BASELINE_LAYER_NAMES)
-    scale_dict = scale_dict if scale_dict is not None else DEFAULT_BASELINE_EXPORT_SCALE
-
-    missing_layers = [name for name in layer_names if name not in layers]
+    if aoi is not None:
+        if region is not None:
+            raise ValueError("Pass region, not both region and aoi.")
+        warnings.warn(
+            "export_baseline_layers(aoi=...) is deprecated; use region=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        region = aoi
+    if region is None:
+        raise ValueError("region is required.")
+    names = list(layers) if layer_names is None else list(layer_names)
+    missing_layers = [name for name in names if name not in layers]
     if missing_layers:
         raise ValueError(f"Layer(s) not found in layers dict: {missing_layers}")
-    missing_scales = [name for name in layer_names if name not in scale_dict]
+    scales = {
+        name: spec.export_scale_m for name, spec in BASELINE_LAYER_REGISTRY.items()
+    }
+    if scale_dict is not None:
+        scales.update(scale_dict)
+    missing_scales = [name for name in names if name not in scales]
     if missing_scales:
         raise ValueError(f"Layer(s) not found in scale_dict: {missing_scales}")
 
-    images = [(layers[name], name, scale_dict[name]) for name in layer_names]
-    tasks = export_image_list_to_drive(
-        images=images, aoi=aoi, folder=export_folder, crs=crs
-    )
-    return dict(zip(layer_names, tasks))
+    prepared = [
+        (name, _prepare_baseline_export(layers[name], name, scales[name]), scales[name])
+        for name in names
+    ]
+
+    if dest == "drive":
+        if export_folder is None:
+            raise ValueError('export_folder is required for dest="drive".')
+        tasks = export_image_list_to_drive(
+            images=[(image, name, scale) for name, image, scale in prepared],
+            aoi=region,
+            folder=export_folder,
+            crs=crs,
+        )
+        return dict(zip(names, tasks))
+
+    if dest != "gcs":
+        raise ValueError(f'dest must be "drive" or "gcs", got {dest!r}.')
+    if bucket is None or prefix is None:
+        raise ValueError('bucket and prefix are required for dest="gcs".')
+    if crs.upper() == "EPSG:4326":
+        raise ValueError(
+            'dest="gcs" needs a projected crs (e.g. the project UTM zone): '
+            "scales are in metres and the grid is snapped in crs units."
+        )
+    transforms: dict[float, list[float]] = {}
+    result: dict[str, Any] = {}
+    for name, image, scale in prepared:
+        if scale not in transforms:  # one small getInfo per distinct scale
+            transforms[scale] = snapped_transform(region, crs, scale)
+        spec = BASELINE_LAYER_REGISTRY.get(name)
+        categorical = spec.categorical if spec is not None else False
+        result[name] = export_image_to_gcs(
+            image,
+            region,
+            bucket=bucket,
+            file_name_prefix=f"{prefix}/{name}",
+            crs=crs,
+            crs_transform=transforms[scale],
+            dtype="int16" if categorical else "float32",
+            skip_existing=skip_existing,
+            start=start,
+        )
+    return result
 
 
 def run_baseline_assessment(
     sites_fc: ee.FeatureCollection,
     export_folder: str,
     layer_names: list[str] | None = None,
-    scale_dict: dict[str, int] | None = None,
+    scale_dict: dict[str, float] | None = None,
     crs: str = DEFAULT_CRS,
     scale_continuous: int = 30,
     scale_landcover: int = 10,
@@ -351,8 +591,9 @@ def run_baseline_assessment(
             and summary table always cover the full baseline stack regardless
             of this filter.
         scale_dict: Per-layer raster export scale in metres, keyed by layer
-            name; defaults to DEFAULT_BASELINE_EXPORT_SCALE (uniform 30m,
-            including canopy_height downsampled from its native 1m).
+            name; layers it omits use the registry ``export_scale_m`` (e.g.
+            canopy_height 10 m mean, land_cover 10 m, bii_all 1 km). Pass
+            ``DEFAULT_BASELINE_EXPORT_SCALE`` for the pre-0.7.1 uniform 30 m.
         crs: Coordinate reference system for both the raster and summary
             exports (default DEFAULT_CRS).
         scale_continuous: Pixel scale in metres for the per-site
@@ -377,7 +618,7 @@ def run_baseline_assessment(
         started as a side effect.
     """
     aoi = get_sites_geometry(sites_fc)
-    layers = build_baseline_layers(aoi)
+    layers = build_baseline_layers(aoi, clip=True)
 
     summary_fc = summarize_baseline_layers(
         sites_fc=sites_fc,
@@ -391,7 +632,7 @@ def run_baseline_assessment(
 
     export_baseline_layers(
         layers=layers,
-        aoi=aoi,
+        region=aoi,
         export_folder=export_folder,
         layer_names=layer_names,
         scale_dict=scale_dict,

@@ -233,6 +233,30 @@ stats = run_site_timeseries(
 layers, summary = run_baseline_assessment(sites, export_folder="eetools_baseline")
 ```
 
+Baseline layers come from `workflows.BASELINE_LAYER_REGISTRY`. Each entry has a
+builder, a default export scale, a resampling method, and the dataset ID, version,
+licence, unit and band. `baseline_layer_register()` returns those rows for a data
+register. The registry holds the nine default layers plus the opt-in
+`forest_lossyear`, `soilgrids_wrb` and `human_modification`.
+
+`build_baseline_layers(region, layers=None, clip=False)` returns the layers
+unclipped. `export_baseline_layers(..., dest="gcs", bucket=..., prefix=..., crs=...)`
+writes one COG per layer over the study extent, on a snapped grid. A layer exported
+coarser than its native resolution is aggregated first: mean for continuous layers,
+mode for categorical ones. For example, canopy height goes from 1 m to 10 m by
+mean, and is never exported at 1 m over a bbox.
+
+```python
+from eetools.workflows import build_baseline_layers, export_baseline_layers
+
+names = ["dem", "canopy_height", "land_cover", "forest_lossyear", "human_modification"]
+layers = build_baseline_layers(study_bbox, layers=names)
+tasks = export_baseline_layers(
+    layers, study_bbox, dest="gcs", bucket="my-bucket", prefix="proj/baseline",
+    crs="EPSG:32737",
+)
+```
+
 `run_seasonal_site_timeseries` does the same as `run_site_timeseries` with
 seasonal composites. `scale` is required for all site timeseries functions: choose
 the sensor's native resolution (e.g. 10 m for Sentinel-2, 30 m for HLS/Landsat).

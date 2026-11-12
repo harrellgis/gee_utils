@@ -59,7 +59,7 @@ def export_image_to_drive(
     description: str,
     folder: str,
     file_prefix: str,
-    scale: int,
+    scale: float,
     crs: str = "EPSG:4326",
 ):
     """Export a single Earth Engine image to Google Drive, unmasking nodata to -9999.
@@ -96,7 +96,7 @@ def export_image_to_drive(
 
 
 def export_image_list_to_drive(
-    images: list[tuple[ee.Image, str, int]],
+    images: list[tuple[ee.Image, str, float]],
     aoi: ee.Geometry,
     folder: str,
     crs: str = "EPSG:4326",

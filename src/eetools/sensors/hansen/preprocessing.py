@@ -31,17 +31,17 @@ def get_forest_change_image(aoi: ee.Geometry | None = None) -> ee.Image:
     return gfc
 
 
-def get_forest_2000(aoi: ee.Geometry) -> ee.Image:
+def get_forest_2000(aoi: ee.Geometry | None = None) -> ee.Image:
     """Return tree canopy cover (%) for the year 2000, clipped to the AOI.
 
     Args:
-        aoi: Area of interest as ee.Geometry; the result is clipped to it.
+        aoi: Area of interest as ee.Geometry; the result is clipped to it (None: unclipped).
 
     Returns:
         ee.Image with a single 'treecover2000' band (canopy closure %, 0-100) clipped to the AOI.
     """
     forest_2000 = get_forest_change_image().select(HANSEN_TREECOVER_BAND)
-    return forest_2000.clip(aoi)
+    return forest_2000 if aoi is None else forest_2000.clip(aoi)
 
 
 def get_tree_cover_mask(
@@ -63,14 +63,14 @@ def get_tree_cover_mask(
 
 
 def get_forest_loss_image(
-    aoi: ee.Geometry,
+    aoi: ee.Geometry | None = None,
     tree_cover_threshold: int = HANSEN_TREE_COVER_THRESHOLD,
 ) -> ee.Image:
     """Return a binary forest-loss image (forest in 2000 AND a loss event), clipped to
     the AOI.
 
     Args:
-        aoi: Area of interest as ee.Geometry; the result is clipped to it.
+        aoi: Area of interest as ee.Geometry; the result is clipped to it (None: unclipped).
         tree_cover_threshold: Minimum year-2000 canopy cover % counted as forest (default HANSEN_TREE_COVER_THRESHOLD).
 
     Returns:
@@ -81,11 +81,11 @@ def get_forest_loss_image(
     loss = gfc.select(HANSEN_LOSS_BAND)
 
     forest_loss = forest2000.And(loss).rename("forest_loss")
-    return forest_loss.clip(aoi)
+    return forest_loss if aoi is None else forest_loss.clip(aoi)
 
 
 def get_forest_loss_year_image(
-    aoi: ee.Geometry,
+    aoi: ee.Geometry | None = None,
     tree_cover_threshold: int = HANSEN_TREE_COVER_THRESHOLD,
 ) -> ee.Image:
     """Return the year-of-loss image masked to year-2000 forest, clipped to the AOI.
@@ -94,7 +94,7 @@ def get_forest_loss_year_image(
     ``HANSEN_LOSSYEAR_EPOCH`` to recover the absolute year.
 
     Args:
-        aoi: Area of interest as ee.Geometry; the result is clipped to it.
+        aoi: Area of interest as ee.Geometry; the result is clipped to it (None: unclipped).
         tree_cover_threshold: Minimum year-2000 canopy cover % counted as forest (default HANSEN_TREE_COVER_THRESHOLD).
 
     Returns:
@@ -105,7 +105,7 @@ def get_forest_loss_year_image(
     lossyear = (
         gfc.select(HANSEN_LOSSYEAR_BAND).updateMask(forest2000).rename("lossyear")
     )
-    return lossyear.clip(aoi)
+    return lossyear if aoi is None else lossyear.clip(aoi)
 
 
 def get_forest_gain_image(aoi: ee.Geometry) -> ee.Image:

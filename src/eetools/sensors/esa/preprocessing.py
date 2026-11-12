@@ -3,7 +3,9 @@ import ee
 from eetools.constants import ESA_BAND, ESA_WC_COLLECTION
 
 
-def get_land_cover(aoi: ee.Geometry | None = None) -> ee.Image:
+def get_land_cover(
+    aoi: ee.Geometry | None = None, *, pin_projection: bool = False
+) -> ee.Image:
     """Load the raw ESA WorldCover categorical land-cover classification, optionally
     clipped to an AOI.
 
@@ -12,15 +14,17 @@ def get_land_cover(aoi: ee.Geometry | None = None) -> ee.Image:
 
     Args:
         aoi: Optional area of interest as ee.Geometry; if provided, the image is clipped to it.
+        pin_projection: Set the mosaic's default projection to the native 10 m projection of the collection's first image. A bare ``mosaic()`` has none, which ``reduceResolution`` rejects; pass True before aggregating.
 
     Returns:
         ee.Image with a single 'land_cover' band (categorical class codes), clipped to aoi when provided.
     """
-    land_cover = (
-        ee.ImageCollection(ESA_WC_COLLECTION)
-        .mosaic()
-        .select([ESA_BAND], ["land_cover"])
-    )
+    collection = ee.ImageCollection(ESA_WC_COLLECTION)
+    land_cover = collection.mosaic().select([ESA_BAND], ["land_cover"])
+    if pin_projection:
+        land_cover = land_cover.setDefaultProjection(
+            collection.first().select(ESA_BAND).projection()
+        )
     if aoi is not None:
         land_cover = land_cover.clip(aoi)
     return land_cover
