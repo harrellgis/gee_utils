@@ -78,22 +78,27 @@ def test_woody_fraction_scale_and_custom_max_pixels(mock_ee):
 
 
 def test_woody_fraction_defaults_to_meta_chm(mock_ee):
-    meta_mosaic = MagicMock(name="mosaic")
-    with patch.object(chm_mod, "get_canopy_height", return_value=meta_mosaic) as meta:
+    with patch.object(chm_mod, "get_canopy_height", return_value="META") as meta:
         chm_mod.woody_fraction_from_chm(crs="EPSG:32737")
-    meta.assert_called_once_with()
-    # The mosaic is pinned to the native projection of the collection's tiles.
-    mock_ee.ImageCollection.assert_called_once_with(
-        "projects/sat-io/open-datasets/facebook/meta-canopy-height"
-    )
-    first = mock_ee.ImageCollection.return_value.first.return_value
-    first.select.assert_called_once_with("cover_code")
-    meta_mosaic.setDefaultProjection.assert_called_once_with(
-        first.select.return_value.projection.return_value
-    )
-    mock_ee.Image.assert_any_call(meta_mosaic.setDefaultProjection.return_value)
+    # The mosaic is pinned to its tiles' native projection before aggregating.
+    meta.assert_called_once_with(pin_projection=True)
+    mock_ee.Image.assert_any_call("META")
     chm = mock_ee.Image.return_value.select.return_value
     assert [c.args[0] for c in chm.gte.call_args_list] == [2.0, 3.0, 5.0]
+
+
+def test_get_canopy_height_pin_projection(mock_ee):
+    collection = mock_ee.ImageCollection.return_value
+    mosaic = collection.mosaic.return_value.select.return_value
+    assert chm_mod.get_canopy_height() is mosaic
+    mosaic.setDefaultProjection.assert_not_called()
+
+    out = chm_mod.get_canopy_height(pin_projection=True)
+    collection.first.return_value.select.assert_called_with("cover_code")
+    mosaic.setDefaultProjection.assert_called_once_with(
+        collection.first.return_value.select.return_value.projection.return_value
+    )
+    assert out is mosaic.setDefaultProjection.return_value
 
 
 @pytest.mark.parametrize(

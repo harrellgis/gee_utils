@@ -724,8 +724,9 @@ BASELINE_CONTINUOUS_LAYERS = [
     "soil_carbon",
     "bii_all",
 ]
-# Default per-layer raster export scale (m) -- uniform 30m, including canopy_height
-# downsampled from its native 1m, so every baseline layer shares one output grid.
+# Legacy (pre-0.7.1) uniform 30 m export scales, including canopy_height
+# downsampled from its native 1m. The default is now each registry export_scale_m
+# (BASELINE_LAYER_METADATA); pass this as scale_dict for the old behaviour.
 DEFAULT_BASELINE_EXPORT_SCALE = {name: 30 for name in BASELINE_LAYER_NAMES}
 
 #################### IMAGE TEXTURE (sensors/texture.py) ##########################
@@ -1461,3 +1462,155 @@ TOP_CANDIDATES_N = 10
 TOP_CANDIDATES_CONDITION_WEIGHT = 0.5
 ZERO_STAR_MAX_PERFORMANCE = 0.5
 SPAN_ENV_COVERAGE_SD = 1.0  # env_coverage: focal samples within this RMS z-distance
+
+#################### BASELINE LAYER REGISTRY (eetools.workflows) ##########################
+# Metadata for every static baseline layer; workflows.BASELINE_LAYER_REGISTRY pairs it
+# with a builder. export_scale_m is the default export pixel size; layers exported
+# coarser than native_scale_m are aggregated with reduceResolution(resample), i.e.
+# mean for continuous layers and mode for categorical ones. Licences checked against
+# the EE catalog / vault dataset pages on 2026-11-12. BASELINE_LAYER_NAMES (above)
+# stays the default nine; the extra layers are opt-in via layers=.
+BASELINE_EXTRA_LAYER_NAMES = ["forest_lossyear", "soilgrids_wrb", "human_modification"]
+BASELINE_RESAMPLE_MAX_PIXELS_CAP = 65536  # reduceResolution maxPixels upper bound
+_DEM_LICENCE = (
+    "Copernicus DEM GLO-30 licence: free worldwide except Armenia and Azerbaijan; "
+    "attribution required"
+)
+_DEM_VERSION = "GLO-30 2024_1"
+_HANSEN_VERSION = "v1.13 (2000-2025)"
+BASELINE_LAYER_METADATA: dict[str, dict[str, object]] = {
+    "dem": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=False,
+        resample="mean",
+        dataset_id=COPERNICUS_DEM_COLLECTION,
+        version=_DEM_VERSION,
+        licence=_DEM_LICENCE,
+        unit="m (EGM2008)",
+        band="elevation",
+    ),
+    "slope": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=False,
+        resample="mean",
+        dataset_id=COPERNICUS_DEM_COLLECTION,
+        version=f"{_DEM_VERSION} (ee.Terrain)",
+        licence=_DEM_LICENCE,
+        unit="degrees",
+        band="slope",
+    ),
+    "hillshade": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=False,
+        resample="mean",
+        dataset_id=COPERNICUS_DEM_COLLECTION,
+        version=f"{_DEM_VERSION} (ee.Terrain)",
+        licence=_DEM_LICENCE,
+        unit="0-255",
+        band="hillshade",
+    ),
+    # Never export the 1 m CHM over a bbox: 10 m mean is the registry default.
+    "canopy_height": dict(
+        export_scale_m=10,
+        native_scale_m=1,
+        categorical=False,
+        resample="mean",
+        dataset_id=META_CANOPY_HEIGHT_COLLECTION,
+        version="v1 (fused 2009-2020 baseline)",
+        licence="CC BY 4.0",
+        unit="m",
+        band="canopy_height",
+    ),
+    "land_cover": dict(
+        export_scale_m=10,
+        native_scale_m=10,
+        categorical=True,
+        resample="mode",
+        dataset_id=ESA_WC_COLLECTION,
+        version="v200 (2021)",
+        licence="CC BY 4.0",
+        unit="class code",
+        band="land_cover",
+    ),
+    # iSDA stores carbon log-encoded; the catalog's back-transform is exp(x / 10) - 1.
+    "soil_carbon": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=False,
+        resample="mean",
+        dataset_id=ISDA_CARBON_COLLECTION,
+        version="v1 (0-20 cm mean)",
+        licence="CC BY 4.0",
+        unit="log-encoded g/kg (g/kg = exp(x / 10) - 1)",
+        band="soil_carbon",
+    ),
+    "bii_all": dict(
+        export_scale_m=1000,
+        native_scale_m=1000,
+        categorical=False,
+        resample="mean",
+        dataset_id=BII_1KM_COLLECTION,
+        version="bii4africa 1 km",
+        licence="CC BY 4.0",
+        unit="fraction (0-1)",
+        band="BII All",
+    ),
+    "forest_2000": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=False,
+        resample="mean",
+        dataset_id=HANSEN_GFC_COLLECTION,
+        version=_HANSEN_VERSION,
+        licence="CC BY 4.0",
+        unit="% canopy cover",
+        band="treecover2000",
+    ),
+    "forest_loss": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=True,
+        resample="mode",
+        dataset_id=HANSEN_GFC_COLLECTION,
+        version=_HANSEN_VERSION,
+        licence="CC BY 4.0",
+        unit="0/1",
+        band="forest_loss",
+    ),
+    "forest_lossyear": dict(
+        export_scale_m=30,
+        native_scale_m=30,
+        categorical=True,
+        resample="mode",
+        dataset_id=HANSEN_GFC_COLLECTION,
+        version=_HANSEN_VERSION,
+        licence="CC BY 4.0",
+        unit="year code (1-25 = 2001-2025)",
+        band="lossyear",
+    ),
+    "soilgrids_wrb": dict(
+        export_scale_m=230,
+        native_scale_m=230,
+        categorical=True,
+        resample="mode",
+        dataset_id=SOILGRIDS_WRB_ASSET_ID,
+        version="SoilGrids 2.0 WRB most probable (Kenya clip)",
+        licence="CC BY 4.0",
+        unit="WRB class code (0-29)",
+        band="wrb_group",
+    ),
+    "human_modification": dict(
+        export_scale_m=90,
+        native_scale_m=90,
+        categorical=False,
+        resample="mean",
+        dataset_id=HUMAN_MODIFICATION_COLLECTION,
+        version=f"v3 {HUMAN_MODIFICATION_YEAR} (90m_s)",
+        licence="CC BY 4.0",
+        unit="index (0-1)",
+        band="ghm",
+    ),
+}

@@ -7,6 +7,7 @@ propagate without being caught, so those paths are also verified here without mo
 on the compositing functions.
 """
 
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -270,53 +271,140 @@ def test_run_seasonal_site_timeseries_rejects_bad_composite_stat():
 
 
 # --------------------------------------------------------------------------- #
-# build_baseline_layers
+# Baseline layer registry + build_baseline_layers
 # --------------------------------------------------------------------------- #
+ALL_LAYERS = workflows.BASELINE_LAYER_NAMES + workflows.BASELINE_EXTRA_LAYER_NAMES
 
 
-def test_build_baseline_layers_wires_all_sensors():
-    mock_aoi = "mock_aoi"
-    mock_terrain = MagicMock(name="terrain")
-    mock_terrain.select.side_effect = lambda band: f"terrain_{band}"
+def test_registry_is_complete_and_ordered():
+    registry = workflows.BASELINE_LAYER_REGISTRY
+    assert list(registry) == ALL_LAYERS
+    for name, spec in registry.items():
+        assert spec.name == name
+        assert callable(spec.builder)
+        for field in ("dataset_id", "version", "licence", "unit", "band"):
+            assert getattr(spec, field), f"{name}.{field} is empty"
+        assert spec.export_scale_m > 0 and spec.native_scale_m > 0
+        assert spec.resample in ("mean", "mode", "nearest")
+        # categorical layers aggregate by mode, continuous ones by mean
+        assert spec.resample == ("mode" if spec.categorical else "mean")
 
-    with (
-        patch.object(
-            workflows, "get_terrain", return_value=mock_terrain
-        ) as get_terrain,
-        patch.object(
-            workflows, "get_canopy_height", return_value="canopy"
-        ) as get_canopy,
-        patch.object(workflows, "get_land_cover", return_value="land_cover") as get_lc,
-        patch.object(workflows, "get_soil_carbon", return_value="soil") as get_soil,
-        patch.object(workflows, "get_bii", return_value="bii") as get_bii,
-        patch.object(
-            workflows, "get_forest_2000", return_value="forest_2000"
-        ) as get_f2000,
-        patch.object(
-            workflows, "get_forest_loss_image", return_value="forest_loss"
-        ) as get_floss,
-    ):
-        layers = workflows.build_baseline_layers(mock_aoi)
 
-    get_terrain.assert_called_once_with(aoi=mock_aoi)
-    get_canopy.assert_called_once_with(aoi=mock_aoi)
-    get_lc.assert_called_once_with(aoi=mock_aoi)
-    get_soil.assert_called_once_with(aoi=mock_aoi)
-    get_bii.assert_called_once_with(mock_aoi, "BII All", "1km")
-    get_f2000.assert_called_once_with(mock_aoi)
-    get_floss.assert_called_once_with(mock_aoi)
+def test_registry_spec_values_from_build_spec():
+    registry = workflows.BASELINE_LAYER_REGISTRY
+    chm = registry["canopy_height"]
+    assert (chm.export_scale_m, chm.native_scale_m, chm.resample) == (10, 1, "mean")
+    lossyear = registry["forest_lossyear"]
+    assert lossyear.categorical and lossyear.export_scale_m == 30
+    assert lossyear.dataset_id == "UMD/hansen/global_forest_change_2025_v1_13"
+    wrb = registry["soilgrids_wrb"]
+    assert wrb.categorical and wrb.export_scale_m == 230
+    assert wrb.licence == "CC BY 4.0"
+    ghm = registry["human_modification"]
+    assert ghm.dataset_id == "TNC/HM/v3/90m_s" and ghm.export_scale_m == 90
+    assert "vecea" not in registry
 
-    assert layers == {
-        "dem": "terrain_elevation",
-        "slope": "terrain_slope",
-        "hillshade": "terrain_hillshade",
-        "canopy_height": "canopy",
-        "land_cover": "land_cover",
-        "soil_carbon": "soil",
-        "bii_all": "bii",
-        "forest_2000": "forest_2000",
-        "forest_loss": "forest_loss",
+
+@pytest.fixture
+def mock_builders():
+    """Replace every registry builder with a mock returning a named MagicMock."""
+    images = {name: MagicMock(name=f"img_{name}") for name in ALL_LAYERS}
+    builders = {name: MagicMock(return_value=images[name]) for name in ALL_LAYERS}
+    registry = {
+        name: replace(spec, builder=builders[name])
+        for name, spec in workflows.BASELINE_LAYER_REGISTRY.items()
     }
+    with patch.object(workflows, "BASELINE_LAYER_REGISTRY", registry):
+        yield builders, images
+
+
+def test_build_baseline_layers_default_nine_unclipped(mock_builders):
+    builders, images = mock_builders
+    layers = workflows.build_baseline_layers("REGION")
+
+    assert list(layers) == workflows.BASELINE_LAYER_NAMES
+    for name in workflows.BASELINE_LAYER_NAMES:
+        builders[name].assert_called_once_with("REGION")
+        assert layers[name] is images[name]
+        images[name].clip.assert_not_called()
+    for name in workflows.BASELINE_EXTRA_LAYER_NAMES:
+        builders[name].assert_not_called()
+
+
+def test_build_baseline_layers_subset_and_clip(mock_builders):
+    _, images = mock_builders
+    layers = workflows.build_baseline_layers(
+        "REGION", layers=["forest_lossyear", "dem"], clip=True
+    )
+    assert list(layers) == ["forest_lossyear", "dem"]
+    images["dem"].clip.assert_called_once_with("REGION")
+    assert layers["dem"] is images["dem"].clip.return_value
+
+
+def test_build_baseline_layers_errors_and_deprecated_aoi(mock_builders):
+    with pytest.raises(ValueError, match="Unknown baseline layer"):
+        workflows.build_baseline_layers("REGION", layers=["vecea"])
+    with pytest.raises(ValueError, match="needs a region"):
+        workflows.build_baseline_layers(clip=True)
+    with pytest.raises(ValueError, match="not both"):
+        workflows.build_baseline_layers("REGION", aoi="AOI")
+    with pytest.warns(DeprecationWarning, match="region"):
+        layers = workflows.build_baseline_layers(aoi="AOI", layers=["dem"])
+    assert list(layers) == ["dem"]
+
+
+def test_registry_builders_wire_sensor_loaders():
+    terrain = MagicMock(name="terrain")
+    bii = MagicMock(name="bii")
+    with (
+        patch.object(workflows, "get_terrain", return_value=terrain) as get_terrain,
+        patch.object(workflows, "get_canopy_height") as get_chm,
+        patch.object(workflows, "get_land_cover") as get_lc,
+        patch.object(workflows, "get_soil_carbon") as get_soil,
+        patch.object(workflows, "get_bii_image", return_value=bii) as get_bii,
+        patch.object(workflows, "get_forest_2000") as get_f2000,
+        patch.object(workflows, "get_forest_loss_image") as get_floss,
+        patch.object(workflows, "get_forest_loss_year_image") as get_fyear,
+        patch.object(workflows, "get_soilgrids_wrb") as get_wrb,
+        patch.object(workflows, "get_human_modification") as get_ghm,
+    ):
+        layers = workflows.build_baseline_layers("REGION", layers=ALL_LAYERS)
+
+    assert layers["dem"] is terrain.select.return_value
+    assert [c.args for c in terrain.select.call_args_list] == [
+        ("elevation",),
+        ("slope",),
+        ("hillshade",),
+    ]
+    assert get_terrain.call_count == 3
+    get_chm.assert_called_once_with(pin_projection=True)
+    get_lc.assert_called_once_with(pin_projection=True)
+    get_soil.assert_called_once_with()
+    get_bii.assert_called_once_with("1km")
+    bii.select.assert_called_once_with("BII All")
+    for loader in (get_f2000, get_floss, get_fyear, get_wrb, get_ghm):
+        loader.assert_called_once_with()  # unclipped; clipping is opt-in
+
+
+def test_baseline_layer_register_rows():
+    rows = workflows.baseline_layer_register(["canopy_height", "soilgrids_wrb"])
+    assert [r["name"] for r in rows] == ["canopy_height", "soilgrids_wrb"]
+    assert rows[0]["export_scale_m"] == 10 and rows[0]["licence"] == "CC BY 4.0"
+    assert set(rows[1]) == {
+        "name",
+        "dataset_id",
+        "version",
+        "licence",
+        "unit",
+        "band",
+        "categorical",
+        "native_scale_m",
+        "export_scale_m",
+        "resample",
+    }
+    assert [r["name"] for r in workflows.baseline_layer_register()] == ALL_LAYERS
+    with pytest.raises(ValueError, match="Unknown"):
+        workflows.baseline_layer_register(["bogus"])
 
 
 # --------------------------------------------------------------------------- #
@@ -391,37 +479,72 @@ def test_summarize_baseline_layers_skips_landcover_areas_when_disabled(
 # --------------------------------------------------------------------------- #
 # export_baseline_layers
 # --------------------------------------------------------------------------- #
+def _mock_layers(names):
+    return {name: MagicMock(name=f"img_{name}") for name in names}
 
 
-def test_export_baseline_layers_uses_defaults_and_returns_task_dict():
-    layers = {name: f"img_{name}" for name in workflows.BASELINE_LAYER_NAMES}
+def test_export_baseline_layers_drive_uses_registry_scales_and_resample():
+    layers = _mock_layers(workflows.BASELINE_LAYER_NAMES)
     mock_tasks = [f"task_{i}" for i in range(len(layers))]
 
-    with patch.object(
-        workflows, "export_image_list_to_drive", return_value=mock_tasks
-    ) as export_list:
+    with (
+        patch.object(
+            workflows, "export_image_list_to_drive", return_value=mock_tasks
+        ) as export_list,
+        patch.object(workflows, "ee") as mock_ee,
+    ):
         result = workflows.export_baseline_layers(layers, "mock_aoi", "my_folder")
 
-    export_list.assert_called_once()
     kwargs = export_list.call_args.kwargs
     assert kwargs["aoi"] == "mock_aoi"
     assert kwargs["folder"] == "my_folder"
     assert kwargs["crs"] == workflows.DEFAULT_CRS
-    assert [name for _, name, _ in kwargs["images"]] == workflows.BASELINE_LAYER_NAMES
-    assert [scale for _, _, scale in kwargs["images"]] == [30] * len(layers)
-    assert result == dict(zip(workflows.BASELINE_LAYER_NAMES, mock_tasks))
+    names = [name for _, name, _ in kwargs["images"]]
+    assert names == workflows.BASELINE_LAYER_NAMES
+    scales = dict((name, scale) for _, name, scale in kwargs["images"])
+    assert scales == {
+        name: workflows.BASELINE_LAYER_REGISTRY[name].export_scale_m for name in names
+    }
+    images = {name: image for image, name, _ in kwargs["images"]}
+    # canopy_height: 1 m -> 10 m, aggregated by mean with enough maxPixels.
+    chm = layers["canopy_height"]
+    chm.reduceResolution.assert_called_once_with(
+        reducer=mock_ee.Reducer.mean.return_value, maxPixels=121
+    )
+    assert images["canopy_height"] is chm.reduceResolution.return_value
+    # Everything else exports at its native scale: no aggregation.
+    for name in names:
+        if name != "canopy_height":
+            layers[name].reduceResolution.assert_not_called()
+            assert images[name] is layers[name]
+    assert result == dict(zip(names, mock_tasks))
+
+
+def test_export_baseline_layers_coarser_categorical_uses_mode():
+    layers = _mock_layers(["land_cover", "dem"])
+    with (
+        patch.object(workflows, "export_image_list_to_drive", return_value=["a", "b"]),
+        patch.object(workflows, "ee") as mock_ee,
+    ):
+        workflows.export_baseline_layers(
+            layers, "aoi", "folder", scale_dict={"land_cover": 30, "dem": 90}
+        )
+    layers["land_cover"].reduceResolution.assert_called_once_with(
+        reducer=mock_ee.Reducer.mode.return_value, maxPixels=16
+    )
+    layers["dem"].reduceResolution.assert_called_once_with(
+        reducer=mock_ee.Reducer.mean.return_value, maxPixels=16
+    )
 
 
 def test_export_baseline_layers_selective_layer_names():
-    layers = {name: f"img_{name}" for name in workflows.BASELINE_LAYER_NAMES}
-
+    layers = _mock_layers(workflows.BASELINE_LAYER_NAMES)
     with patch.object(
         workflows, "export_image_list_to_drive", return_value=["t1", "t2"]
     ) as export_list:
         result = workflows.export_baseline_layers(
             layers, "aoi", "folder", layer_names=["dem", "slope"]
         )
-
     kwargs = export_list.call_args.kwargs
     assert [name for _, name, _ in kwargs["images"]] == ["dem", "slope"]
     assert result == {"dem": "t1", "slope": "t2"}
@@ -434,15 +557,90 @@ def test_export_baseline_layers_rejects_unknown_layer_name():
         )
 
 
-def test_export_baseline_layers_rejects_unknown_scale_key():
+def test_export_baseline_layers_needs_scale_for_non_registry_layer():
+    custom = MagicMock(name="custom")
     with pytest.raises(ValueError, match="not found in scale_dict"):
         workflows.export_baseline_layers(
-            {"dem": "img", "slope": "img2"},
-            "aoi",
-            "folder",
-            layer_names=["dem", "slope"],
-            scale_dict={"dem": 30},
+            {"custom": custom}, "aoi", "folder", scale_dict={"dem": 30}
         )
+    with patch.object(
+        workflows, "export_image_list_to_drive", return_value=["t"]
+    ) as export_list:
+        workflows.export_baseline_layers(
+            {"custom": custom}, "aoi", "folder", scale_dict={"custom": 50}
+        )
+    ((image, name, scale),) = export_list.call_args.kwargs["images"]
+    assert (image, name, scale) == (custom, "custom", 50)
+
+
+def test_export_baseline_layers_gcs_config():
+    layers = _mock_layers(["forest_lossyear", "human_modification", "bii_all"])
+    transforms = {
+        30: [30.0, 0.0, 0.0, 0.0, -30.0, 0.0],
+        90: [90.0, 0.0, 0.0, 0.0, -90.0, 0.0],
+        1000: [1000.0, 0.0, 0.0, 0.0, -1000.0, 0.0],
+    }
+    with (
+        patch.object(
+            workflows, "snapped_transform", side_effect=lambda r, c, s: transforms[s]
+        ) as snap,
+        patch.object(workflows, "export_image_to_gcs") as export_gcs,
+        patch.object(workflows, "export_image_list_to_drive") as export_drive,
+    ):
+        result = workflows.export_baseline_layers(
+            layers,
+            "BBOX",
+            dest="gcs",
+            bucket="bkt",
+            prefix="proj/baseline",
+            crs="EPSG:32737",
+            skip_existing=False,
+            start=False,
+        )
+
+    export_drive.assert_not_called()
+    assert snap.call_count == 3
+    calls = {c.kwargs["file_name_prefix"]: c for c in export_gcs.call_args_list}
+    lossyear = calls["proj/baseline/forest_lossyear"]
+    assert lossyear.args == (layers["forest_lossyear"], "BBOX")
+    assert lossyear.kwargs["dtype"] == "int16"
+    assert lossyear.kwargs["crs_transform"] == transforms[30]
+    ghm = calls["proj/baseline/human_modification"]
+    assert ghm.kwargs["dtype"] == "float32"
+    assert ghm.kwargs["crs_transform"] == transforms[90]
+    assert ghm.kwargs["crs"] == "EPSG:32737" and ghm.kwargs["bucket"] == "bkt"
+    assert ghm.kwargs["skip_existing"] is False and ghm.kwargs["start"] is False
+    assert set(result) == set(layers)
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"dest": "gcs", "prefix": "p", "crs": "EPSG:32737"}, "bucket and prefix"),
+        ({"dest": "gcs", "bucket": "b", "prefix": "p"}, "projected crs"),
+        ({"dest": "s3"}, "dest must be"),
+        ({}, "export_folder is required"),
+    ],
+)
+def test_export_baseline_layers_destination_errors(kwargs, match):
+    with (
+        patch.object(workflows, "export_image_to_gcs") as export_gcs,
+        patch.object(workflows, "export_image_list_to_drive") as export_drive,
+    ):
+        with pytest.raises(ValueError, match=match):
+            workflows.export_baseline_layers(_mock_layers(["dem"]), "BBOX", **kwargs)
+    export_gcs.assert_not_called()
+    export_drive.assert_not_called()
+
+
+def test_export_baseline_layers_deprecated_aoi_keyword():
+    with patch.object(workflows, "export_image_list_to_drive", return_value=["t"]):
+        with pytest.warns(DeprecationWarning, match="region"):
+            workflows.export_baseline_layers(
+                _mock_layers(["dem"]), aoi="AOI", export_folder="folder"
+            )
+    with pytest.raises(ValueError, match="region is required"):
+        workflows.export_baseline_layers(_mock_layers(["dem"]), export_folder="f")
 
 
 # --------------------------------------------------------------------------- #
@@ -470,7 +668,7 @@ def test_run_baseline_assessment_wires_collaborators_and_exports_summary():
         )
 
     get_geom.assert_called_once_with(mock_sites)
-    build_layers.assert_called_once_with("aoi")
+    build_layers.assert_called_once_with("aoi", clip=True)
     summarize.assert_called_once_with(
         sites_fc=mock_sites,
         layers="layers",
@@ -482,7 +680,7 @@ def test_run_baseline_assessment_wires_collaborators_and_exports_summary():
     )
     export_layers.assert_called_once_with(
         layers="layers",
-        aoi="aoi",
+        region="aoi",
         export_folder="my_folder",
         layer_names=None,
         scale_dict=None,
