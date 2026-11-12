@@ -23,6 +23,11 @@ Toward 0.7.0 (vault: 2026-11-12 eetools v0.7 TGBS build spec).
   (descriptions <= 100 chars; over-long ones are cut and given a short hash suffix).
 - `fetch_stack(region, image, backend="gcs_batch", **kw)`: back-end dispatcher (a
   `computePixels` back-end is deferred).
+- `add_clear_count=False` on `build_composite`, `build_period_composites` and
+  `build_seasonal_composites` (E2). When True, each composite gains a uint16
+  `clear_count` band (`CLEAR_COUNT_BAND`): the number of unmasked observations of the
+  first requested band per pixel. Default output is unchanged, and periods with no
+  images are still dropped.
 - Optional `[gcs]` extra (`google-cloud-storage`). It stays a core dependency for now;
   without it, `skip_existing=True` and the uploads raise an ImportError that names the
   extra.

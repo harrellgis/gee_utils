@@ -164,6 +164,12 @@ wet_season = build_seasonal_composites(
 # Each image carries year, season, season_months, image_count, composite_stat properties
 ```
 
+`image_count` counts scenes. To document data gaps per pixel, pass
+`add_clear_count=True` to `build_composite`, `build_period_composites` or
+`build_seasonal_composites`. Each composite then gets a uint16 `clear_count` band: the
+number of unmasked observations of the first requested band behind each pixel, so it
+counts cloud-free valid observations when the collection is cloud-masked.
+
 Each sensor exposes a `get_<sensor>_collection(aoi, start_date, end_date, ...)`
 builder (`get_l8_sr_collection`, `get_hls_merged_collection`,
 `get_chirps_collection`, `get_modis_lai_fpar_col`, …) that validates the date
