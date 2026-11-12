@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Toward 0.7.0 (vault: 2026-11-12 eetools v0.7 TGBS build spec).
+## [0.7.0] - 2026-11-12
+
+Generic export and compositing additions for per-site stacks (vault: 2026-11-12
+eetools v0.7 build spec: E5, E2, E4, E10). E3 (cross-year seasons) is not needed:
+the dry windows checked so far stay within one calendar year. No change to existing
+defaults.
 
 ### Added
+- `woody_fraction_from_chm(chm=None, *, heights_m=(2, 3, 5), crs, crs_transform=None,
+  scale=10, max_pixels=256)` (E10) in `sensors.canopy_height.preprocessing`: the
+  fraction of each output pixel covered by canopy >= h m, over valid CHM pixels
+  (`chm.gte(h).reduceResolution(mean, maxPixels)` and then reprojected to the output
+  grid), plus `chm_valid_frac`.
+  - The default CHM is Meta 1 m.
+  - Bands are `woody_frac_h<label>` (`h2p5` for 2.5 m), float32 in [0, 1].
+  - `maxPixels` defaults to 256, because EE's default of 64 is too small for 1 m to
+    10 m.
+  - Helper: `woody_fraction_band_names`. Constants: `WOODY_FRACTION_*`,
+    `CHM_VALID_FRACTION_BAND`.
 - Cloud Storage exports (E5) in `eetools.io`: `export_image_to_gcs` (cloud-optimised
   GeoTIFF; exactly one of `scale` / `crs_transform`; `dtype` cast with per-dtype
   no-data `GCS_EXPORT_NODATA`: -32768 int16, 0 uint8, 65535 uint16, -9999 float32;

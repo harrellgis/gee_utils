@@ -474,6 +474,16 @@ META_CANOPY_HEIGHT_COLLECTION = (
     "projects/sat-io/open-datasets/facebook/meta-canopy-height"
 )
 META_CANOPY_HEIGHT_BAND = "cover_code"
+# Woody fraction from a CHM (woody_fraction_from_chm): share of each output pixel
+# covered by canopy >= h m, per height threshold. Bands woody_frac_h<label>, with
+# label "2" for 2 m and "2p5" for 2.5 m, plus chm_valid_frac.
+WOODY_FRACTION_HEIGHTS_M: tuple[float, ...] = (2, 3, 5)
+WOODY_FRACTION_BAND_PREFIX = "woody_frac_h"
+CHM_VALID_FRACTION_BAND = "chm_valid_frac"
+WOODY_FRACTION_SCALE_M = 10
+# reduceResolution's default maxPixels is 64, but 10 m from 1 m needs 100 inputs per
+# output pixel (more where the 1 m grid is misaligned), so the default here is 256.
+WOODY_FRACTION_MAX_PIXELS = 256
 
 #################### SENTINEL-1 SAR GRD ##########################
 # C-band dual-pol Ground Range Detected, log-scaled to dB. Heterogeneous time
