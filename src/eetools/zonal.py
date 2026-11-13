@@ -501,8 +501,9 @@ def scene_site_rows(
     pixels / polygon pixels and ``clear_frac`` = valid pixels / footprint pixels.
     Rows with ``footprint_frac == 0`` (scene misses the polygon) are dropped.
     Rows exist only for scenes in ``collection``: a builder that pre-filters on
-    scene cloud cover (``get_s2_sr_collection`` drops ``CLOUDY_PIXEL_PERCENTAGE >
-    CLOUD_FILTER``) gives no row for those scenes, even where a polygon was clear.
+    scene cloud cover gives no row for those scenes, even where a polygon was clear.
+    Build Sentinel-2 input with ``get_s2_sr_collection(..., cloud_filter=None)`` so
+    every scene is kept (its cloudy pixels are still masked).
 
     Args:
         collection: Masked collection with the bands already added (e.g. a cloud-masked Sentinel-2 collection plus NIRv).

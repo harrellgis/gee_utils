@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Columns: `date, scene_id, region_id, <bands...>, clear_frac, footprint_frac`.
     `scene_id` is the image's `system:index`.
   - Rows with `footprint_frac == 0` are dropped. `scale` is required.
+- `cloud_filter=` on `get_s2_sr_collection`, `build_cloudfree_s2sr_col` and
+  `get_s2_sr_cld_col`. It is the maximum scene `CLOUDY_PIXEL_PERCENTAGE` and
+  defaults to `CLOUD_FILTER` (50), so behaviour is unchanged. `None` keeps every
+  scene, for per-scene site tables where a mostly cloudy tile can still be clear
+  over a small site. Cloudy pixels are still masked.
 - `io.export_csv_table` and `io.validate_table_dest`: one Drive/GCS CSV export
   helper, now shared by the daily rainfall table and the scene table.
 

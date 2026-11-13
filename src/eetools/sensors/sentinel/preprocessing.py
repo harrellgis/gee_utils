@@ -1,6 +1,11 @@
 import ee
 
-from eetools.constants import S2_BAND_MAP, S2_SCALE_FACTOR, S2_SR_COLLECTION
+from eetools.constants import (
+    CLOUD_FILTER,
+    S2_BAND_MAP,
+    S2_SCALE_FACTOR,
+    S2_SR_COLLECTION,
+)
 from eetools.sensors.indices import calc_indices, select_base_bands
 from eetools.sensors.masking import validate_water_mask_selection
 from eetools.sensors.sentinel.masking import (
@@ -82,6 +87,7 @@ def get_s2_sr_collection(
     apply_water_masking: bool = True,
     indices: list[str] | tuple[str, ...] | None = None,
     domains: list[str] | tuple[str, ...] | None = None,
+    cloud_filter: float | None = CLOUD_FILTER,
 ) -> ee.ImageCollection:
     """Build a cloud- and water-masked Sentinel-2 SR collection with spectral indices.
 
@@ -92,6 +98,7 @@ def get_s2_sr_collection(
         apply_water_masking: If True, applies a spectral water mask derived from the collection median (default True).
         indices: Explicit index names each image should contain, or None for the default harmonized core.
         domains: Index domains to include (e.g. ['vegetation', 'soil']), or None. See eetools.sensors.indices.calc_indices.
+        cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE before pixel masking (default CLOUD_FILTER, 50). Pass None to keep every scene, e.g. for per-scene site tables (``zonal.export_scene_site_table``), where a mostly cloudy tile can still be clear over a small site; cloudy pixels are still masked.
 
     Returns:
         ee.ImageCollection with SR bands scaled to [0, 1] and index bands appended.
@@ -104,7 +111,9 @@ def get_s2_sr_collection(
     if apply_water_masking:
         validate_water_mask_selection(S2_BAND_MAP, indices, domains)
 
-    s2_cloudfree = build_cloudfree_s2sr_col(aoi, start_date, end_date)
+    s2_cloudfree = build_cloudfree_s2sr_col(
+        aoi, start_date, end_date, cloud_filter=cloud_filter
+    )
     s2_processed = s2_cloudfree.map(
         lambda img: process_s2_image(img, indices=indices, domains=domains)
     )

@@ -30,7 +30,10 @@ def mask_edges(image: ee.Image) -> ee.Image:
 
 
 def get_s2_sr_cld_col(
-    aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    cloud_filter: float | None = CLOUD_FILTER,
 ) -> ee.ImageCollection:
     """Build a joined Sentinel-2 SR and s2cloudless collection filtered to the AOI and
     date range.
@@ -39,6 +42,7 @@ def get_s2_sr_cld_col(
         aoi: Area of interest as ee.Geometry.
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
+        cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE (default CLOUD_FILTER, 50). None keeps every scene; use it for per-scene work on small sites, where a tile that is mostly cloudy can still be clear over the site.
 
     Returns:
         ee.ImageCollection of Sentinel-2 SR images with the corresponding s2cloudless probability image saved as the 's2cloudless' property on each image.
@@ -47,9 +51,12 @@ def get_s2_sr_cld_col(
         ee.ImageCollection(S2_SR_COLLECTION)
         .filterBounds(aoi)
         .filterDate(start_date, end_date)
-        .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", CLOUD_FILTER))
-        .map(mask_edges)
     )
+    if cloud_filter is not None:
+        s2_sr_col = s2_sr_col.filter(
+            ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_filter)
+        )
+    s2_sr_col = s2_sr_col.map(mask_edges)
 
     s2_cloudless_col = (
         ee.ImageCollection(S2_CLOUD_PROB_COLLECTION)
@@ -123,7 +130,10 @@ def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
 
 
 def build_cloudfree_s2sr_col(
-    aoi: ee.Geometry, start_date: ee.Date, end_date: ee.Date
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    cloud_filter: float | None = CLOUD_FILTER,
 ) -> ee.ImageCollection:
     """Build a Sentinel-2 SR collection with cloud and shadow masking fully applied.
 
@@ -131,12 +141,13 @@ def build_cloudfree_s2sr_col(
         aoi: Area of interest as ee.Geometry.
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
+        cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE (default CLOUD_FILTER); None keeps every scene. See get_s2_sr_cld_col.
 
     Returns:
         ee.ImageCollection of cloud- and shadow-masked Sentinel-2 SR images.
     """
     return (
-        get_s2_sr_cld_col(aoi, start_date, end_date)
+        get_s2_sr_cld_col(aoi, start_date, end_date, cloud_filter=cloud_filter)
         .map(add_cld_shdw_mask)
         .map(apply_cld_shdw_mask)
     )

@@ -285,11 +285,16 @@ tasks = export_daily_rainfall_table(
 `date, scene_id, region_id`, the mean of each band, `clear_frac` (valid pixels /
 pixels inside the scene footprint) and `footprint_frac` (footprint pixels / polygon
 pixels). Scenes that miss a polygon are dropped. Pass a masked collection with the
-bands already added, for example NIRv for vegetation start of season:
+bands already added, for example NIRv for vegetation start of season. Build it with
+`cloud_filter=None` so mostly cloudy tiles that are clear over a site are kept:
 
 ```python
+from eetools.sensors.sentinel.preprocessing import get_s2_sr_collection
 from eetools.zonal import export_scene_site_table
 
+s2_with_nirv = get_s2_sr_collection(
+    sites.geometry(), start, end, indices=["NIRv"], cloud_filter=None
+)
 task = export_scene_site_table(
     s2_with_nirv, sites, bands=["NIRv"], scale=10, dest="gcs",
     bucket="my-bucket", prefix="proj/scenes", name="nirv_scenes",
