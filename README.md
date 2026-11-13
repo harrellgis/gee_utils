@@ -281,6 +281,21 @@ tasks = export_daily_rainfall_table(
 )
 ```
 
+`export_scene_site_table` writes one row per scene x polygon, with no compositing:
+`date, scene_id, region_id`, the mean of each band, `clear_frac` (valid pixels /
+pixels inside the scene footprint) and `footprint_frac` (footprint pixels / polygon
+pixels). Scenes that miss a polygon are dropped. Pass a masked collection with the
+bands already added, for example NIRv for vegetation start of season:
+
+```python
+from eetools.zonal import export_scene_site_table
+
+task = export_scene_site_table(
+    s2_with_nirv, sites, bands=["NIRv"], scale=10, dest="gcs",
+    bucket="my-bucket", prefix="proj/scenes", name="nirv_scenes",
+)
+```
+
 ### Reference and degraded site selection
 
 `eetools.site_selection` proposes rank-ordered TGBS **reference** sites (most intact

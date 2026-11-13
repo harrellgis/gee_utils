@@ -1,6 +1,7 @@
 import math
 import warnings
-from typing import cast
+from collections.abc import Sequence
+from typing import Literal, cast
 
 import ee
 
@@ -8,7 +9,11 @@ from eetools.constants import (
     DEFAULT_MAX_PIXELS,
     DEFAULT_MIN_PIXELS_PER_REGION,
     REGION_AREA_MAX_ERROR_M,
+    SCENE_TABLE_DEFAULT_NAME,
+    SCENE_TABLE_FRACTION_COLUMNS,
+    SCENE_TABLE_ID_COLUMNS,
 )
+from eetools.io import export_csv_table, validate_table_dest
 
 # --------------------------------------------------------------------------- #
 # Region size vs. scale check                                                 #
@@ -467,3 +472,155 @@ def summarize_collection_histograms(
         }
         for feature in info["features"]
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Per-scene site table (E8)                                                    #
+# --------------------------------------------------------------------------- #
+_VALID_BAND = "eetools_valid"  # EE band names may not start with "_"
+_FOOTPRINT_BAND = "eetools_footprint"
+
+
+def scene_site_rows(
+    collection: ee.ImageCollection,
+    regions: ee.FeatureCollection,
+    *,
+    bands: Sequence[str],
+    scale: float,
+    id_property: str = "site_id",
+    crs: str | None = None,
+) -> ee.FeatureCollection:
+    """Per-scene polygon means with clear and footprint fractions (no compositing).
+
+    For each image one ``reduceRegions(mean)`` runs over ``[bands..., valid,
+    footprint]``: ``valid`` is 1 where the first band is unmasked, ``footprint`` is 1
+    inside ``image.geometry()``, and both are 0 elsewhere, so their means are
+    fractions of the polygon's pixels. Rows get ``date`` (YYYY-MM-DD), ``scene_id``
+    (the image's ``system:index``), ``region_id``, the mean of each band (over
+    valid pixels; absent where none are valid), ``footprint_frac`` = footprint
+    pixels / polygon pixels and ``clear_frac`` = valid pixels / footprint pixels.
+    Rows with ``footprint_frac == 0`` (scene misses the polygon) are dropped.
+    Rows exist only for scenes in ``collection``: a builder that pre-filters on
+    scene cloud cover (``get_s2_sr_collection`` drops ``CLOUDY_PIXEL_PERCENTAGE >
+    CLOUD_FILTER``) gives no row for those scenes, even where a polygon was clear.
+
+    Args:
+        collection: Masked collection with the bands already added (e.g. a cloud-masked Sentinel-2 collection plus NIRv).
+        regions: Polygons to reduce over.
+        bands: Bands to average; the first band's mask defines "clear".
+        scale: Reduction scale in metres (required).
+        id_property: Region property written as ``region_id``.
+        crs: Optional reduction CRS (default: EE picks the image's).
+
+    Returns:
+        ee.FeatureCollection. One geometry-free feature per scene x overlapped region.
+
+    Raises:
+        ValueError: If ``bands`` is empty or ``scale`` is not positive.
+    """
+    bands = list(bands)
+    if not bands:
+        raise ValueError("bands must name at least one band.")
+    _validate_positive("scale", scale)
+    regions = ee.FeatureCollection(regions)
+
+    def _per_image(image: ee.Image) -> ee.FeatureCollection:
+        image = ee.Image(image)
+        selected = image.select(bands)
+        # sameFootprint=False: a plain unmask(0) stays masked outside a clipped
+        # image's footprint, so the fractions would ignore the uncovered part.
+        valid = selected.select(0).mask().gt(0).unmask(0, False).rename(_VALID_BAND)
+        footprint = (
+            ee.Image.constant(1)
+            .clip(image.geometry())
+            .unmask(0, False)
+            .rename(_FOOTPRINT_BAND)
+        )
+        reduced = (
+            selected.addBands(valid)
+            .addBands(footprint)
+            .reduceRegions(
+                collection=regions, reducer=ee.Reducer.mean(), scale=scale, crs=crs
+            )
+        )
+        date = image.date().format("YYYY-MM-dd")
+        scene_id = image.get("system:index")
+
+        def _row(feature: ee.Feature) -> ee.Feature:
+            feature = ee.Feature(feature)
+            footprint_frac = ee.Number(feature.get(_FOOTPRINT_BAND))
+            props = ee.Dictionary(
+                {
+                    "date": date,
+                    "scene_id": scene_id,
+                    "region_id": feature.get(id_property),
+                    "footprint_frac": footprint_frac,
+                    "clear_frac": ee.Number(feature.get(_VALID_BAND)).divide(
+                        footprint_frac
+                    ),
+                }
+            ).combine(feature.toDictionary(bands))
+            return ee.Feature(None, props)
+
+        return reduced.filter(ee.Filter.gt(_FOOTPRINT_BAND, 0)).map(_row)
+
+    return ee.FeatureCollection(collection.map(_per_image)).flatten()
+
+
+def export_scene_site_table(
+    collection: ee.ImageCollection,
+    regions: ee.FeatureCollection,
+    *,
+    bands: Sequence[str],
+    scale: float,
+    id_property: str = "site_id",
+    dest: Literal["drive", "gcs"],
+    bucket: str | None = None,
+    prefix: str,
+    name: str = SCENE_TABLE_DEFAULT_NAME,
+    crs: str | None = None,
+    skip_existing: bool = True,
+    start: bool = True,
+) -> ee.batch.Task | None:
+    """Export a per-scene site table (``scene_site_rows``) as one CSV.
+
+    Columns, in order: ``date, scene_id, region_id, <bands...>, clear_frac,
+    footprint_frac``. A band mean is empty where a scene has no clear pixel in the
+    region. Written to ``gs://<bucket>/<prefix>/<name>.csv`` (``dest="gcs"``) or
+    ``<name>.csv`` in the Drive folder ``prefix``.
+
+    Args:
+        collection: Masked collection with the bands already added.
+        regions: Polygons to reduce over.
+        bands: Bands to average; the first band's mask defines "clear".
+        scale: Reduction scale in metres (required).
+        id_property: Region property written as ``region_id``.
+        dest: 'drive' or 'gcs'.
+        bucket: Destination bucket (required for 'gcs'; no ``gs://``).
+        prefix: GCS object prefix, or the Drive folder name.
+        name: File name without extension (default ``scene_site_table``).
+        crs: Optional reduction CRS.
+        skip_existing: GCS only: skip when the CSV already exists (needs ``eetools[gcs]``).
+        start: Start the task (default True); False returns it unstarted.
+
+    Returns:
+        ee.batch.Task | None. The export task, or None when skipped.
+
+    Raises:
+        ValueError: If ``bands`` is empty, ``scale`` is not positive, ``dest`` is unknown, or ``bucket`` is missing for 'gcs'.
+    """
+    validate_table_dest(dest, bucket)
+    rows = scene_site_rows(
+        collection, regions, bands=bands, scale=scale, id_property=id_property, crs=crs
+    )
+    selectors = [*SCENE_TABLE_ID_COLUMNS, *bands, *SCENE_TABLE_FRACTION_COLUMNS]
+    return export_csv_table(
+        rows,
+        dest=dest,
+        bucket=bucket,
+        prefix=prefix,
+        name=name,
+        selectors=selectors,
+        skip_existing=skip_existing,
+        start=start,
+    )
