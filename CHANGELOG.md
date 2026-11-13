@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-13
+
+Daily CHIRPS v2/v3 table (E7), the per-scene site table (E8) and a fix for
+per-site exports stuck as pending (vault: 2026-11-12 eetools v0.7 build spec).
+
 ### Added
 - Daily CHIRPS versions side by side (E7): `CHIRPS_DAILY_VERSIONS` holds `v2`
   (`UCSB-CHG/CHIRPS/DAILY`), `v3_rnl` (the existing default) and `v3_sat`
