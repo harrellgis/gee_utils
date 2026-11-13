@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `gedi_footprint_counts(collection, regions, start_year, end_year, *, scale,
     id_property)`: valid shots per region and year (`region_id, year,
     n_footprints`). It uses an unweighted sum on GEDI's own grid.
+- Static canopy height baselines (E9c; community asset IDs, bands and encodings
+  checked against the asset metadata and the providers' pages):
+  - `sensors.canopy_height.preprocessing.get_eth_canopy_height_2020(aoi=None)`: ETH
+    Global Canopy Height 2020, 10 m. Bands `canopy_height` and `canopy_height_sd`
+    (m); no-data 255 is masked. CC BY 4.0.
+  - `get_glad_canopy_height_2019(aoi=None, pin_projection=False)`: GLAD Global
+    Forest Canopy Height 2019, 30 m, mosaicked from its 7 regional tiles. Codes 101
+    (water), 102 (snow/ice) and 103 (no data) are masked. 0 is kept as 0 m, because
+    GLAD's own pages disagree on whether 0 means no data.
 - `utils.validate_collection_year_range`: validates a year range against an annual
   collection. `validate_collection_date_range` would reject the last year of an
   annual product, because its exclusive end date falls after the last image's start.

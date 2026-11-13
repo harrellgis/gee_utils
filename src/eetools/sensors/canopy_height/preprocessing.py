@@ -3,7 +3,13 @@ from collections.abc import Sequence
 import ee
 
 from eetools.constants import (
+    CANOPY_HEIGHT_SOURCE_BAND,
     CHM_VALID_FRACTION_BAND,
+    ETH_CANOPY_HEIGHT_2020,
+    ETH_CANOPY_HEIGHT_NODATA,
+    ETH_CANOPY_HEIGHT_SD_2020,
+    GLAD_CANOPY_HEIGHT_2019,
+    GLAD_CANOPY_HEIGHT_MAX_M,
     META_CANOPY_HEIGHT_BAND,
     META_CANOPY_HEIGHT_COLLECTION,
     WOODY_FRACTION_BAND_PREFIX,
@@ -66,6 +72,56 @@ def get_canopy_height(
     if aoi is not None:
         canopy = canopy.clip(aoi)
     return canopy
+
+
+def get_eth_canopy_height_2020(aoi: ee.Geometry | None = None) -> ee.Image:
+    """ETH Global Canopy Height 2020 (10 m, Sentinel-2 + GEDI) and its uncertainty.
+
+    Static 2020 baseline from Lang et al. (2023). Built-up areas, snow/ice and
+    permanent water were set to no-data (255) by the producers and are masked here.
+    CC BY 4.0.
+
+    Args:
+        aoi: Optional area of interest as ee.Geometry; the image is clipped to it when given.
+
+    Returns:
+        ee.Image with bands ``canopy_height`` and ``canopy_height_sd`` (metres, native 10 m projection).
+    """
+    bands = []
+    for asset, name in (
+        (ETH_CANOPY_HEIGHT_2020, "canopy_height"),
+        (ETH_CANOPY_HEIGHT_SD_2020, "canopy_height_sd"),
+    ):
+        band = ee.Image(asset).select([CANOPY_HEIGHT_SOURCE_BAND], [name])
+        bands.append(band.updateMask(band.neq(ETH_CANOPY_HEIGHT_NODATA)))
+    image = ee.Image.cat(bands)
+    return image.clip(aoi) if aoi is not None else image
+
+
+def get_glad_canopy_height_2019(
+    aoi: ee.Geometry | None = None, *, pin_projection: bool = False
+) -> ee.Image:
+    """GLAD Global Forest Canopy Height 2019 (30 m, GEDI + Landsat), mosaicked.
+
+    Values 0-60 are canopy height in metres; the codes 101 (water), 102 (snow/ice)
+    and 103 (no data) are masked. 0 is kept as 0 m (non-forest): the GLAD page
+    also lists 0 as no-data for its EE copy, so treat 0 with care. The model
+    saturates above ~30 m. Static 2019 baseline (Potapov et al.).
+
+    Args:
+        aoi: Optional area of interest as ee.Geometry; the image is clipped to it when given.
+        pin_projection: Set the mosaic's default projection to the tiles' native 30 m projection; pass True before ``reduceResolution``.
+
+    Returns:
+        ee.Image with a single ``canopy_height`` band (metres).
+    """
+    collection = ee.ImageCollection(GLAD_CANOPY_HEIGHT_2019)
+    height = collection.mosaic().select([CANOPY_HEIGHT_SOURCE_BAND], ["canopy_height"])
+    height = height.updateMask(height.lte(GLAD_CANOPY_HEIGHT_MAX_M))
+    if pin_projection:
+        native = collection.first().select(CANOPY_HEIGHT_SOURCE_BAND).projection()
+        height = height.setDefaultProjection(native)
+    return height.clip(aoi) if aoi is not None else height
 
 
 def woody_fraction_from_chm(
