@@ -1636,3 +1636,11 @@ BASELINE_LAYER_METADATA: dict[str, dict[str, object]] = {
         band="ghm",
     ),
 }
+
+#################### Per-scene site table (export_scene_site_table, E8) ###############
+# Column names around the per-band means; band means sit between the id and fraction
+# columns. scene_id is the image's system:index (a "system:index" selector would give
+# the row feature's own index instead).
+SCENE_TABLE_ID_COLUMNS: tuple[str, ...] = ("date", "scene_id", "region_id")
+SCENE_TABLE_FRACTION_COLUMNS: tuple[str, ...] = ("clear_frac", "footprint_frac")
+SCENE_TABLE_DEFAULT_NAME = "scene_site_table"

@@ -14,12 +14,7 @@ from eetools.constants import (
     CLIMATOLOGY_END_YEAR,
     CLIMATOLOGY_START_YEAR,
 )
-from eetools.io import (
-    export_table_to_drive,
-    export_table_to_gcs,
-    sanitize_file_name_prefix,
-    sanitize_task_description,
-)
+from eetools.io import export_csv_table, export_table_to_drive, validate_table_dest
 from eetools.utils import validate_collection_date_range
 from eetools.zonal import collection_to_region_timeseries
 
@@ -410,10 +405,7 @@ def export_daily_rainfall_table(
     """
     if chunk != "year":
         raise ValueError(f"chunk must be 'year', got {chunk!r}.")
-    if dest not in ("drive", "gcs"):
-        raise ValueError(f"dest must be 'drive' or 'gcs', got {dest!r}.")
-    if dest == "gcs" and not bucket:
-        raise ValueError("bucket is required when dest='gcs'.")
+    validate_table_dest(dest, bucket)
     unknown = sorted(set(versions) - set(CHIRPS_DAILY_VERSIONS))
     if unknown or not versions:
         raise ValueError(
@@ -443,29 +435,16 @@ def export_daily_rainfall_table(
             rows = _daily_rows(
                 source.filterDate(lo, hi), regions, id_property, version, scale
             )
-            name = f"chirps_{version}_daily_{year}"
-            selectors = list(CHIRPS_DAILY_TABLE_COLUMNS)
-            if dest == "gcs":
-                tasks.append(
-                    export_table_to_gcs(
-                        rows,
-                        bucket=str(bucket),
-                        file_name_prefix=f"{prefix}/{name}",
-                        selectors=selectors,
-                        skip_existing=skip_existing,
-                        start=start,
-                    )
+            tasks.append(
+                export_csv_table(
+                    rows,
+                    dest=dest,
+                    bucket=bucket,
+                    prefix=prefix,
+                    name=f"chirps_{version}_daily_{year}",
+                    selectors=CHIRPS_DAILY_TABLE_COLUMNS,
+                    skip_existing=skip_existing,
+                    start=start,
                 )
-                continue
-            task = ee.batch.Export.table.toDrive(
-                collection=rows,
-                description=sanitize_task_description(f"{prefix}_{name}"),
-                folder=prefix,
-                fileNamePrefix=sanitize_file_name_prefix(name),
-                fileFormat="CSV",
-                selectors=selectors,
             )
-            if start:
-                task.start()
-            tasks.append(task)
     return tasks

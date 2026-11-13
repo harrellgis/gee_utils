@@ -166,7 +166,7 @@ def daily_export():
         patch.object(preprocessing, "ee") as mock_ee,
         patch.object(preprocessing, "validate_chirps_date_range") as validate,
         patch.object(preprocessing, "_daily_rows") as rows,
-        patch.object(preprocessing, "export_table_to_gcs") as to_gcs,
+        patch.object(preprocessing, "export_csv_table") as to_gcs,
     ):
         rows.side_effect = lambda col, regions, idp, version, scale: (
             f"rows_{version}",
@@ -188,22 +188,19 @@ def test_export_daily_rainfall_table_one_gcs_task_per_version_year(daily_export)
         prefix="proj/rain",
     )
     assert len(tasks) == 4  # (v2, v3_sat) x (2020, 2021)
-    names = [c.kwargs["file_name_prefix"] for c in to_gcs.call_args_list]
+    names = [c.kwargs["name"] for c in to_gcs.call_args_list]
     assert names == [
-        "proj/rain/chirps_v2_daily_2020",
-        "proj/rain/chirps_v2_daily_2021",
-        "proj/rain/chirps_v3_sat_daily_2020",
-        "proj/rain/chirps_v3_sat_daily_2021",
+        "chirps_v2_daily_2020",
+        "chirps_v2_daily_2021",
+        "chirps_v3_sat_daily_2020",
+        "chirps_v3_sat_daily_2021",
     ]
     first = to_gcs.call_args_list[0]
     assert first.args[0] == ("rows_v2", "site_id", 5566)
+    assert first.kwargs["dest"] == "gcs"
     assert first.kwargs["bucket"] == "bkt"
-    assert first.kwargs["selectors"] == [
-        "date",
-        "region_id",
-        "ppt_mm",
-        "chirps_version",
-    ]
+    assert first.kwargs["prefix"] == "proj/rain"
+    assert first.kwargs["selectors"] == constants.CHIRPS_DAILY_TABLE_COLUMNS
     assert first.kwargs["skip_existing"] is True and first.kwargs["start"] is True
     # Versions never mixed: each table is built from one version's collection.
     assert [c.args[3] for c in rows.call_args_list] == ["v2", "v2", "v3_sat", "v3_sat"]
@@ -215,28 +212,6 @@ def test_export_daily_rainfall_table_one_gcs_task_per_version_year(daily_export)
     source = mock_ee.ImageCollection.return_value.filterBounds.return_value
     source.select.return_value.filterDate.assert_any_call("2020-06-01", "2021-01-01")
     source.select.return_value.filterDate.assert_any_call("2021-01-01", "2022-01-01")
-
-
-def test_export_daily_rainfall_table_drive(daily_export):
-    mock_ee, _, _, to_gcs = daily_export
-    tasks = preprocessing.export_daily_rainfall_table(
-        "REGIONS",
-        "2021-01-01",
-        "2022-01-01",
-        versions=("v3_rnl",),
-        dest="drive",
-        prefix="rain_folder",
-        start=False,
-    )
-    to_gcs.assert_not_called()
-    to_drive = mock_ee.batch.Export.table.toDrive
-    kwargs = to_drive.call_args.kwargs
-    assert kwargs["folder"] == "rain_folder"
-    assert kwargs["fileNamePrefix"] == "chirps_v3_rnl_daily_2021"
-    assert kwargs["fileFormat"] == "CSV"
-    assert kwargs["selectors"] == list(constants.CHIRPS_DAILY_TABLE_COLUMNS)
-    assert tasks == [to_drive.return_value]
-    to_drive.return_value.start.assert_not_called()
 
 
 @pytest.mark.parametrize(

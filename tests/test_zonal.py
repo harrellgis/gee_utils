@@ -4,7 +4,11 @@ All functions build server-side EE graphs and are exercised on small synthetic
 constant images/collections under the ``ee`` marker.
 """
 
+from unittest.mock import patch
+
 import pytest
+
+from eetools import zonal
 
 
 @pytest.mark.ee
@@ -317,3 +321,131 @@ def test_collection_to_region_timeseries_warns_on_coarse_scale(
         collection_to_region_timeseries(
             timed_collection, region=small_aoi, bands=["b"], scale=5566
         )
+
+
+# --------------------------------------------------------------------------- #
+# E8: per-scene site table                                                     #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"bands": [], "scale": 10}, "at least one band"),
+        ({"bands": ["nirv"], "scale": 0}, "scale must be positive"),
+    ],
+)
+def test_scene_site_rows_rejects_bad_args(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        zonal.scene_site_rows("COL", "REGIONS", **kwargs)
+
+
+def test_export_scene_site_table_columns_and_dispatch():
+    with (
+        patch.object(zonal, "scene_site_rows") as rows,
+        patch.object(zonal, "export_csv_table") as export,
+    ):
+        task = zonal.export_scene_site_table(
+            "COL",
+            "REGIONS",
+            bands=["nirv", "ndvi"],
+            scale=10,
+            dest="gcs",
+            bucket="bkt",
+            prefix="proj/scenes",
+            crs="EPSG:32737",
+            start=False,
+        )
+    rows.assert_called_once_with(
+        "COL",
+        "REGIONS",
+        bands=["nirv", "ndvi"],
+        scale=10,
+        id_property="site_id",
+        crs="EPSG:32737",
+    )
+    kwargs = export.call_args.kwargs
+    assert export.call_args.args == (rows.return_value,)
+    assert kwargs["selectors"] == [
+        "date",
+        "scene_id",
+        "region_id",
+        "nirv",
+        "ndvi",
+        "clear_frac",
+        "footprint_frac",
+    ]
+    assert kwargs["name"] == "scene_site_table"
+    assert (kwargs["dest"], kwargs["bucket"], kwargs["prefix"]) == (
+        "gcs",
+        "bkt",
+        "proj/scenes",
+    )
+    assert kwargs["start"] is False and kwargs["skip_existing"] is True
+    assert task is export.return_value
+
+
+def test_export_scene_site_table_validates_dest_before_building():
+    with patch.object(zonal, "scene_site_rows") as rows:
+        with pytest.raises(ValueError, match="bucket is required"):
+            zonal.export_scene_site_table(
+                "COL", "REGIONS", bands=["nirv"], scale=10, dest="gcs", prefix="p"
+            )
+    rows.assert_not_called()
+
+
+@pytest.mark.ee
+def test_scene_site_rows_live_fractions(ee_session):
+    """Synthetic scenes: partial footprint, half-cloudy, missed and fully masked."""
+    import ee
+
+    def rect(x0, x1):
+        return ee.Geometry.Rectangle([x0, -1.0, x1, -0.9])
+
+    regions = ee.FeatureCollection(
+        [
+            ee.Feature(rect(36.0, 36.1), {"site_id": "a"}),
+            ee.Feature(rect(36.2, 36.3), {"site_id": "b"}),
+            ee.Feature(rect(37.0, 37.1), {"site_id": "c"}),  # outside both scenes
+        ]
+    )
+    lon = ee.Image.pixelLonLat().select("longitude")
+
+    def scene(clear_from_lon, footprint, date):
+        nirv = ee.Image.constant(0.3).rename("nirv").updateMask(lon.gte(clear_from_lon))
+        ndvi = ee.Image.constant(0.6).rename("ndvi")
+        image = nirv.addBands(ndvi).clip(footprint)
+        return image.set("system:time_start", ee.Date(date).millis())
+
+    collection = ee.ImageCollection(
+        [
+            # Covers a fully (west half cloudy) and the west half of b (clear).
+            scene(
+                36.05, ee.Geometry.Rectangle([35.9, -1.1, 36.25, -0.8]), "2021-01-01"
+            ),
+            # Covers a and b fully; a is all cloud.
+            scene(36.15, ee.Geometry.Rectangle([35.9, -1.1, 36.4, -0.8]), "2021-01-06"),
+        ]
+    )
+    rows = zonal.scene_site_rows(collection, regions, bands=["nirv", "ndvi"], scale=500)
+    got = {
+        (p["date"], p["region_id"]): p
+        for p in (f["properties"] for f in rows.getInfo()["features"])
+    }
+    assert set(got) == {
+        ("2021-01-01", "a"),
+        ("2021-01-01", "b"),
+        ("2021-01-06", "a"),
+        ("2021-01-06", "b"),
+    }
+    tol = 0.03
+    a1, b1, a2, b2 = (got[k] for k in sorted(got))
+    assert a1["scene_id"] == "0" and a2["scene_id"] == "1"
+    assert a1["footprint_frac"] == pytest.approx(1.0, abs=tol)
+    assert a1["clear_frac"] == pytest.approx(0.5, abs=tol)
+    assert a1["nirv"] == pytest.approx(0.3) and a1["ndvi"] == pytest.approx(0.6)
+    assert b1["footprint_frac"] == pytest.approx(0.5, abs=tol)
+    assert b1["clear_frac"] == pytest.approx(1.0, abs=tol)
+    assert a2["clear_frac"] == pytest.approx(0.0, abs=1e-9)
+    assert "nirv" not in a2 or a2["nirv"] is None  # no clear pixel -> empty mean
+    assert a2["ndvi"] == pytest.approx(0.6)
+    assert b2["footprint_frac"] == pytest.approx(1.0, abs=tol)
+    assert b2["clear_frac"] == pytest.approx(1.0, abs=tol)

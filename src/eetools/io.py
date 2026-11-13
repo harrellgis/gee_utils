@@ -861,6 +861,82 @@ def export_table_to_gcs(
     return task
 
 
+def validate_table_dest(dest: str, bucket: str | None) -> None:
+    """Check a ``dest`` / ``bucket`` pair for ``export_csv_table``.
+
+    Args:
+        dest: ``"drive"`` or ``"gcs"``.
+        bucket: Destination bucket; required for ``"gcs"``.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If ``dest`` is unknown, or ``"gcs"`` is given without a bucket.
+    """
+    if dest not in ("drive", "gcs"):
+        raise ValueError(f"dest must be 'drive' or 'gcs', got {dest!r}.")
+    if dest == "gcs" and not bucket:
+        raise ValueError("bucket is required when dest='gcs'.")
+
+
+def export_csv_table(
+    collection: ee.FeatureCollection,
+    *,
+    dest: Literal["drive", "gcs"],
+    prefix: str,
+    name: str,
+    selectors: Sequence[str],
+    bucket: str | None = None,
+    skip_existing: bool = True,
+    start: bool = True,
+) -> ee.batch.Task | None:
+    """Export a FeatureCollection as a CSV to Cloud Storage or Google Drive.
+
+    ``dest="gcs"`` writes ``gs://<bucket>/<prefix>/<name>.csv`` via
+    ``export_table_to_gcs`` (skip-if-exists applies); ``dest="drive"`` writes
+    ``<name>.csv`` into the Drive folder ``prefix``.
+
+    Args:
+        collection: Rows to export.
+        dest: ``"drive"`` or ``"gcs"``.
+        prefix: GCS object prefix, or the Drive folder name.
+        name: File name without extension.
+        selectors: Columns to write, in order.
+        bucket: Destination bucket (required for ``"gcs"``; no ``gs://``).
+        skip_existing: GCS only: return None when the CSV already exists.
+        start: Start the task (default True); False returns it unstarted.
+
+    Returns:
+        ee.batch.Task | None. The export task, or None when skipped.
+
+    Raises:
+        ValueError: If ``dest`` is unknown or ``"gcs"`` is given without a bucket.
+    """
+    validate_table_dest(dest, bucket)
+    if dest == "gcs":
+        return export_table_to_gcs(
+            collection,
+            bucket=str(bucket),
+            file_name_prefix=f"{prefix}/{name}",
+            selectors=list(selectors),
+            skip_existing=skip_existing,
+            start=start,
+        )
+    task = ee.batch.Export.table.toDrive(
+        collection=collection,
+        description=sanitize_task_description(f"{prefix}_{name}"),
+        folder=prefix,
+        fileNamePrefix=sanitize_file_name_prefix(name),
+        fileFormat="CSV",
+        selectors=list(selectors),
+    )
+    if start:
+        task.start()
+        logger.info("Export started: Drive %s/%s.csv", prefix, name)
+    return task
+
+
 def fetch_stack(
     region: ee.Geometry,
     image: ee.Image,

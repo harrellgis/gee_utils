@@ -1257,3 +1257,56 @@ def test_export_composites_per_site_resubmits_dead_task(mock_ee, mock_storage):
     stale.delete.assert_called_once_with()
     assert export.call_count == 2
     assert write.call_count == 2
+
+
+# --------------------------------------------------------------------------- #
+# export_csv_table: shared Drive / GCS CSV dispatch                            #
+# --------------------------------------------------------------------------- #
+def test_export_csv_table_gcs_delegates(mock_ee):
+    with patch.object(io, "export_table_to_gcs") as to_gcs:
+        task = io.export_csv_table(
+            "ROWS",
+            dest="gcs",
+            bucket="bkt",
+            prefix="proj/t",
+            name="tbl",
+            selectors=("a", "b"),
+            start=False,
+        )
+    to_gcs.assert_called_once_with(
+        "ROWS",
+        bucket="bkt",
+        file_name_prefix="proj/t/tbl",
+        selectors=["a", "b"],
+        skip_existing=True,
+        start=False,
+    )
+    assert task is to_gcs.return_value
+
+
+@pytest.mark.parametrize("start", [True, False])
+def test_export_csv_table_drive(mock_ee, start):
+    task = io.export_csv_table(
+        "ROWS", dest="drive", prefix="folder", name="tbl", selectors=["a"], start=start
+    )
+    to_drive = mock_ee.batch.Export.table.toDrive
+    to_drive.assert_called_once_with(
+        collection="ROWS",
+        description="folder_tbl",
+        folder="folder",
+        fileNamePrefix="tbl",
+        fileFormat="CSV",
+        selectors=["a"],
+    )
+    assert task is to_drive.return_value
+    assert to_drive.return_value.start.called is start
+
+
+@pytest.mark.parametrize(
+    "dest, bucket, match",
+    [("s3", "b", "dest must be"), ("gcs", None, "bucket is required")],
+)
+def test_validate_table_dest(dest, bucket, match):
+    with pytest.raises(ValueError, match=match):
+        io.validate_table_dest(dest, bucket)
+    io.validate_table_dest("drive", None)

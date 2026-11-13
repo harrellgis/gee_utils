@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - versions are never mixed in one table.
 - `get_chirps_monthly_climatology(aoi, start_year=1991, end_year=2020)`: 12 bands
   `m01`..`m12` (mean mm/month, from pentads). They sum to `get_chirps_climatology`.
+- Per-scene site table (E8): `zonal.export_scene_site_table(collection, regions, *,
+  bands, scale, id_property="site_id", dest, bucket, prefix, name, crs)` and the
+  row builder `zonal.scene_site_rows`.
+  - No compositing: one `reduceRegions(mean)` per scene over the bands plus a valid
+    band (the first band's mask) and a footprint band.
+  - Columns: `date, scene_id, region_id, <bands...>, clear_frac, footprint_frac`.
+    `scene_id` is the image's `system:index`.
+  - Rows with `footprint_frac == 0` are dropped. `scale` is required.
+- `cloud_filter=` on `get_s2_sr_collection`, `build_cloudfree_s2sr_col` and
+  `get_s2_sr_cld_col`. It is the maximum scene `CLOUDY_PIXEL_PERCENTAGE` and
+  defaults to `CLOUD_FILTER` (50), so behaviour is unchanged. `None` keeps every
+  scene, for per-scene site tables where a mostly cloudy tile can still be clear
+  over a small site. Cloudy pixels are still masked.
+- `io.export_csv_table` and `io.validate_table_dest`: one Drive/GCS CSV export
+  helper, now shared by the daily rainfall table and the scene table.
 
 ### Fixed
 - `export_composites_per_site` no longer reports a dead export as `pending`
