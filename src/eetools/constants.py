@@ -474,6 +474,19 @@ META_CANOPY_HEIGHT_COLLECTION = (
     "projects/sat-io/open-datasets/facebook/meta-canopy-height"
 )
 META_CANOPY_HEIGHT_BAND = "cover_code"
+# ETH Global Canopy Height 2020, 10 m (Lang et al. 2023; community assets, checked
+# 2026-11-13): one image each for height and its standard deviation, band b1, integer
+# metres, no-data 255 (built-up, snow/ice, permanent water). CC BY 4.0.
+ETH_CANOPY_HEIGHT_2020 = "users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1"
+ETH_CANOPY_HEIGHT_SD_2020 = "users/nlang/ETH_GlobalCanopyHeightSD_2020_10m_v1"
+ETH_CANOPY_HEIGHT_NODATA = 255
+# GLAD Global Forest Canopy Height 2019, 30 m (Potapov et al., RSE 2020/2021): 7 regional
+# tiles, band b1. 0-60 = height in m; 101 water, 102 snow/ice, 103 no data. (The GLAD
+# page's EE section also says "no data = 0"; 0 is kept as 0 m / non-forest here.) The
+# model saturates above ~30 m.
+GLAD_CANOPY_HEIGHT_2019 = "projects/sat-io/open-datasets/GLAD/GEDI_V27"
+GLAD_CANOPY_HEIGHT_MAX_M = 60
+CANOPY_HEIGHT_SOURCE_BAND = "b1"
 # Woody fraction from a CHM (woody_fraction_from_chm): share of each output pixel
 # covered by canopy >= h m, per height threshold. Bands woody_frac_h<label>, with
 # label "2" for 2 m and "2p5" for 2.5 m, plus chm_valid_frac.

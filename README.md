@@ -209,6 +209,15 @@ Biomass, radar and lidar:
 - `gedi_footprint_counts(collection, regions, start_year, end_year, scale=25)` counts
   valid shots per region and year.
 
+Static canopy height baselines sit next to `get_canopy_height` (Meta 1 m) in
+`eetools.sensors.canopy_height.preprocessing`:
+- `get_eth_canopy_height_2020(aoi=None)` returns ETH 10 m bands `canopy_height` and
+  `canopy_height_sd`, with no-data 255 masked.
+- `get_glad_canopy_height_2019(aoi=None, pin_projection=False)` returns GLAD 30 m, with
+  the water, snow and no-data codes masked.
+
+Each is a single-epoch baseline, so never difference one product against another.
+
 ### Sites, zonal statistics, and workflows
 
 Site boundaries are usually local files. `eetools.vectors` turns any format

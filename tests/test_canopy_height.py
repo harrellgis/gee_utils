@@ -194,3 +194,86 @@ def test_woody_fraction_real_meta_bounds_and_ordering(ee_session):
     assert stats["min_min"] >= 0
     assert stats["max_max"] <= 1
     assert stats["h5_minus_h2_max"] <= 1e-6
+
+
+# --------------------------------------------------------------------------- #
+# E9c: ETH 2020 and GLAD 2019 static canopy heights                            #
+# --------------------------------------------------------------------------- #
+def test_eth_glad_constants():
+    from eetools import constants
+
+    assert constants.ETH_CANOPY_HEIGHT_2020 == (
+        "users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1"
+    )
+    assert constants.ETH_CANOPY_HEIGHT_SD_2020 == (
+        "users/nlang/ETH_GlobalCanopyHeightSD_2020_10m_v1"
+    )
+    assert constants.ETH_CANOPY_HEIGHT_NODATA == 255
+    assert constants.GLAD_CANOPY_HEIGHT_2019 == (
+        "projects/sat-io/open-datasets/GLAD/GEDI_V27"
+    )
+    assert constants.GLAD_CANOPY_HEIGHT_MAX_M == 60
+
+
+def test_get_eth_canopy_height_masks_nodata_and_names_bands(mock_ee):
+    chm_mod.get_eth_canopy_height_2020()
+    assert [c.args for c in mock_ee.Image.call_args_list] == [
+        ("users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1",),
+        ("users/nlang/ETH_GlobalCanopyHeightSD_2020_10m_v1",),
+    ]
+    selected = mock_ee.Image.return_value.select
+    assert [c.args for c in selected.call_args_list] == [
+        (["b1"], ["canopy_height"]),
+        (["b1"], ["canopy_height_sd"]),
+    ]
+    selected.return_value.neq.assert_called_with(255)
+    mock_ee.Image.cat.return_value.clip.assert_not_called()
+    chm_mod.get_eth_canopy_height_2020("AOI")
+    mock_ee.Image.cat.return_value.clip.assert_called_once_with("AOI")
+
+
+@pytest.mark.parametrize("pin", [False, True])
+def test_get_glad_canopy_height_masks_codes_and_pins(mock_ee, pin):
+    chm_mod.get_glad_canopy_height_2019(pin_projection=pin)
+    collection = mock_ee.ImageCollection.return_value
+    mock_ee.ImageCollection.assert_called_once_with(
+        "projects/sat-io/open-datasets/GLAD/GEDI_V27"
+    )
+    height = collection.mosaic.return_value.select.return_value
+    collection.mosaic.return_value.select.assert_called_once_with(
+        ["b1"], ["canopy_height"]
+    )
+    height.lte.assert_called_once_with(60)
+    pinned = height.updateMask.return_value.setDefaultProjection
+    assert pinned.called is pin
+
+
+@pytest.mark.ee
+@pytest.mark.parametrize(
+    "value, kept", [(0, True), (25, True), (101, False), (103, False)]
+)
+def test_glad_code_mask_synthetic(ee_session, first_value, value, kept):
+    import ee
+
+    with patch.object(chm_mod.ee, "ImageCollection") as col:
+        col.return_value.mosaic.return_value = ee.Image.constant(value).rename("b1")
+        image = chm_mod.get_glad_canopy_height_2019()
+    got = first_value(image, "canopy_height")
+    assert (got == value) if kept else got is None
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_eth_and_glad_real_forest_point(ee_session):
+    """Real data at a montane forest point: plausible heights, codes masked."""
+    import ee
+
+    point = ee.Geometry.Point(36.62, -0.40)  # Aberdare forest, Kenya
+    eth = chm_mod.get_eth_canopy_height_2020(point)
+    glad = chm_mod.get_glad_canopy_height_2019(point, pin_projection=True)
+    eth_v = eth.reduceRegion(ee.Reducer.first(), point, 10).getInfo()
+    glad_v = glad.reduceRegion(ee.Reducer.first(), point, 30).getInfo()
+    assert 0 < eth_v["canopy_height"] <= 60 and eth_v["canopy_height_sd"] >= 0
+    assert 0 <= glad_v["canopy_height"] <= 60
+    assert glad.projection().nominalScale().getInfo() == pytest.approx(30, rel=0.1)
+    assert eth.bandNames().getInfo() == ["canopy_height", "canopy_height_sd"]
