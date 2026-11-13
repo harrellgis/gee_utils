@@ -1,3 +1,6 @@
+from collections.abc import Sequence
+from datetime import date
+
 import ee
 
 from eetools.constants import (
@@ -9,6 +12,11 @@ from eetools.constants import (
     MODIS_BURNED_AREA_COLLECTION,
     MODIS_LAI_FPAR_BANDS,
     MODIS_LAI_FPAR_COLLECTION,
+    MODIS_MCD12Q2_COLLECTION,
+    MODIS_MCD12Q2_DATE_BANDS,
+    MODIS_MCD12Q2_DEFAULT_BANDS,
+    MODIS_MCD12Q2_FILL,
+    MODIS_MCD12Q2_SCALES,
     MODIS_NBAR_BANDS,
     MODIS_NBAR_COLLECTION,
     MODIS_NBAR_MAX_QA,
@@ -33,7 +41,10 @@ from eetools.sensors.modis.masking import (
     mask_modis_vcf_fill,
     mask_modis_vi_qa,
 )
-from eetools.utils import validate_collection_date_range
+from eetools.utils import (
+    validate_collection_date_range,
+    validate_collection_year_range,
+)
 
 # --------------------------------------------------------------------------- #
 # Private helpers                                                              #
@@ -520,3 +531,89 @@ def get_modis_annual_nbar_indices(
     """
     col = get_modis_nbar_collection(aoi, start_year, end_year, subsample_days)
     return _annual_means(col, ["NDMI", "NBR"], start_year, end_year)
+
+
+# --------------------------------------------------------------------------- #
+# MCD12Q2 land-surface phenology (E9)                                          #
+# --------------------------------------------------------------------------- #
+
+
+def days_since_epoch(year: int) -> int:
+    """Days from 1970-01-01 to 1 January of ``year`` (MCD12Q2's date origin).
+
+    Args:
+        year: Calendar year.
+
+    Returns:
+        int. ``(date(year, 1, 1) - date(1970, 1, 1)).days``.
+    """
+    return (date(year, 1, 1) - date(1970, 1, 1)).days
+
+
+def _mcd12q2_year(image: ee.Image, year: int, bands: list[str]) -> ee.Image:
+    offset = days_since_epoch(year) - 1  # so 1 January -> day-of-year 1
+    parts = []
+    for band in bands:
+        source = image.select(band)
+        if band in MODIS_MCD12Q2_DATE_BANDS:
+            source = (
+                source.updateMask(source.lt(MODIS_MCD12Q2_FILL))
+                .subtract(offset)
+                .toInt16()
+            )
+        elif band in MODIS_MCD12Q2_SCALES:
+            source = source.multiply(MODIS_MCD12Q2_SCALES[band]).toFloat()
+        parts.append(source)
+    return (
+        ee.Image.cat(parts)
+        .rename(bands)
+        .set({"year": year, "system:time_start": ee.Date.fromYMD(year, 1, 1).millis()})
+    )
+
+
+def get_mcd12q2(
+    aoi: ee.Geometry,
+    start_year: int,
+    end_year: int,
+    bands: Sequence[str] | None = None,
+) -> ee.ImageCollection:
+    """MODIS MCD12Q2 land-surface phenology (500 m), one image per product year.
+
+    Date bands (``Greenup_1`` ... ``Dormancy_2``, see ``MODIS_MCD12Q2_DATE_BANDS``)
+    are converted from days since 1970-01-01 to **day-of-year of the product year**
+    (1 January = 1). Values <= 0 or > 365/366 are kept: they are real cycle dates in
+    the previous or next calendar year. ``NumCycles`` counts every cycle found (it
+    can exceed 2) but only the first two are reported; cycle-2 bands are masked
+    where only one cycle was found, and every band is masked where no cycle was
+    detected (common for urban and some savanna pixels). EVI bands, if
+    requested, get their catalog scale factors. Meant for an SOS cross-check, not
+    as the primary SOS.
+
+    Args:
+        aoi: Area of interest as ee.Geometry (bounds and date validation).
+        start_year: First product year (inclusive).
+        end_year: Last product year (inclusive).
+        bands: Bands to return (default ``MODIS_MCD12Q2_DEFAULT_BANDS``: NumCycles, the 14 date bands, QA_Overall_1/2).
+
+    Returns:
+        ee.ImageCollection with one image per year, each with ``year`` and ``system:time_start`` (1 January) set; date bands int16 day-of-year.
+
+    Raises:
+        ValueError: If end_year < start_year, bands is empty, or the years fall outside the MCD12Q2 record.
+    """
+    band_list = list(MODIS_MCD12Q2_DEFAULT_BANDS if bands is None else bands)
+    if not band_list:
+        raise ValueError("bands must name at least one band.")
+    validate_collection_year_range(
+        MODIS_MCD12Q2_COLLECTION, aoi, start_year, end_year, "MODIS MCD12Q2 phenology"
+    )
+    source = ee.ImageCollection(MODIS_MCD12Q2_COLLECTION).filterBounds(aoi)
+    images = [
+        _mcd12q2_year(
+            ee.Image(source.filterDate(f"{year}-01-01", f"{year + 1}-01-01").first()),
+            year,
+            band_list,
+        )
+        for year in range(start_year, end_year + 1)
+    ]
+    return ee.ImageCollection(images)

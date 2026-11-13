@@ -156,6 +156,47 @@ def validate_collection_date_range(
         )
 
 
+def validate_collection_year_range(
+    collection_id: str,
+    aoi: ee.Geometry,
+    start_year: int,
+    end_year: int,
+    sensor_label: str = "imagery",
+) -> None:
+    """Validate a year range against an annual (or sparser) collection's image years.
+
+    Unlike ``validate_collection_date_range``, which compares an exclusive end date
+    with the newest image's ``system:time_start`` (and so rejects the last year of an
+    annual product), this compares calendar years: every year in
+    ``[start_year, end_year]`` must lie within the years of the first and last image
+    over the AOI. Gaps inside the record (e.g. ESA CCI's missing 2008-2009) are not
+    checked.
+
+    Args:
+        collection_id: EE collection asset ID.
+        aoi: Area of interest as ee.Geometry used to filter the collection.
+        start_year: First requested year (inclusive).
+        end_year: Last requested year (inclusive).
+        sensor_label: Human-readable name used in error messages.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If end_year < start_year, no images cover the AOI, or the years fall outside the record.
+    """
+    if end_year < start_year:
+        raise ValueError(f"end_year ({end_year}) must be >= start_year ({start_year}).")
+    first, last = get_available_window(collection_id, aoi, sensor_label)
+    first_year = cast(int, first.get("year").getInfo())
+    last_year = cast(int, last.get("year").getInfo())
+    if start_year < first_year or end_year > last_year:
+        raise ValueError(
+            f"Years {start_year}-{end_year} fall outside the {sensor_label} record over "
+            f"this AOI ({first_year}-{last_year})."
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Clipping                                                                     #
 # --------------------------------------------------------------------------- #

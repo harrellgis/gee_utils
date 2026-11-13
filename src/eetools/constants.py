@@ -1644,3 +1644,52 @@ BASELINE_LAYER_METADATA: dict[str, dict[str, object]] = {
 SCENE_TABLE_ID_COLUMNS: tuple[str, ...] = ("date", "scene_id", "region_id")
 SCENE_TABLE_FRACTION_COLUMNS: tuple[str, ...] = ("clear_frac", "footprint_frac")
 SCENE_TABLE_DEFAULT_NAME = "scene_site_table"
+
+#################### FIRMS active fire (E9) ##########################################
+# MODIS C6/C6.1 active-fire detections rasterised at 1 km, one image per day
+# (catalog checked 2026-11-13: 2000-11-01 to present; bands T21 (K), confidence (%)).
+FIRMS_COLLECTION = "FIRMS"
+FIRMS_BANDS: list[str] = ["T21", "confidence"]
+FIRMS_CONFIDENCE_BAND = "confidence"
+FIRMS_FIRE_BAND = "fire"  # derived 0/1 flag
+FIRMS_NATIVE_SCALE_M = 1000
+# MODIS C6 confidence classes: low < 30, nominal 30-79, high >= 80. The default drops
+# low-confidence detections.
+FIRMS_DEFAULT_MIN_CONFIDENCE = 30
+FIRMS_COUNT_COLUMNS: tuple[str, ...] = ("region_id", "year", "fire_count")
+
+#################### MODIS MCD12Q2 land-surface phenology (E9) #######################
+# 500 m, one image per product year (catalog checked 2026-11-13: 2001-2024), up to two
+# vegetation cycles per year. Date bands are stored as days since 1970-01-01;
+# get_mcd12q2 converts them to day-of-year of the product year.
+MODIS_MCD12Q2_COLLECTION = "MODIS/061/MCD12Q2"
+MODIS_MCD12Q2_DATE_BANDS: list[str] = [
+    f"{phase}_{cycle}"
+    for cycle in (1, 2)
+    for phase in (
+        "Greenup",
+        "MidGreenup",
+        "Peak",
+        "Maturity",
+        "MidGreendown",
+        "Senescence",
+        "Dormancy",
+    )
+]
+MODIS_MCD12Q2_DEFAULT_BANDS: list[str] = [
+    "NumCycles",
+    *MODIS_MCD12Q2_DATE_BANDS,
+    "QA_Overall_1",
+    "QA_Overall_2",
+]
+# Catalog scale factors for the EVI bands (not in the default band set).
+MODIS_MCD12Q2_SCALES: dict[str, float] = {
+    "EVI_Minimum_1": 0.0001,
+    "EVI_Minimum_2": 0.0001,
+    "EVI_Amplitude_1": 0.0001,
+    "EVI_Amplitude_2": 0.0001,
+    "EVI_Area_1": 0.1,
+    "EVI_Area_2": 0.1,
+}
+# Date-band fill value in the MCD12Q2 user guide; masked defensively.
+MODIS_MCD12Q2_FILL = 32767

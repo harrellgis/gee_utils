@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Fire and phenology builders (E9a; the dataset IDs were checked in the EE catalog):
+  - `sensors.firms.preprocessing.get_firms(aoi, start_date, end_date,
+    min_confidence=30)`: FIRMS MODIS active fire (daily, 1 km) with a 0/1 `fire`
+    band. The default threshold of 30 drops MODIS "low" confidence detections.
+  - `firms_counts(regions, start_year, end_year, *, scale, id_property)`: one row
+    per region and year (`region_id, year, fire_count`), where `fire_count` is fire
+    pixel-days. It uses an unweighted sum, so each 1 km detection counts once.
+  - `sensors.modis.preprocessing.get_mcd12q2(aoi, start_year, end_year, bands=None)`:
+    MCD12Q2 v6.1 phenology, one image per product year. The 14 date bands are
+    converted from days since 1970 to day-of-year of the product year, with the fill
+    value masked. EVI bands, when requested, get their catalog scale factors.
+    `days_since_epoch(year)` is exposed.
+- `utils.validate_collection_year_range`: validates a year range against an annual
+  collection. `validate_collection_date_range` would reject the last year of an
+  annual product, because its exclusive end date falls after the last image's start.
+
 ## [0.7.2] - 2026-11-13
 
 Daily CHIRPS v2/v3 table (E7), the per-scene site table (E8) and a fix for
