@@ -188,6 +188,15 @@ default CHM is the Meta 1 m one, and the output is 10 m by default. Bands:
 too small for 1 m to 10 m. Pass the same `crs_transform` you export with. The Meta CHM
 is a fused 2009-2020 baseline, so never difference it against another epoch.
 
+Fire and phenology:
+- `get_firms(aoi, start, end, min_confidence=30)` (`eetools.sensors.firms.preprocessing`)
+  returns daily FIRMS active-fire images with a 0/1 `fire` band.
+- `firms_counts(regions, start_year, end_year, scale=1000)` counts fire pixel-days per
+  region and year.
+- `get_mcd12q2(aoi, start_year, end_year)` (`eetools.sensors.modis.preprocessing`)
+  returns MODIS land-surface phenology with every date band as a day-of-year of the
+  product year. Values <= 0 or > 365 are dates in the previous or next year.
+
 ### Sites, zonal statistics, and workflows
 
 Site boundaries are usually local files. `eetools.vectors` turns any format
