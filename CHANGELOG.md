@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `export_composites_per_site` no longer reports a dead export as `pending`
+  forever. Each manifest now records the EE `task_id` (not part of `params_hash`,
+  so hashes and `manifest_version: 1` are unchanged). On a re-run, a matching
+  manifest without its tif is resolved from that task's state:
+  - FAILED, CANCELLING or CANCELLED: the stale manifest is deleted and the region
+    is exported again;
+  - SUCCEEDED: `RuntimeError`, because the output went missing;
+  - queued, running, not found (expired history): still `pending`.
+  Manifests written before this release have no `task_id` and stay `pending`,
+  with a log line.
+
 ## [0.7.1] - 2026-11-12
 
 Baseline-layer registry over a study extent (E6, vault: 2026-11-12 eetools v0.7 build
