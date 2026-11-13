@@ -1693,3 +1693,63 @@ MODIS_MCD12Q2_SCALES: dict[str, float] = {
 }
 # Date-band fill value in the MCD12Q2 user guide; masked defensively.
 MODIS_MCD12Q2_FILL = 32767
+
+#################### ESA CCI Biomass v6 (E9) #########################################
+# Community catalog assets (checked 2026-11-13). Main collection: one image per year,
+# bands AGB and SD (Mg/ha, 100 m; ingested with no-data 0, so 0 is masked). Change
+# collection: bands AGB_DIFF_SD (Mg/ha) and AGB_DIFF_QF (quality flag) only, with no
+# change band, so the change is AGB(end) - AGB(start). Images are named
+# CCI_BIOMASS_DIFF_AGB_100m_<end>_<start>. v7 (2023-24) is not in EE.
+ESA_CCI_AGB_COLLECTION = "projects/sat-io/open-datasets/ESA/ESA_CCI_AGB"
+ESA_CCI_AGB_DIFF_COLLECTION = "projects/sat-io/open-datasets/ESA/ESA_CCI_AGB_DIFF"
+ESA_CCI_AGB_BANDS: list[str] = ["AGB", "SD"]
+ESA_CCI_AGB_YEARS: tuple[int, ...] = (
+    2007,
+    2010,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+)
+ESA_CCI_AGB_DIFF_PAIRS: tuple[tuple[int, int], ...] = (
+    (2007, 2010),
+    (2015, 2016),
+    (2016, 2017),
+    (2017, 2018),
+    (2018, 2019),
+    (2019, 2020),
+    (2020, 2021),
+    (2021, 2022),
+    (2010, 2020),
+)
+ESA_CCI_AGB_DIFF_NAME = "CCI_BIOMASS_DIFF_AGB_100m_{end}_{start}"
+ESA_CCI_AGB_CHANGE_BANDS: list[str] = ["agb_change", "agb_change_sd", "agb_change_qf"]
+ESA_CCI_AGB_SCALE_M = 100
+
+#################### ALOS PALSAR-2 yearly mosaic (E9) ###############################
+# JAXA/ALOS/PALSAR/YEARLY/SAR_EPOCH, 25 m, 2015-2024 (catalog checked 2026-11-13).
+# HH/HV are 16-bit DN; gamma0 dB = 10*log10(DN^2) - 83.0 = 20*log10(DN) - 83.0.
+# qa: 0 no data, 50 ocean/water, 100 layover, 150 shadowing, 255 land.
+PALSAR2_YEARLY_COLLECTION = "JAXA/ALOS/PALSAR/YEARLY/SAR_EPOCH"
+PALSAR2_POL_BANDS: list[str] = ["HH", "HV"]
+PALSAR2_CALIBRATION_DB = -83.0
+PALSAR2_QA_BAND = "qa"
+PALSAR2_QA_LAND = 255
+PALSAR2_SCALE_M = 25
+
+#################### GEDI monthly rasters (E9) #######################################
+# 25 m monthly rasters of individual shots (catalog checked 2026-11-13: 2019-03 to
+# 2025-07; GEDI V3 is not in EE).
+GEDI_L4A_MONTHLY_COLLECTION = "LARSE/GEDI/GEDI04_A_002_MONTHLY"
+GEDI_L2A_MONTHLY_COLLECTION = "LARSE/GEDI/GEDI02_A_002_MONTHLY"
+GEDI_L4A_DEFAULT_BANDS: list[str] = ["agbd", "agbd_se"]  # Mg/ha
+GEDI_L2A_DEFAULT_BANDS: list[str] = ["rh50", "rh75", "rh95", "rh98", "rh100"]  # m
+GEDI_DEGRADE_FLAG_BAND = "degrade_flag"  # 0 = not degraded
+GEDI_L4A_QUALITY_BAND = "l4_quality_flag"  # 1 = usable
+GEDI_L2A_QUALITY_BAND = "quality_flag"  # 1 = valid waveform
+GEDI_SCALE_M = 25
+GEDI_COUNT_COLUMNS: tuple[str, ...] = ("region_id", "year", "n_footprints")
