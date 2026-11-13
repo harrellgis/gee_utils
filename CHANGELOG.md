@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     converted from days since 1970 to day-of-year of the product year, with the fill
     value masked. EVI bands, when requested, get their catalog scale factors.
     `days_since_epoch(year)` is exposed.
+- Biomass, radar and lidar builders (E9b; IDs and bands checked in the EE catalog and
+  the asset metadata):
+  - `sensors.esa_cci_biomass.preprocessing.get_esa_cci_agb(aoi, years=None)`: ESA CCI
+    Biomass v6, with bands `AGB` and `SD` (Mg/ha, 100 m) for 2007, 2010 and
+    2015-2022. The build spec named them `b1`/`b2`.
+  - `get_esa_cci_agb_change(aoi, start_year, end_year)`: `agb_change` = AGB(end) -
+    AGB(start), plus `agb_change_sd` / `agb_change_qf` from the published change
+    collection. That collection has no change band, and only the 9 published year
+    pairs are allowed.
+  - `sensors.palsar.preprocessing.get_palsar2_yearly(aoi, start_year, end_year)`:
+    PALSAR-2 yearly mosaics (2015-2024) as gamma-naught dB, `20 * log10(DN) - 83`.
+    DN 0 and non-land QA (water, layover, shadow) are masked, and the mosaic keeps
+    the source projection. `palsar2_dn_to_db` is exposed.
+  - `sensors.gedi.preprocessing.get_gedi_l4a_monthly` (`agbd`, `agbd_se`;
+    `l4_quality_flag == 1`) and `get_gedi_l2a_monthly` (`rh50`..`rh100`;
+    `quality_flag == 1`). Both also require `degrade_flag == 0`; the record runs
+    2019-03 to 2025-07. `mask_gedi_quality` is exposed.
+  - `gedi_footprint_counts(collection, regions, start_year, end_year, *, scale,
+    id_property)`: valid shots per region and year (`region_id, year,
+    n_footprints`). It uses an unweighted sum on GEDI's own grid.
 - `utils.validate_collection_year_range`: validates a year range against an annual
   collection. `validate_collection_date_range` would reject the last year of an
   annual product, because its exclusive end date falls after the last image's start.

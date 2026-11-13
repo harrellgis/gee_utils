@@ -197,6 +197,18 @@ Fire and phenology:
   returns MODIS land-surface phenology with every date band as a day-of-year of the
   product year. Values <= 0 or > 365 are dates in the previous or next year.
 
+Biomass, radar and lidar:
+- `get_esa_cci_agb(aoi, years=None)` returns ESA CCI Biomass v6 maps (bands `AGB`, `SD`,
+  Mg/ha, 100 m) for 2007, 2010 and 2015-2022.
+- `get_esa_cci_agb_change(aoi, start, end)` returns `agb_change` with the published
+  `agb_change_sd` / `agb_change_qf`, for the published year pairs only.
+- `get_palsar2_yearly(aoi, start_year, end_year)` returns PALSAR-2 HH/HV as gamma-naught
+  dB, masked to land.
+- `get_gedi_l4a_monthly` / `get_gedi_l2a_monthly` return quality-masked GEDI shots
+  (`agbd`, `agbd_se` / `rh*`).
+- `gedi_footprint_counts(collection, regions, start_year, end_year, scale=25)` counts
+  valid shots per region and year.
+
 ### Sites, zonal statistics, and workflows
 
 Site boundaries are usually local files. `eetools.vectors` turns any format
