@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-13
+
+Structure, fire and phenology builders (E9a-c, vault: 2026-11-12 eetools v0.7 build
+spec). Every dataset ID was checked against the EE catalog or the asset metadata.
+
 ### Added
 - Fire and phenology builders (E9a; the dataset IDs were checked in the EE catalog):
   - `sensors.firms.preprocessing.get_firms(aoi, start_date, end_date,
