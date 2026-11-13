@@ -893,6 +893,22 @@ CHIRPS_CADENCE_COLLECTIONS = {
     "pentad": CHIRPS_PENTAD_COLLECTION,
 }
 CHIRPS_NATIVE_SCALE_M = 5566
+# Daily CHIRPS versions for side-by-side rainfall tables (never mixed in one series:
+# v3's undercatch correction shifts rain thresholds). IDs and extents checked in the EE
+# catalog 2026-11-13: all three are mm/day, 5566 m, 1981-01-01 to present.
+CHIRPS_V2_COLLECTION = "UCSB-CHG/CHIRPS/DAILY"
+CHIRPS_V3_SAT_COLLECTION = "UCSB-CHC/CHIRPS/V3/DAILY_SAT"
+CHIRPS_DAILY_VERSIONS: dict[str, str] = {
+    "v2": CHIRPS_V2_COLLECTION,
+    "v3_rnl": CHIRPS_COLLECTION,
+    "v3_sat": CHIRPS_V3_SAT_COLLECTION,
+}
+CHIRPS_DAILY_TABLE_COLUMNS: tuple[str, ...] = (
+    "date",
+    "region_id",
+    "ppt_mm",
+    "chirps_version",
+)
 # Fixed normal window for rainfall climatologies (inclusive years).
 CLIMATOLOGY_START_YEAR = 1991
 CLIMATOLOGY_END_YEAR = 2020

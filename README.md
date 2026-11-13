@@ -263,7 +263,23 @@ the sensor's native resolution (e.g. 10 m for Sentinel-2, 30 m for HLS/Landsat).
 
 `get_chirps_collection` takes `cadence="daily"` (default) or `"pentad"`. Pentad totals
 over a year or more match the daily product at about 5x fewer image reads, so use
-`"pentad"` for annual or multi-year sums and `"daily"` for short windows.
+`"pentad"` for annual or multi-year sums and `"daily"` for short windows. For daily
+data, `version="v2" | "v3_rnl" | "v3_sat"` picks the product (default: v3 `DAILY_RNL`).
+`get_chirps_monthly_climatology(aoi)` gives 12 bands `m01`..`m12` (mean mm/month,
+1991-2020), and `get_chirps_climatology(aoi)` the mean annual total.
+
+`export_daily_rainfall_table` writes daily region means for one or more versions side
+by side, with one CSV per version and year (`date, region_id, ppt_mm, chirps_version`).
+Versions are never mixed in one table:
+
+```python
+from eetools.sensors.chirps.preprocessing import export_daily_rainfall_table
+
+tasks = export_daily_rainfall_table(
+    regions, "1991-01-01", "2026-01-01", id_property="site_id",
+    versions=("v2", "v3_sat"), dest="gcs", bucket="my-bucket", prefix="proj/rainfall",
+)
+```
 
 ### Reference and degraded site selection
 
