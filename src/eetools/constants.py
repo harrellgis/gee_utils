@@ -857,6 +857,12 @@ GRID_SNAP_TOLERANCE_PX = 1e-6
 GRID_REGION_INSET_PX = 0.25
 # Bump on any breaking change to the manifest shape; consumers refuse unknown versions.
 MANIFEST_VERSION = 1
+# EE operation states (ee.data.getOperation metadata.state) of a per-site export whose
+# manifest exists without its tif. Dead tasks are resubmitted; a task that succeeded
+# without leaving a tif is an error; anything else (PENDING, RUNNING, unknown or
+# expired history) stays pending.
+EE_TASK_DEAD_STATES: tuple[str, ...] = ("FAILED", "CANCELLING", "CANCELLED")
+EE_TASK_SUCCEEDED_STATE = "SUCCEEDED"
 # Band-entry keys eetools owns; band_meta may not override them.
 MANIFEST_RESERVED_BAND_KEYS: tuple[str, ...] = (
     "index",

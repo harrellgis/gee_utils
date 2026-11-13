@@ -1143,3 +1143,117 @@ def test_export_composites_per_site_exports_over_grid_region(site_export):
     assert args[1] is rectangle.return_value
     assert kwargs["crs_transform"] == [10.0, 0.0, 523230.0, 0.0, -10.0, 9526000.0]
     site_export["ee"].FeatureCollection.return_value.filter.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Stale-pending manifests: task_id lookup (0.7.2)                              #
+# --------------------------------------------------------------------------- #
+def test_write_manifest_adds_unhashed_task_id(mock_ee, mock_storage):
+    blob = mock_storage.Client.return_value.bucket.return_value.blob.return_value
+    manifest = _manifest()
+    v070_hash = manifest["params_hash"]
+    task = MagicMock(id="TASK123")
+    record = io.ExportRecord(
+        "s01", "p/s01_s2.tif", "p/s01_s2.json", manifest, task, "started"
+    )
+    io.write_export_manifest("b", record)
+
+    import json
+
+    (payload,) = blob.upload_from_string.call_args.args
+    written = json.loads(payload)
+    assert written["task_id"] == "TASK123"
+    assert record.manifest["task_id"] == "TASK123"
+    # Not hashed: same hash as a 0.7.0 manifest for the same parameters.
+    assert io.manifest_params_hash(written) == v070_hash
+    assert written["params_hash"] == v070_hash
+    assert "task_id" not in io._HASHED_MANIFEST_KEYS
+
+
+@pytest.fixture
+def pending_manifest(gcs_state):
+    """A matching manifest with a task_id and no tif."""
+    exists, read, objects = gcs_state
+    exists.return_value = False
+    read.return_value = {"params_hash": "H", "task_id": "T1"}
+    stale = [MagicMock(name="json")]
+    objects.return_value = stale
+    with patch.object(io, "_task_state") as state:
+        yield state, objects, stale
+
+
+@pytest.mark.parametrize("task_state", ["PENDING", "RUNNING", None, "WEIRD"])
+def test_existing_state_live_or_unknown_task_is_pending(pending_manifest, task_state):
+    state, objects, _ = pending_manifest
+    state.return_value = task_state
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) == "pending"
+    state.assert_called_once_with("T1")
+    objects.assert_not_called()
+
+
+@pytest.mark.parametrize("task_state", ["FAILED", "CANCELLING", "CANCELLED"])
+def test_existing_state_dead_task_deletes_manifest_for_resubmit(
+    pending_manifest, task_state
+):
+    state, objects, stale = pending_manifest
+    state.return_value = task_state
+    assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) is None
+    objects.assert_called_once_with("b", "p/s01_s2")
+    stale[0].delete.assert_called_once_with()
+
+
+def test_existing_state_succeeded_without_tif_raises(pending_manifest):
+    state, objects, _ = pending_manifest
+    state.return_value = "SUCCEEDED"
+    with pytest.raises(RuntimeError, match="succeeded but its tif is missing"):
+        io._existing_state("b", "p/s01_s2", "H", overwrite=False)
+    objects.assert_not_called()
+
+
+def test_existing_state_manifest_without_task_id_stays_pending(gcs_state, caplog):
+    exists, read, objects = gcs_state
+    exists.return_value = False
+    read.return_value = {"params_hash": "H"}
+    with patch.object(io, "_task_state") as state, caplog.at_level("INFO"):
+        assert io._existing_state("b", "p/s01_s2", "H", overwrite=False) == "pending"
+    state.assert_not_called()
+    objects.assert_not_called()
+    assert "no task_id" in caplog.text
+
+
+def test_task_state_reads_operation_and_handles_missing(mock_ee):
+    import ee as real_ee
+
+    mock_ee.EEException = real_ee.EEException
+    mock_ee.data.getOperation.return_value = {"metadata": {"state": "FAILED"}}
+    with patch.object(io, "get_project", return_value="proj"):
+        assert io._task_state("T1") == "FAILED"
+        mock_ee.data.getOperation.assert_called_once_with("projects/proj/operations/T1")
+        mock_ee.data.getOperation.side_effect = real_ee.EEException("not found")
+        assert io._task_state("T1") is None
+    with patch.object(io, "get_project", return_value=None):
+        assert io._task_state("T1") is None
+
+
+def test_export_composites_per_site_resubmits_dead_task(mock_ee, mock_storage):
+    """End to end through _existing_state: FAILED task -> manifest deleted, re-export."""
+    mock_ee.Image.return_value.bandNames.return_value.getInfo.return_value = ["NDVI"]
+    stale = MagicMock(name="json")
+    with (
+        patch.object(io, "_scale_stack", return_value="STACK"),
+        patch.object(io, "_region_info", return_value=[("s01", RING)]),
+        patch.object(io, "gcs_object_exists", return_value=False),
+        patch.object(io, "_export_objects", return_value=[stale]),
+        patch.object(io, "_task_state", return_value="FAILED"),
+        patch.object(io, "export_image_to_gcs") as export,
+        patch.object(io, "write_export_manifest") as write,
+        patch.object(io, "_read_manifest", return_value=None) as read,
+    ):
+        params = dict(product="s2", bucket="b", prefix="p", crs="EPSG:32737", scale=10)
+        first = io.export_composites_per_site("IMG", "REGIONS", **params)
+        read.return_value = dict(first[0].manifest, task_id="DEAD")
+        records = io.export_composites_per_site("IMG", "REGIONS", **params)
+    assert records[0].status == "started"
+    stale.delete.assert_called_once_with()
+    assert export.call_count == 2
+    assert write.call_count == 2

@@ -17,6 +17,8 @@ from eetools._config import get_project
 from eetools.constants import (
     EE_DESCRIPTION_ALLOWED_CHARS,
     EE_DESCRIPTION_MAX_LENGTH,
+    EE_TASK_DEAD_STATES,
+    EE_TASK_SUCCEEDED_STATE,
     GCS_EXPORT_DTYPES,
     GCS_EXPORT_MAX_PIXELS,
     GCS_EXPORT_NODATA,
@@ -918,7 +920,7 @@ class ExportRecord:
         manifest_name: Object name of the JSON band manifest next to it.
         manifest: The manifest dict (written to ``manifest_name`` when the task starts).
         task: The export task, or None when skipped / pending.
-        status: ``"started"``, ``"unstarted"`` (``start=False``; call ``write_export_manifest`` after starting it), ``"skipped"`` (tif + matching manifest exist) or ``"pending"`` (matching manifest without its tif: an earlier export is still running or failed).
+        status: ``"started"``, ``"unstarted"`` (``start=False``; call ``write_export_manifest`` after starting it), ``"skipped"`` (tif + matching manifest exist) or ``"pending"`` (matching manifest without its tif, and its task is still queued or running, or its state cannot be checked).
     """
 
     region_id: str
@@ -1116,7 +1118,9 @@ def write_export_manifest(bucket: str, record: ExportRecord) -> str:
     """Write an export's JSON band manifest next to its tif.
 
     ``export_composites_per_site`` calls this itself when it starts a task; call
-    it yourself after starting a task you created with ``start=False``.
+    it yourself after starting a task you created with ``start=False``. The
+    task's id is added to ``record.manifest`` as ``task_id`` (not hashed), so a
+    re-run can tell a dead task from a running one.
 
     Args:
         bucket: Bucket the stack is exported to.
@@ -1128,11 +1132,63 @@ def write_export_manifest(bucket: str, record: ExportRecord) -> str:
     Raises:
         ImportError: If google-cloud-storage is not installed (``eetools[gcs]``).
     """
+    if record.task is not None and record.task.id:
+        record.manifest["task_id"] = record.task.id
     blob = _gcs_client(get_project()).bucket(bucket).blob(record.manifest_name)
     blob.upload_from_string(
         json.dumps(record.manifest, indent=2), content_type="application/json"
     )
     return f"gs://{bucket}/{record.manifest_name}"
+
+
+def _task_state(task_id: str) -> str | None:
+    """EE operation state of a batch task, or None if it cannot be found."""
+    project = get_project()
+    if project is None:
+        logger.info("No EE project configured; cannot look up task %s", task_id)
+        return None
+    name = f"projects/{project}/operations/{task_id}"
+    try:
+        operation = ee.data.getOperation(name)
+    except ee.EEException as err:  # unknown id, expired history, other project
+        logger.info("Task %s not found (%s)", task_id, err)
+        return None
+    return cast(str | None, operation.get("metadata", {}).get("state"))
+
+
+def _delete_export_objects(bucket: str, stem: str) -> None:
+    for blob in _export_objects(bucket, stem):
+        logger.info("Deleting stale gs://%s/%s", bucket, blob.name)
+        blob.delete()
+
+
+def _pending_state(
+    bucket: str, stem: str, manifest: Mapping[str, Any]
+) -> Literal["pending"] | None:
+    """Resolve a matching manifest without a tif from its task's state."""
+    task_id = manifest.get("task_id")
+    if not task_id:
+        logger.info(
+            "gs://%s/%s: manifest has no task_id (written before eetools 0.7.2); "
+            "cannot check its task, treating it as pending.",
+            bucket,
+            stem,
+        )
+        return "pending"
+    state = _task_state(task_id)
+    if state in EE_TASK_DEAD_STATES:
+        logger.warning(
+            "gs://%s/%s: task %s is %s; resubmitting.", bucket, stem, task_id, state
+        )
+        _delete_export_objects(bucket, stem)
+        return None
+    if state == EE_TASK_SUCCEEDED_STATE:
+        raise RuntimeError(
+            f"gs://{bucket}/{stem}: task {task_id} succeeded but its tif is missing "
+            "(deleted, or exported elsewhere). Not resubmitting; pass overwrite=True "
+            "with skip_existing=False, or delete the manifest, to export it again."
+        )
+    return "pending"
 
 
 def _existing_state(
@@ -1146,16 +1202,14 @@ def _existing_state(
     if old is None and not tif_exists:
         return None
     if old is not None and old.get("params_hash") == params_hash:
-        return "skipped" if tif_exists else "pending"
+        return "skipped" if tif_exists else _pending_state(bucket, stem, old)
     if not overwrite:
         reason = "has no manifest" if old is None else "used different parameters"
         raise ValueError(
             f"gs://{bucket}/{stem}: the existing export {reason}. Pass "
             "overwrite=True to replace it (its tif, shards and manifest are deleted)."
         )
-    for blob in _export_objects(bucket, stem):
-        logger.info("Deleting stale gs://%s/%s", bucket, blob.name)
-        blob.delete()
+    _delete_export_objects(bucket, stem)
     return None
 
 
@@ -1207,16 +1261,23 @@ def export_composites_per_site(
     - ``manifest_version`` (currently 1) is bumped on any breaking change;
     - the manifest is written when the task starts, so it can exist before its tif
       (treat that as pending); ``file`` is always the unsharded basename;
+    - ``task_id`` (the EE task id, written since 0.7.2) is informational and not
+      part of ``params_hash``;
     - ``params_hash`` covers the export parameters and band list
       (``manifest_params_hash``), not the file content (that is the GCS MD5).
 
     Skip logic (``skip_existing=True``): tif (or first shard) + manifest with the same
-    ``params_hash`` -> skipped; matching manifest without a tif -> pending (not
-    resubmitted); anything else that exists -> ValueError, unless ``overwrite=True``,
-    which deletes that region's tif, shards and manifest and exports again.
-    ``skip_existing=False`` exports without any check or deletion.
+    ``params_hash`` -> skipped. A matching manifest without a tif is resolved from its
+    ``task_id``: task FAILED, CANCELLING or CANCELLED -> the stale manifest is deleted
+    and the region exported again; task SUCCEEDED -> RuntimeError (the output went
+    missing; nothing is resubmitted silently); queued, running, not found (expired
+    history) or no ``task_id`` (manifests before 0.7.2) -> pending, not resubmitted.
+    Anything else that exists -> ValueError, unless ``overwrite=True``, which deletes
+    that region's tif, shards and manifest and exports again. ``skip_existing=False``
+    exports without any check or deletion.
 
-    Makes two small ``getInfo`` calls (band names; all region ids and bounds).
+    Makes two small ``getInfo`` calls (band names; all region ids and bounds), plus one
+    task-status request per region with a manifest but no tif (no EECU).
 
     Args:
         image: Multiband image to export (one stack, all periods/indices).
@@ -1241,6 +1302,7 @@ def export_composites_per_site(
 
     Raises:
         ValueError: For an invalid ``product``/``region_id`` name, duplicate region ids, unknown ``dtype``, non-positive ``scale``/``scale_factor``, bad ``band_meta``, or an existing export with other parameters (without ``overwrite``).
+        RuntimeError: If a matching manifest's task succeeded but its tif is missing.
         ImportError: If google-cloud-storage is missing and ``skip_existing`` or ``start`` needs it.
     """
     _validate_site_name(product, "product")
