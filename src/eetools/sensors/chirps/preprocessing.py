@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Literal
 
 import ee
@@ -6,22 +7,41 @@ from eetools.compositing import build_period_composites
 from eetools.constants import (
     CHIRPS_CADENCE_COLLECTIONS,
     CHIRPS_COLLECTION,
+    CHIRPS_DAILY_TABLE_COLUMNS,
+    CHIRPS_DAILY_VERSIONS,
+    CHIRPS_NATIVE_SCALE_M,
     CHIRPS_PRECIP_BAND,
     CLIMATOLOGY_END_YEAR,
     CLIMATOLOGY_START_YEAR,
 )
-from eetools.io import export_table_to_drive
+from eetools.io import (
+    export_table_to_drive,
+    export_table_to_gcs,
+    sanitize_file_name_prefix,
+    sanitize_task_description,
+)
 from eetools.utils import validate_collection_date_range
 from eetools.zonal import collection_to_region_timeseries
 
 
-def _chirps_collection_id(cadence: str) -> str:
+def _chirps_collection_id(cadence: str, version: str | None = None) -> str:
     if cadence not in CHIRPS_CADENCE_COLLECTIONS:
         raise ValueError(
             f"cadence must be one of {sorted(CHIRPS_CADENCE_COLLECTIONS)}, "
             f"got '{cadence}'."
         )
-    return CHIRPS_CADENCE_COLLECTIONS[cadence]
+    if version is None:
+        return CHIRPS_CADENCE_COLLECTIONS[cadence]
+    if cadence != "daily":
+        raise ValueError(
+            f"version applies to daily CHIRPS only (got cadence='{cadence}'); "
+            "the pentad collection exists for v3 only."
+        )
+    if version not in CHIRPS_DAILY_VERSIONS:
+        raise ValueError(
+            f"version must be one of {sorted(CHIRPS_DAILY_VERSIONS)}, got '{version}'."
+        )
+    return CHIRPS_DAILY_VERSIONS[version]
 
 
 def validate_chirps_date_range(
@@ -76,8 +96,9 @@ def get_chirps_collection(
     start_date: str | ee.Date,
     end_date: str | ee.Date,
     cadence: Literal["daily", "pentad"] = "daily",
+    version: Literal["v2", "v3_rnl", "v3_sat"] | None = None,
 ) -> ee.ImageCollection:
-    """Build a CHIRPS v3 precipitation collection for the AOI and date range.
+    """Build a CHIRPS precipitation collection for the AOI and date range.
 
     ``cadence="daily"`` (default) uses the Daily Reanalysis (mm/day);
     ``cadence="pentad"`` uses the pentad collection (mm per pentad, 72 per year).
@@ -90,14 +111,15 @@ def get_chirps_collection(
         start_date: Collection start date as a string (e.g. '2020-01-01') or ee.Date.
         end_date: Collection end date as a string or ee.Date.
         cadence: 'daily' (UCSB-CHC/CHIRPS/V3/DAILY_RNL, default) or 'pentad' (UCSB-CHC/CHIRPS/V3/PENTAD).
+        version: Daily product version (``CHIRPS_DAILY_VERSIONS``): 'v2' (UCSB-CHG/CHIRPS/DAILY), 'v3_rnl' (the default daily product) or 'v3_sat' (UCSB-CHC/CHIRPS/V3/DAILY_SAT). None (default) keeps the cadence default; daily cadence only.
 
     Returns:
         ee.ImageCollection of precipitation images (band 'precipitation').
 
     Raises:
-        ValueError: If cadence is unknown or the date range falls outside the available data.
+        ValueError: If cadence or version is unknown, a version is given with cadence='pentad', or the date range falls outside the available data.
     """
-    collection_id = _chirps_collection_id(cadence)
+    collection_id = _chirps_collection_id(cadence, version)
     start = ee.Date(start_date)
     end = ee.Date(end_date)
 
@@ -147,6 +169,45 @@ def get_chirps_climatology(
         .toFloat()
         .setDefaultProjection(projection)
     )
+
+
+def get_chirps_monthly_climatology(
+    aoi: ee.Geometry,
+    start_year: int = CLIMATOLOGY_START_YEAR,
+    end_year: int = CLIMATOLOGY_END_YEAR,
+) -> ee.Image:
+    """Mean monthly CHIRPS rainfall over a fixed window: 12 bands ``m01``..``m12``.
+
+    For each calendar month the pentads of that month are summed over the whole
+    window and divided by the number of years, so the 12 bands add up to
+    ``get_chirps_climatology`` for the same window. Native ~5.5 km.
+
+    Args:
+        aoi: Area of interest as ee.Geometry (used for bounds and date validation).
+        start_year: First year (inclusive; default 1991).
+        end_year: Last year (inclusive; default 2020).
+
+    Returns:
+        ee.Image with float bands 'm01'..'m12' (mean mm/month), native projection.
+
+    Raises:
+        ValueError: If end_year < start_year or the window is outside the data.
+    """
+    if end_year < start_year:
+        raise ValueError(f"end_year ({end_year}) must be >= start_year ({start_year}).")
+    col = get_chirps_collection(
+        aoi, f"{start_year}-01-01", f"{end_year + 1}-01-01", cadence="pentad"
+    ).select(CHIRPS_PRECIP_BAND)
+    n_years = end_year - start_year + 1
+    projection = ee.Image(col.first()).projection()
+    months = [
+        col.filter(ee.Filter.calendarRange(m, m, "month"))
+        .sum()
+        .divide(n_years)
+        .rename(f"m{m:02d}")
+        for m in range(1, 13)
+    ]
+    return ee.Image.cat(months).toFloat().setDefaultProjection(projection)
 
 
 def get_chirps_annual_totals(
@@ -257,3 +318,154 @@ def export_total_rainfall_table(
     )
 
     return rainfall_ts
+
+
+def _year_chunks(start_date: str, end_date: str) -> list[tuple[int, str, str]]:
+    """Split ``[start_date, end_date)`` (ISO dates) into calendar-year pieces."""
+    start_year, end_year = int(start_date[:4]), int(end_date[:4])
+    chunks = []
+    for year in range(start_year, end_year + 1):
+        lo = max(start_date, f"{year}-01-01")
+        hi = min(end_date, f"{year + 1}-01-01")
+        if lo < hi:
+            chunks.append((year, lo, hi))
+    return chunks
+
+
+def _daily_rows(
+    collection: ee.ImageCollection,
+    regions: ee.FeatureCollection,
+    id_property: str,
+    version: str,
+    scale: float,
+) -> ee.FeatureCollection:
+    """One row per image x region: date, region_id, ppt_mm, chirps_version."""
+
+    def _per_image(image: ee.Image) -> ee.FeatureCollection:
+        image = ee.Image(image)
+        date = image.date().format("YYYY-MM-dd")
+        reduced = image.reduceRegions(
+            collection=regions, reducer=ee.Reducer.mean(), scale=scale
+        )
+        return reduced.map(
+            lambda f: ee.Feature(
+                None,
+                {
+                    "date": date,
+                    "region_id": f.get(id_property),
+                    "ppt_mm": f.get("mean"),
+                    "chirps_version": version,
+                },
+            )
+        )
+
+    return ee.FeatureCollection(collection.map(_per_image)).flatten()
+
+
+def export_daily_rainfall_table(
+    regions: ee.FeatureCollection,
+    start_date: str,
+    end_date: str,
+    *,
+    id_property: str = "region_id",
+    versions: Sequence[Literal["v2", "v3_rnl", "v3_sat"]] = ("v2", "v3_sat"),
+    scale: float = CHIRPS_NATIVE_SCALE_M,
+    dest: Literal["drive", "gcs"],
+    bucket: str | None = None,
+    prefix: str,
+    chunk: Literal["year"] = "year",
+    skip_existing: bool = True,
+    start: bool = True,
+) -> list[ee.batch.Task | None]:
+    """Export daily CHIRPS region means as CSV tables, one per version and year.
+
+    Each daily image of each version is reduced over every region
+    (``reduceRegions`` mean at ``scale``) into rows with columns ``date``
+    (YYYY-MM-DD), ``region_id`` (the ``id_property`` value), ``ppt_mm`` (mm/day; empty
+    where a region has no data) and ``chirps_version``. Versions are never mixed: each
+    table holds one version, named ``chirps_<version>_daily_<year>``. With
+    ``dest="gcs"`` it is written to ``gs://<bucket>/<prefix>/<name>.csv``; with
+    ``dest="drive"`` to the Drive folder ``prefix``. The date range is checked once
+    per version against that collection's extent over the regions.
+
+    Args:
+        regions: Polygons to reduce over (e.g. a regional bbox plus each site).
+        start_date: First date (inclusive), 'YYYY-MM-DD'.
+        end_date: Last date (exclusive), 'YYYY-MM-DD'.
+        id_property: Region property written as ``region_id``.
+        versions: Keys of ``CHIRPS_DAILY_VERSIONS`` (default v2 and v3_sat side by side).
+        scale: Reduction scale in metres (default CHIRPS native 5566 m).
+        dest: 'drive' or 'gcs'.
+        bucket: Destination bucket (required for 'gcs'; no ``gs://``).
+        prefix: GCS object prefix, or the Drive folder name.
+        chunk: Task chunking; only 'year' (one task per version x calendar year).
+        skip_existing: GCS only: skip a table whose CSV already exists (needs ``eetools[gcs]``).
+        start: Start the tasks (default True); False returns them unstarted.
+
+    Returns:
+        list[ee.batch.Task | None]. One entry per version x year, versions in the given order; None for a skipped GCS table.
+
+    Raises:
+        ValueError: For an unknown version, dest or chunk, a missing bucket with 'gcs', end_date <= start_date, or a date range outside a version's data.
+    """
+    if chunk != "year":
+        raise ValueError(f"chunk must be 'year', got {chunk!r}.")
+    if dest not in ("drive", "gcs"):
+        raise ValueError(f"dest must be 'drive' or 'gcs', got {dest!r}.")
+    if dest == "gcs" and not bucket:
+        raise ValueError("bucket is required when dest='gcs'.")
+    unknown = sorted(set(versions) - set(CHIRPS_DAILY_VERSIONS))
+    if unknown or not versions:
+        raise ValueError(
+            f"versions must be a non-empty subset of {sorted(CHIRPS_DAILY_VERSIONS)}, "
+            f"got {list(versions)}."
+        )
+    chunks = _year_chunks(start_date, end_date)
+    if not chunks:
+        raise ValueError(
+            f"end_date ({end_date}) must be after start_date ({start_date})."
+        )
+
+    regions = ee.FeatureCollection(regions)
+    bounds = regions.geometry().bounds()
+    tasks: list[ee.batch.Task | None] = []
+    for version in versions:
+        collection_id = CHIRPS_DAILY_VERSIONS[version]
+        validate_chirps_date_range(
+            bounds, ee.Date(start_date), ee.Date(end_date), collection_id=collection_id
+        )
+        source = (
+            ee.ImageCollection(collection_id)
+            .filterBounds(bounds)
+            .select(CHIRPS_PRECIP_BAND)
+        )
+        for year, lo, hi in chunks:
+            rows = _daily_rows(
+                source.filterDate(lo, hi), regions, id_property, version, scale
+            )
+            name = f"chirps_{version}_daily_{year}"
+            selectors = list(CHIRPS_DAILY_TABLE_COLUMNS)
+            if dest == "gcs":
+                tasks.append(
+                    export_table_to_gcs(
+                        rows,
+                        bucket=str(bucket),
+                        file_name_prefix=f"{prefix}/{name}",
+                        selectors=selectors,
+                        skip_existing=skip_existing,
+                        start=start,
+                    )
+                )
+                continue
+            task = ee.batch.Export.table.toDrive(
+                collection=rows,
+                description=sanitize_task_description(f"{prefix}_{name}"),
+                folder=prefix,
+                fileNamePrefix=sanitize_file_name_prefix(name),
+                fileFormat="CSV",
+                selectors=selectors,
+            )
+            if start:
+                task.start()
+            tasks.append(task)
+    return tasks

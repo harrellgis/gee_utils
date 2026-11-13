@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Daily CHIRPS versions side by side (E7): `CHIRPS_DAILY_VERSIONS` holds `v2`
+  (`UCSB-CHG/CHIRPS/DAILY`), `v3_rnl` (the existing default) and `v3_sat`
+  (`UCSB-CHC/CHIRPS/V3/DAILY_SAT`). These IDs were checked in the EE catalog: all are
+  mm/day at 5566 m, from 1981 to the present.
+- `get_chirps_collection(..., version=None)`: picks the daily product. The default
+  is unchanged, and a version can't be combined with `cadence="pentad"`.
+- `export_daily_rainfall_table(regions, start_date, end_date, *, id_property,
+  versions=("v2", "v3_sat"), scale=5566, dest="drive"|"gcs", bucket, prefix,
+  chunk="year")`:
+  - one CSV task per version x calendar year, named `chirps_<version>_daily_<year>`;
+  - columns `date, region_id, ppt_mm, chirps_version`;
+  - versions are never mixed in one table.
+- `get_chirps_monthly_climatology(aoi, start_year=1991, end_year=2020)`: 12 bands
+  `m01`..`m12` (mean mm/month, from pentads). They sum to `get_chirps_climatology`.
+
 ### Fixed
 - `export_composites_per_site` no longer reports a dead export as `pending`
   forever. Each manifest now records the EE `task_id` (not part of `params_hash`,
