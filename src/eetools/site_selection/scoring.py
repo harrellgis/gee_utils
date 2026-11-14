@@ -113,11 +113,13 @@ def intactness_score(
 
     Components: pct(1 - ghm), pct(natural_frac), pct(core_frac), pct(ndvi_state),
     pct(ndmi_state), pct(min(ndvi_trend, 0)), pct(min(nbr_trend, 0)),
-    pct(natural_persist) (Dynamic World persistent-natural share) and the absolute
-    pa_overlap. Percentiles only order cells that already passed the absolute
-    land-use gate; they never decide eligibility. Forest strata move ``forest_loss_shift`` from core to
-    pct(1 - forest_loss_frac) and ``canopy_shift`` from performance to
-    pct(canopy_height_p50) (only when canopy height is available).
+    pct(natural_persist) (Dynamic World persistent-natural share),
+    pct(1 - loss_since_2000_frac) and the absolute pa_overlap. Zero-weight
+    components (NDVI and NDMI by default) are left out. Percentiles only order cells
+    that already passed the absolute land-use gate; they never decide eligibility.
+    Forest strata move ``forest_loss_shift`` from core to pct(1 - forest_loss_frac)
+    and ``canopy_shift`` from performance to pct(canopy_height_p50) (only when canopy
+    height is available); both shifts are 0 by default.
 
     Args:
         df: Candidate pool with the condition columns.
@@ -137,6 +139,7 @@ def intactness_score(
         "persistence": percentile_normalise(_col(df, "ndvi_trend").clip(upper=0)),
         "burn_persist": percentile_normalise(_col(df, "nbr_trend").clip(upper=0)),
         "natural_persist": percentile_normalise(_col(df, "natural_persist")),
+        "low_loss": percentile_normalise(1.0 - _col(df, "loss_since_2000_frac")),
         "protection": _col(df, "pa_overlap").fillna(0.0).clip(0, 1),
     }
     wts = {
@@ -148,6 +151,7 @@ def intactness_score(
         "persistence": w.persistence,
         "burn_persist": w.burn_persist,
         "natural_persist": w.natural_persist,
+        "low_loss": w.low_loss,
         "protection": w.protection,
     }
     if is_forest:

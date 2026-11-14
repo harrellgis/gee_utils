@@ -68,13 +68,16 @@ class EnvelopeTolerances:
             share of pixels that are Dynamic World natural in the required number of
             years (``natural_persist_years``). Applied inside each rung before
             scoring, thinning and the stop rule ([L]).
-        natural_persist_years: 'all_but_one' (default; tolerates one off-year label,
-            e.g. DW grass/shrub/crop swapping, or edge pixels in large cells) or 'all'
-            (natural in every year of the land-use history). Both shares are reduced,
-            so this never re-reduces. Default chosen on the v0.6.0 validation: at
-            TGBS_Kwale's 2.5 km cells the known Buda reference failed 'all' (median
-            0.77) and passed 'all_but_one' (0.92); Ecosia kept all 18 strict-PA cells
-            either way.
+            Default 0.9 (was 0.8 before 0.8.0); the share below 1 keeps pixel-level
+            tolerance for a mislabelled year.
+        natural_persist_years: 'all' (default since 0.8.0; natural in every year of the
+            land-use history, so the reference time series holds no disturbance
+            event, manual S4 §4.2) or 'all_but_one' (tolerates one off-year label,
+            e.g. DW grass/shrub/crop swapping, or edge pixels in large cells). Both
+            shares are reduced, so this never re-reduces. Chosen on the 2026-11-11
+            basemap review of TGBS_Ecosia and TGBS_ITF; at TGBS_Kwale's 2.5 km cells
+            the known Buda reference failed 'all' (median 0.77) and passed
+            'all_but_one' (0.92), so coarse-cell sites may need 'all_but_one'.
         unit_coverage_stop: The search ladder stops only when the rung has enough
             eligible thinned references *and* each management unit (focal class) has
             at least one; False stops on the count alone (saves Tier 3 compute).
@@ -93,8 +96,8 @@ class EnvelopeTolerances:
     relaxation: Literal["before_tier3", "after_tier3", "off"] = "before_tier3"
     min_screen_pool: int | None = None
     exclude_max_share: float = 0.5
-    min_natural_persist: float = 0.8
-    natural_persist_years: Literal["all", "all_but_one"] = "all_but_one"
+    min_natural_persist: float = 0.9
+    natural_persist_years: Literal["all", "all_but_one"] = "all"
     unit_coverage_stop: bool = True
 
     def __post_init__(self) -> None:
@@ -126,24 +129,35 @@ class EnvelopeTolerances:
 class ReferenceWeights:
     """Intactness-score weights (spec §5.3). Must sum to 1.
 
-    For the forest stratum (forest, riverine, bamboo), ``forest_loss_shift`` moves from ``core`` to
-    pct(1 - forest_loss_frac) and ``canopy_shift`` moves from ``performance`` to
-    pct(canopy_height_p50). ``natural_persist`` scores the Dynamic World persistent-
-    natural share (it replaced BII in v0.6.0: BII did not separate intact from
-    degraded cells at the TGBS sites).
+    Defaults since 0.8.0 (2026-11-11 basemap review of TGBS_Ecosia and TGBS_ITF):
+
+    - No greenness: ``performance`` (pct NDVI) and ``moisture`` (pct NDMI) are 0.
+      References set the 100% end of the index scales (manual S4 Fig. 4.2), so
+      choosing them for greenness inflates that end, and plantations and irrigated
+      stands are greener than natural vegetation (§4.6.1).
+    - ``naturalness`` (1 - gHM, ~1 km and modelled) is down to 0.10; gHM stays in
+      the SOP integrity screen.
+    - ``natural_persist`` (Dynamic World all-years natural share, which replaced BII
+      in v0.6.0) is up to 0.25, and ``low_loss`` = pct(1 - loss_since_2000_frac)
+      (Hansen loss since 2000) is 0.15.
+    - The forest-stratum extras are off (both shifts 0). If set, ``forest_loss_shift``
+      moves from ``core`` to pct(1 - forest_loss_frac) and ``canopy_shift`` moves
+      from ``performance`` to pct(canopy_height_p50), so it needs
+      ``performance >= canopy_shift``.
     """
 
-    naturalness: float = 0.25
+    naturalness: float = 0.10
     natural_cover: float = 0.15
     core: float = 0.15
-    performance: float = 0.10
-    moisture: float = 0.05
+    performance: float = 0.0
+    moisture: float = 0.0
     persistence: float = 0.05
     burn_persist: float = 0.05
-    natural_persist: float = 0.10
+    natural_persist: float = 0.25
+    low_loss: float = 0.15
     protection: float = 0.10
-    forest_loss_shift: float = 0.05
-    canopy_shift: float = 0.05
+    forest_loss_shift: float = 0.0
+    canopy_shift: float = 0.0
 
     def __post_init__(self) -> None:
         _check_weights(self, exclude=("forest_loss_shift", "canopy_shift"))

@@ -89,11 +89,46 @@ def test_intactness_weights_and_forest_shift():
     res = intactness_score(_pool())
     assert sum(res.weights.values()) == pytest.approx(1)
     assert "canopy" not in res.weights
-    res_f = intactness_score(_pool(), is_forest=True)
+    assert res.score.between(0, 1).all()
+    # Forest shifts are off by default; opting in moves weight as before.
+    assert intactness_score(_pool(), is_forest=True).weights == res.weights
+    w = ReferenceWeights(
+        performance=0.05,
+        natural_persist=0.20,
+        forest_loss_shift=0.05,
+        canopy_shift=0.05,
+    )
+    res_f = intactness_score(_pool(), w, is_forest=True)
     assert res_f.weights["forest_persistence"] == pytest.approx(0.05)
     assert res_f.weights["canopy"] == pytest.approx(0.05)
     assert res_f.weights["core"] == pytest.approx(0.10)
-    assert res.score.between(0, 1).all()
+    assert "performance" not in res_f.weights
+    with pytest.raises(ValueError, match="canopy_shift"):
+        ReferenceWeights(canopy_shift=0.05)  # performance is 0 by default
+
+
+def test_intactness_defaults_drop_greenness():
+    """2026-11-11 review: no NDVI/NDMI, gHM 0.10, persistence 0.25, low loss 0.15."""
+    pool = _pool().assign(loss_since_2000_frac=np.linspace(0.05, 0, 20))
+    res = intactness_score(pool)
+    assert res.weights == pytest.approx(
+        {
+            "naturalness": 0.10,
+            "natural_cover": 0.15,
+            "core": 0.15,
+            "persistence": 0.05,
+            "burn_persist": 0.05,
+            "natural_persist": 0.25,
+            "low_loss": 0.15,
+            "protection": 0.10,
+        }
+    )
+    assert not {"performance", "moisture"} & set(res.components.columns)
+    # Greenness no longer moves the score; low Hansen loss does.
+    greener = pool.assign(ndvi_state=pool["ndvi_state"][::-1].values, ndmi_state=0.9)
+    pd.testing.assert_series_equal(intactness_score(greener).score, res.score)
+    assert res.components["low_loss"].is_monotonic_increasing
+    assert not res.missing
 
 
 def test_degradation_redistributes_loss_and_ignores_signature():
