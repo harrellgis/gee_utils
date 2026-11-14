@@ -442,6 +442,20 @@ def test_pool_export_drops_audit_d_columns_and_folds_shortlist():
     assert {"ndvi_base", "modified_by_baseline"} <= set(deg.columns)
 
 
+def test_no_top_file_without_top_candidates(tmp_path):
+    from dataclasses import replace
+
+    from eetools.site_selection.workflows import (
+        export_site_selection,
+        top_candidates_export_frame,
+    )
+
+    res = replace(_export_result(), top_candidates=None)
+    assert top_candidates_export_frame(res).empty
+    paths = export_site_selection(res, tmp_path, project="TGBS", site="T")
+    assert not any("top" in k for k in paths)
+
+
 def test_shortlist_table_is_slim_and_keyed_by_cell_id():
     from eetools.site_selection.workflows import shortlist_table
 
@@ -468,12 +482,20 @@ def test_export_writes_slim_files_without_index(tmp_path):
     )
     assert set(paths) == {
         "reference_pool",
+        "reference_top10",
         "reference_ranked",
         "reference_selection_matrix",
         "reference_layer_register",
     }
     assert paths["reference_pool"] == vec / "TGBS_T_reference_pool_20261114_v1.gpkg"
-    assert sorted(q.name for q in vec.iterdir()) == [paths["reference_pool"].name]
+    assert sorted(q.name for q in vec.iterdir()) == sorted(
+        [paths["reference_pool"].name, "TGBS_T_reference_top10_20261114_v1.gpkg"]
+    )
+    top = gpd.read_file(paths["reference_top10"], layer="top_candidates")
+    assert list(top.columns[:4]) == ["cell_id", "top_rank", "top_score", "proposed"]
+    assert list(top["cell_id"]) == ["c2", "c1"]  # top_rank order
+    assert "ghm_mean" not in top.columns and "pred_elevation" not in top.columns
+    assert set(top["site_role"]) == {"reference"}
     back = gpd.read_file(paths["reference_pool"], layer="pool")
     assert set(back["pool_status"]) == {"eligible", "gated_out"}
     assert "ghm_mean" not in back.columns and "top_rank" in back.columns

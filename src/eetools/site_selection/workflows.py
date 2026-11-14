@@ -2556,6 +2556,10 @@ def export_site_selection(
       top-candidate (``top_rank``, ``top_score``, ``proposed``) columns. Raw
       reduction statistics (``*_mean`` / ``_p10`` / ``_p50`` / ``_p90``) are left
       out: they stay in the ``ScreeningTables`` cache, keyed by ``cell_id``;
+    - ``<kind>_top<n>`` (GPKG, layer 'top_candidates'): the best distinct eligible
+      sites by ``top_score`` (:func:`top_candidates_export_frame`), the slim pool rows
+      in ``top_rank`` order, for swapping a proposed site that fails the basemap
+      check. Not written for results without top candidates;
     - ``<kind>_ranked`` (CSV): the slim shortlist table for reviewers
       (:func:`shortlist_table`);
     - ``<kind>_selection_matrix`` and ``<kind>_layer_register`` (CSV).
@@ -2590,8 +2594,16 @@ def export_site_selection(
     paths: dict[str, Path] = {}
     p = name(f"{kind}_pool", "gpkg")
     p.unlink(missing_ok=True)  # one layer per file; never append to an old one
-    _gpkg_safe(pool_export_frame(result)).to_file(p, layer="pool", driver="GPKG")
+    pool_gdf = pool_export_frame(result)
+    _gpkg_safe(pool_gdf).to_file(p, layer="pool", driver="GPKG")
     paths[f"{kind}_pool"] = p
+    if result.top_candidates is not None:
+        n_top = int(result.params.get("top_candidates_n", TOP_CANDIDATES_N))
+        p = name(f"{kind}_top{n_top}", "gpkg")
+        p.unlink(missing_ok=True)
+        top_gdf = top_candidates_export_frame(result, pool_gdf)
+        _gpkg_safe(top_gdf).to_file(p, layer="top_candidates", driver="GPKG")
+        paths[f"{kind}_top{n_top}"] = p
     for product, df in (
         (f"{kind}_ranked", shortlist_table(result)),
         (f"{kind}_selection_matrix", result.selection_matrix),
@@ -2780,6 +2792,32 @@ def pool_export_frame(result: SiteSelectionResult) -> gpd.GeoDataFrame:
             pool["proposed"] = pool.index.isin(ranked.index)
     pool["site_role"] = result.site_type
     return gpd.GeoDataFrame(pool, geometry="geometry", crs=result.pool.crs)
+
+
+def top_candidates_export_frame(
+    result: SiteSelectionResult, pool: gpd.GeoDataFrame | None = None
+) -> gpd.GeoDataFrame:
+    """The slim top-candidates file written to ``<kind>_top<n>.gpkg``.
+
+    The rows of :func:`pool_export_frame` that are top candidates, in ``top_rank``
+    order, with ``top_rank``, ``top_score`` and ``proposed`` first. Same columns as
+    the pool, so a swap can be checked from this file alone.
+
+    Args:
+        result: SiteSelectionResult with ``top_candidates``.
+        pool: Output of :func:`pool_export_frame` (computed if None).
+
+    Returns:
+        GeoDataFrame indexed by ``cell_id`` (empty when there are no top candidates).
+    """
+    pool = pool_export_frame(result) if pool is None else pool
+    top = result.top_candidates
+    if top is None or "top_rank" not in pool.columns:
+        return pool.iloc[0:0]
+    ids = [c for c in top.index if c in pool.index]
+    out = pool.loc[ids].sort_values("top_rank")
+    lead = [c for c in ("top_rank", "top_score", "proposed") if c in out.columns]
+    return out[lead + [c for c in out.columns if c not in lead]]
 
 
 def shortlist_table(result: SiteSelectionResult) -> pd.DataFrame:

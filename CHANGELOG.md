@@ -12,18 +12,19 @@ is written changes; eligibility, scores, shortlists and the in-memory results ar
 before.
 
 ### Changed
-- **Breaking (output files):** `export_site_selection` now writes four files per
+- **Breaking (output files):** `export_site_selection` now writes five files per
   result:
   - `<kind>_pool.gpkg`: slim, see `pool_export_frame`;
+  - `<kind>_top<n>.gpkg`: the slim pool rows of the top candidates in `top_rank`
+    order, see `top_candidates_export_frame`;
   - `<kind>_ranked.csv`: a slim shortlist table for reviewers, see `shortlist_table`;
   - `<kind>_selection_matrix.csv`;
   - `<kind>_layer_register.csv`.
 
-  The `<kind>_candidates.gpkg` and `<kind>_top<n>.gpkg` files are no longer written:
-  their shortlist and top-candidate columns are folded into the pool. Those are
-  `rank`, `role`, `covers_unit`, `span_note`, `fallback`, `gate_fallback`, `top_rank`,
-  `top_score`, `intactness_pct` and `proposed`. Filter `top_rank <= 10` for the swap
-  list.
+  The `<kind>_candidates.gpkg` file is no longer written. The shortlist and
+  top-candidate columns are folded into the pool: `rank`, `role`, `covers_unit`,
+  `span_note`, `fallback`, `gate_fallback`, `top_rank`, `top_score`, `intactness_pct`
+  and `proposed`.
 - The exported pool drops:
   - raw reduction statistics (`*_mean`/`_p10`/`_p50`/`_p90`), which stay in the
     `ScreeningTables` cache, keyed by `cell_id`;
@@ -53,8 +54,9 @@ before.
   site plus every shortlisted site. Its columns are `site_role`, `rank`, `cell_id`,
   `role` and `covers_unit`. This replaces the notebook's unstamped file, which had no
   `cell_id`.
-- `pool_export_frame(result)` and `shortlist_table(result)` return the exported pool
-  and shortlist frames.
+- `pool_export_frame(result)`, `top_candidates_export_frame(result)` and
+  `shortlist_table(result)` return the exported pool, top-candidate and shortlist
+  frames.
 
 ## [0.8.0] - 2026-11-14
 

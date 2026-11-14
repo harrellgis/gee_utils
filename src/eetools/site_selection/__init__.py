@@ -65,6 +65,7 @@ from eetools.site_selection.workflows import (
     resolve_signature_mode,
     result_to_feature_collection,
     shortlist_table,
+    top_candidates_export_frame,
 )
 
 __all__ = [
@@ -97,6 +98,7 @@ __all__ = [
     "envelope_gate",
     "export_proposed_sites",
     "export_site_selection",
+    "top_candidates_export_frame",
     "focal_baseline_pct",
     "gate_then_thin",
     "identify_degraded_sites",
