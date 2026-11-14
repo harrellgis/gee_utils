@@ -1399,6 +1399,15 @@ DW_BUILT_LABEL = 6  # Dynamic World 'label' code for built
 # are [L] tolerances applied in pandas, never part of the provenance key.
 DW_LANDUSE_FIRST_YEAR = 2019  # first year of the land-use history (as tested)
 DW_LANDUSE_SCALE_M = 30
+# Coarse reference screen (2026-11-14): the same land-use history on the Stage 2 coarse
+# survivors at 120 m (DW label is MODE-pyramided, so a 120 m pixel is the most frequent
+# 10 m label). Refinement is gated and ordered on it instead of the intactness weights.
+DW_COARSE_SCALE_M = 120
+DW_COARSE_BANDS = ("dwc_valid_share", "dwc_nat_share_all", "dwc_nat_share_all_but_one")
+# [L] A coarse cell is refined only if its persistently natural area is at least this
+# fraction of (fine-cell area x min_natural_persist). Below 1 to absorb the 120 m
+# approximation; it only has to rule out cells that cannot hold an eligible fine cell.
+COARSE_LANDUSE_MIN_AREA_FRACTION = 0.5
 DW_NATURAL_LABELS = (1, 2, 3, 5)  # trees, grass, flooded vegetation, shrub and scrub
 DW_MODIFIED_LABELS = (4, 6, 7)  # crops, built, bare
 DW_CROP_LABEL = 4

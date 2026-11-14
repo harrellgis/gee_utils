@@ -745,3 +745,91 @@ def test_workflows_validate_top_candidate_parameters(kw):
         identify_reference_sites(box(0, 0, 1, 1), **kw)
     with pytest.raises(ValueError, match="top_candidates"):
         identify_degraded_sites(box(0, 0, 1, 1), project_start_year=2022, **kw)
+
+
+# --------------------------------------------------------------------------- #
+# Coarse land-use screen (2026-11-14)                                          #
+# --------------------------------------------------------------------------- #
+def _coarse_pool():
+    return pd.DataFrame(
+        {
+            "dwc_nat_share_all": [0.9, 0.05, np.nan, 0.6, 0.0],
+            "dwc_nat_share_all_but_one": [0.95, 0.3, np.nan, 0.7, 0.0],
+            "effective_area_ha": [400.0, 400.0, 400.0, 400.0, 400.0],
+            "env_sim": [0.2, 1.0, 0.5, 1.0, 1.0],
+        },
+        index=pd.Index(list("abcde"), name="cell_id"),
+    )
+
+
+def test_coarse_landuse_screen_gates_on_absolute_persistent_area():
+    from eetools.site_selection.scoring import coarse_landuse_screen
+
+    # fine cell 100 ha, share 0.9, fraction 0.5 -> floor 45 ha of persistent natural
+    out = coarse_landuse_screen(
+        _coarse_pool(),
+        natural_persist_years="all",
+        min_natural_persist=0.9,
+        fine_cell_area_ha=100.0,
+        min_area_fraction=0.5,
+    )
+    assert out.loc["a", "coarse_nat_area_ha"] == pytest.approx(360.0)
+    assert list(out["coarse_landuse_gate"]) == [True, False, True, True, False]
+    assert out["refine_score"].isna().tolist() == [False, True, False, False, True]
+    # unknown persistence is never gated and scores neutral
+    assert out.loc["c", "refine_score"] == pytest.approx(0.5 * 0.75)
+    # order: share x (0.5 + 0.5 env_sim)
+    assert out.loc["a", "refine_score"] == pytest.approx(0.9 * 0.6)
+    assert out.loc["d", "refine_score"] == pytest.approx(0.6)
+
+
+def test_coarse_landuse_screen_year_rule_and_no_gate_for_final_cells():
+    from eetools.site_selection.scoring import coarse_landuse_screen
+
+    loose = coarse_landuse_screen(
+        _coarse_pool(),
+        natural_persist_years="all_but_one",
+        min_natural_persist=0.9,
+        fine_cell_area_ha=100.0,
+        min_area_fraction=0.5,
+    )
+    assert loose.loc["b", "coarse_landuse_gate"]  # 0.3 x 400 = 120 ha >= 45 ha
+    final = coarse_landuse_screen(
+        _coarse_pool(),
+        natural_persist_years="all",
+        min_natural_persist=0.9,
+        fine_cell_area_ha=400.0,
+        min_area_fraction=0.5,
+        gate=False,
+    )
+    assert final["coarse_landuse_gate"].all()
+    assert final["refine_score"].notna().all()
+
+
+def test_coarse_screen_area_falls_back_to_cell_size():
+    from eetools.site_selection.scoring import coarse_landuse_screen
+
+    pool = _coarse_pool().drop(columns="effective_area_ha").assign(size=2000)
+    out = coarse_landuse_screen(
+        pool,
+        natural_persist_years="all",
+        min_natural_persist=0.9,
+        fine_cell_area_ha=100.0,
+        min_area_fraction=0.5,
+    )
+    assert out.loc["a", "coarse_nat_area_ha"] == pytest.approx(360.0)
+
+
+def test_dw_coarse_family_is_registered_at_120_m():
+    from eetools.constants import DW_COARSE_BANDS, DW_COARSE_SCALE_M
+    from eetools.site_selection import predictors as P
+
+    class Ctx:
+        coastal = False
+        class_fallback = False
+        end_year = 2025
+        analysis_scale_m = 100
+
+    fam = P.families(Ctx())["dw_coarse"]  # type: ignore[arg-type]
+    assert fam.bands == tuple(DW_COARSE_BANDS) and fam.scale == DW_COARSE_SCALE_M == 120
+    assert all(b.startswith("dwc_") for b in fam.bands)

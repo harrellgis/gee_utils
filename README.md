@@ -432,7 +432,10 @@ How it works:
   baseline falls on that site's 0–100% scale) and `anchor_check="review"` above
   `anchor_review_pct`. Repeat the anchor check on the survey sensor before rescaling.
 - **Search order.** A coarse screening grid in the focal UTM zone is refined into
-  focal-sized cells, and the search widens through tiers (25 / 50 / 150 km) only when
+  focal-sized cells. For references, the coarse cells to refine are chosen on Dynamic
+  World land-use persistence (120 m), not on the intactness weights: a cell is refined
+  only if it holds enough persistently natural area for an eligible fine cell. The
+  search widens through tiers (25 / 50 / 150 km) only when
   too few eligible candidates pass, or (references) when a management unit (focal
   class) has none. If the ladder is exhausted, the best gated-out cells fill the list
   with `fallback=True` and their `gate_reason`. Reference shortlists are chosen to span

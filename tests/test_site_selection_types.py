@@ -207,3 +207,14 @@ def test_fresh_join_prefers_store_over_stale_snapshot():
     assert list(out["mess"]) == [10.0, 20.0]  # snapshot-only columns still added
     assert not any(c.startswith("_done_") for c in out.columns)
     assert list(out.index) == ["a", "b"]
+
+
+def test_dw_coarse_scale_is_a_completable_key_field():
+    from eetools.site_selection.types import ScreeningTables, ScreeningTablesMismatch
+
+    old = ScreeningTables.empty({"end_year": 2025, "k": 8})  # built before 0.10.0
+    old.check_key({"end_year": 2025, "k": 8, "dw_coarse_scale_m": 120})
+    new = ScreeningTables.empty({"end_year": 2025, "k": 8, "dw_coarse_scale_m": 120})
+    new.check_key({"end_year": 2025, "k": 8, "dw_coarse_scale_m": None})  # degraded run
+    with pytest.raises(ScreeningTablesMismatch, match="dw_coarse_scale_m"):
+        new.check_key({"end_year": 2025, "k": 8, "dw_coarse_scale_m": 240})

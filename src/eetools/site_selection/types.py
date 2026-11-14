@@ -30,7 +30,7 @@ _WEIGHT_TOL = 1e-6
 # a run that does not use the field, e.g. a reference run without
 # project_start_year) are reused, and the reusing run records its value. A field only
 # mismatches when both keys set it to different values.
-COMPLETABLE_KEY_FIELDS = ("project_start_year",)
+COMPLETABLE_KEY_FIELDS = ("project_start_year", "dw_coarse_scale_m")
 
 
 class ScreeningTablesMismatch(ValueError):

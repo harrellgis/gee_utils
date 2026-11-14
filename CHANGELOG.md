@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Absolute coarse screen for reference runs (vault: 2026-11-14 intactness-defaults note,
+"Full re-run on v0.9.0 does not reproduce the tuned results").
+
+### Changed
+- **Breaking (reference results):** Stage 3a no longer picks the coarse cells to
+  refine by `intactness_score(ReferenceWeights)`. On the 0.8.0 weights that ranking
+  moved the search area. At Ecosia, the parent cells of 38 of the 65 basemap-intact
+  cells were no longer refined. Coarse cells have no Dynamic World history, so 0.25
+  of the weight was a constant there, and the ranking leaned on single-date
+  WorldCover.
+  - **New screen:** reference runs reduce a Dynamic World land-use history on the
+    Stage 2 coarse survivors at 120 m (`dw_coarse` family, `dwc_*` columns).
+  - **Gate:** a coarse cell is refined only if its persistently natural area is
+    >= `COARSE_LANDUSE_MIN_AREA_FRACTION` (0.5) x fine-cell area x
+    `min_natural_persist`.
+  - **Order:** surviving cells are ordered by persistent-natural share x
+    (0.5 + 0.5 env_sim), never by the intactness weights. The weights now only order
+    final cells that have passed the gate.
+  - **Unchanged:** the 30 m final-cell gate and the degraded coarse screen.
+- The layer register records the coarse-screen rule and its counts (coarse cells,
+  gated, refined), and `info["coarse_screen"]` holds the same values.
+
+### Added
+- `scoring.coarse_landuse_screen` (pure pandas) and `predictors.build_dw_coarse`.
+- Constants `DW_COARSE_SCALE_M` (120), `DW_COARSE_BANDS` and
+  `COARSE_LANDUSE_MIN_AREA_FRACTION` (0.5, [L]).
+- Provenance key field `dw_coarse_scale_m`. It is completable, so `ScreeningTables`
+  saved by 0.9.0 are completed with the new family, not rejected.
+
 ## [0.9.0] - 2026-11-14
 
 Slim site-selection outputs (vault: 2026-11-14 site-selection output audit). Only what
