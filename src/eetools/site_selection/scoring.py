@@ -1557,17 +1557,19 @@ def build_layer_register(
                     "confidence": "L",
                 }
             )
-    for key, value in params.get("mess_range_floors", {}).items():
+    floors = params.get("mess_range_floors", {})
+    if floors:
+        widened = [k for k in floors if k in params.get("mess_range_widened", [])]
         rows.append(
             {
-                "layer_or_query": f"MESS range floor: {key}",
+                "layer_or_query": "MESS range floors",
                 "version_or_date": "spec §5.2",
-                "extent_or_parameters": value,
+                "extent_or_parameters": "; ".join(
+                    f"{k} {' '.join(str(x) for x in v)}" for k, v in floors.items()
+                ),
                 "access_date": access_date,
                 "result": (
-                    "widened"
-                    if key in params.get("mess_range_widened", [])
-                    else "not needed"
+                    f"widened: {', '.join(widened)}" if widened else "not needed"
                 ),
                 "confidence": "L",
             }

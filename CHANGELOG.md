@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Slim site-selection outputs (vault: 2026-11-14 site-selection output audit). Only what
+is written changes; eligibility, scores, shortlists and the in-memory results are as
+before.
+
+### Changed
+- **Breaking (output files):** `export_site_selection` now writes four files per
+  result:
+  - `<kind>_pool.gpkg`: slim, see `pool_export_frame`;
+  - `<kind>_ranked.csv`: a slim shortlist table for reviewers, see `shortlist_table`;
+  - `<kind>_selection_matrix.csv`;
+  - `<kind>_layer_register.csv`.
+
+  The `<kind>_candidates.gpkg` and `<kind>_top<n>.gpkg` files are no longer written:
+  their shortlist and top-candidate columns are folded into the pool. Those are
+  `rank`, `role`, `covers_unit`, `span_note`, `fallback`, `gate_fallback`, `top_rank`,
+  `top_score`, `intactness_pct` and `proposed`. Filter `top_rank <= 10` for the swap
+  list.
+- The exported pool drops:
+  - raw reduction statistics (`*_mean`/`_p10`/`_p50`/`_p90`), which stay in the
+    `ScreeningTables` cache, keyed by `cell_id`;
+  - the always-true Stage 1 `gate_*` flags;
+  - the `pred_*` copies of the MESS predictors;
+  - `ix`/`iy`/`size`/`cx`/`cy`/`area_ha`/`dist_to_focal_m`, which are encoded in
+    `cell_id` or the geometry;
+  - the code and histogram columns `class_code`, `wrb_code` and `vecea_class`;
+  - `converted_share`, which is a duplicate;
+  - per-run constants: `rung`, `class_source`, `requires_confirmation` and
+    `pathway_test`;
+  - in references, the empty `ndvi_base`/`ndmi_base` and the duplicate
+    `modified_by_baseline`.
+- CSVs are written with `index=False`, so there is no unnamed row-number column.
+- The layer register gains rows for:
+  - the search rung reached;
+  - the national class source and the confirmation note;
+  - the degraded pathway test;
+  - the focal site's Dynamic World context;
+  - where the raw statistics are kept.
+
+  The 12 MESS range-floor rows are now one row.
+
+### Added
+- `export_proposed_sites(focal, results, folder, project, site, version, run_date)`
+  writes `<Project>_<Site>_proposed_sites_<YYYYMMDD>_v<n>.gpkg`, which has the focal
+  site plus every shortlisted site. Its columns are `site_role`, `rank`, `cell_id`,
+  `role` and `covers_unit`. This replaces the notebook's unstamped file, which had no
+  `cell_id`.
+- `pool_export_frame(result)` and `shortlist_table(result)` return the exported pool
+  and shortlist frames.
+
 ## [0.8.0] - 2026-11-14
 
 Reference intactness and land-use gate defaults from the 2026-11-11 basemap review

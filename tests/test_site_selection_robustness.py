@@ -326,53 +326,189 @@ def test_reference_gate_fallback_fills_with_flagged_gated_out_cells():
 # --------------------------------------------------------------------------- #
 # Exports                                                                      #
 # --------------------------------------------------------------------------- #
-def test_export_writes_separate_candidate_and_pool_files(tmp_path):
+def _export_result(site_type="reference"):
     from eetools.site_selection.types import ScreeningTables, SiteSelectionResult
-    from eetools.site_selection.workflows import export_site_selection
 
     geom = [box(36.0, -1.0, 36.01, -0.99), box(36.02, -1.0, 36.03, -0.99)]
-    ranked = gpd.GeoDataFrame(
-        {"rank": [1], "landuse_class": ["persistent_natural"]},
-        geometry=geom[:1],
-        crs=4326,
-        index=pd.Index(["c1"], name="cell_id"),
-    )
+    idx = pd.Index(["c1", "c2"], name="cell_id")
     pool = gpd.GeoDataFrame(
         {
+            "ix": [1, 2],
+            "iy": [1, 1],
+            "size": [250, 250],
+            "cx": [1.0, 2.0],
+            "cy": [1.0, 1.0],
+            "area_ha": [6.25, 6.25],
+            "dist_to_focal_m": [1000.0, 2000.0],
+            "dist_to_focal_km": [1.0, 2.0],
+            "rung": ["T1 strict"] * 2,
+            "gate_land": [True, True],
+            "gate_class": [True, True],
+            "class_code": [21, 21],
+            "national_class": ["Fb", "Fb"],
+            "vecea_class": ['{"21": 1.0}'] * 2,
+            "class_source": ["vecea"] * 2,
+            "wrb_code": [3, 3],
+            "wrb_group": ["Andosols"] * 2,
+            "requires_confirmation": [True, True],
+            "elevation": [2400.0, 2390.0],
+            "pred_elevation": [2400.0, 2390.0],
+            "elevation_p50": [2401.0, 2391.0],
+            "ghm_mean": [0.2, 0.5],
+            "ghm": [0.2, 0.5],
+            "dw_converted_by_2025": [0.0, 0.3],
+            "converted_share": [0.0, 0.3],
+            "ndvi_base": [np.nan, np.nan],
+            "modified_by_baseline": [0.0, 0.4],
+            "pathway_test": ["landuse"] * 2,
             "pool_status": ["eligible", "gated_out"],
             "gate_reason": [None, "natural_persist"],
             "landuse_class": ["persistent_natural", "converted"],
+            "mandatory_met": [True, None],
         },
         geometry=geom,
         crs=4326,
-        index=pd.Index(["c1", "c2"], name="cell_id"),
+        index=idx,
     )
-    res = SiteSelectionResult(
-        site_type="reference",
+    ranked = pool.iloc[:1].assign(
+        rank=1,
+        role="primary",
+        covers_unit="Fb",
+        span_note="lower sand content",
+        fallback=False,
+        gate_fallback=False,
+        mandatory_met_relaxed=True,
+        matrix_total=12,
+        bio12=950.0,
+        dw_bare=0.1,
+        dw_bare_focal=0.05,
+        intactness=0.8,
+        degradation=0.8,
+    )
+    top = gpd.GeoDataFrame(
+        {
+            "top_rank": [2, 1],
+            "top_score": [0.7, 0.9],
+            "intactness_pct": [0.5, 1.0],
+            "proposed": [True, False],
+            "proposed_rank": [1, np.nan],
+            "proposed_role": ["primary", None],
+        },
+        geometry=geom,
+        crs=4326,
+        index=idx,
+    )
+    return SiteSelectionResult(
+        site_type=site_type,
         ranked=ranked,
         pool=pool,
         focal_profile=pd.DataFrame(),
-        params={},
+        params={"top_candidates_n": 10},
         provenance={},
-        selection_matrix=pd.DataFrame({"cell_id": ["c1"]}),
+        selection_matrix=pd.DataFrame({"cell_id": ["c1"], "rank": [1]}),
         layer_register=pd.DataFrame({"layer_or_query": ["x"]}),
         screening=ScreeningTables.empty({}),
         warnings=[],
+        top_candidates=top,
     )
+
+
+def test_pool_export_drops_audit_d_columns_and_folds_shortlist():
+    from eetools.site_selection.workflows import pool_export_frame
+
+    res = _export_result()
+    out = pool_export_frame(res)
+    dropped = {
+        "ix", "iy", "size", "cx", "cy", "area_ha", "dist_to_focal_m", "rung",
+        "gate_land", "gate_class", "class_code", "vecea_class", "class_source",
+        "wrb_code", "requires_confirmation", "pred_elevation", "elevation_p50",
+        "ghm_mean", "converted_share", "pathway_test", "ndvi_base",
+        "modified_by_baseline", "proposed_rank", "proposed_role",
+    }  # fmt: skip
+    assert not dropped & set(out.columns)
+    for kept in ("national_class", "wrb_group", "elevation", "ghm",
+                 "dw_converted_by_2025", "dist_to_focal_km", "pool_status",
+                 "gate_reason", "landuse_class", "mandatory_met"):  # fmt: skip
+        assert kept in out.columns
+    assert out.loc["c1", "rank"] == 1 and pd.isna(out.loc["c2", "rank"])
+    assert out.loc["c1", "role"] == "primary"
+    assert list(out["top_rank"]) == [2, 1]
+    assert list(out["proposed"]) == [True, False]
+    assert set(out["site_role"]) == {"reference"}
+    # the in-memory result is untouched
+    assert "ghm_mean" in res.pool.columns
+    # degraded pools keep the baseline columns
+    deg = pool_export_frame(_export_result("degraded"))
+    assert {"ndvi_base", "modified_by_baseline"} <= set(deg.columns)
+
+
+def test_shortlist_table_is_slim_and_keyed_by_cell_id():
+    from eetools.site_selection.workflows import shortlist_table
+
+    t = shortlist_table(_export_result())
+    assert list(t.columns[:4]) == ["cell_id", "rank", "role", "covers_unit"]
+    assert t.loc[0, "cell_id"] == "c1" and t.loc[0, "top_rank"] == 2
+    assert not {"bio12", "dw_bare_focal", "geometry", "elevation_p50"} & set(t.columns)
+    d = shortlist_table(_export_result("degraded"))
+    assert "dw_bare" in d.columns and "intactness" not in d.columns
+
+
+def test_export_writes_slim_files_without_index(tmp_path):
+    from eetools.site_selection.workflows import export_site_selection
+
+    res = _export_result()
+    vec = tmp_path / "vectors"
     paths = export_site_selection(
-        res, tmp_path, project="TGBS", site="T", run_date="20261110"
+        res,
+        tmp_path / "tables",
+        project="TGBS",
+        site="T",
+        run_date="20261114",
+        vector_folder=vec,
     )
-    cand = paths["reference_candidates"]
-    pl = paths["reference_pool"]
-    assert cand.name == "TGBS_T_reference_candidates_20261110_v1.gpkg"
-    assert pl.name == "TGBS_T_reference_pool_20261110_v1.gpkg"
-    back = gpd.read_file(pl, layer="pool")
+    assert set(paths) == {
+        "reference_pool",
+        "reference_ranked",
+        "reference_selection_matrix",
+        "reference_layer_register",
+    }
+    assert paths["reference_pool"] == vec / "TGBS_T_reference_pool_20261114_v1.gpkg"
+    assert sorted(q.name for q in vec.iterdir()) == [paths["reference_pool"].name]
+    back = gpd.read_file(paths["reference_pool"], layer="pool")
     assert set(back["pool_status"]) == {"eligible", "gated_out"}
-    assert "landuse_class" in back.columns
-    assert len(gpd.read_file(cand, layer="candidates")) == 1
+    assert "ghm_mean" not in back.columns and "top_rank" in back.columns
+    for product in ("ranked", "selection_matrix", "layer_register"):
+        df = pd.read_csv(paths[f"reference_{product}"])
+        assert not any(c.startswith("Unnamed") for c in df.columns)
+    assert pd.read_csv(paths["reference_ranked"])["cell_id"].tolist() == ["c1"]
     # re-export overwrites instead of appending
-    export_site_selection(res, tmp_path, project="TGBS", site="T", run_date="20261110")
-    assert len(gpd.read_file(pl, layer="pool")) == 2
+    export_site_selection(
+        res, tmp_path / "tables", project="TGBS", site="T", run_date="20261114",
+        vector_folder=vec,
+    )  # fmt: skip
+    assert len(gpd.read_file(paths["reference_pool"], layer="pool")) == 2
+
+
+def test_export_proposed_sites_links_rows_to_cell_ids(tmp_path):
+    from eetools.site_selection.workflows import export_proposed_sites
+
+    ref = _export_result()
+    deg = _export_result("degraded")
+    focal = gpd.GeoDataFrame(geometry=[box(36.1, -1.0, 36.11, -0.99)], crs=4326)
+    p = export_proposed_sites(
+        focal, [ref, deg], tmp_path, project="TGBS", site="T", run_date="20261114"
+    )
+    assert p.name == "TGBS_T_proposed_sites_20261114_v1.gpkg"
+    back = gpd.read_file(p, layer="sites")
+    assert list(back.columns) == [
+        "site_role", "rank", "cell_id", "role", "covers_unit", "geometry",
+    ]  # fmt: skip
+    assert list(back["site_role"]) == ["focal", "reference", "degraded"]
+    assert back["cell_id"].isna().iloc[0] and list(back["cell_id"][1:]) == ["c1"] * 2
+    with pytest.raises(ValueError, match="CRS"):
+        export_proposed_sites(
+            gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)]), [], tmp_path
+        )
 
 
 def test_selection_matrix_empty_keeps_summary_columns():
@@ -523,53 +659,6 @@ def test_select_top_candidates_empty_pool():
     pool = _top_pool().assign(pool_status="gated_out")
     top = select_top_candidates(pool, "reference", 500.0)
     assert len(top) == 0 and "top_rank" in top.columns
-
-
-def test_export_writes_top_candidates_and_site_role(tmp_path):
-    from eetools.site_selection.types import ScreeningTables, SiteSelectionResult
-    from eetools.site_selection.workflows import export_site_selection
-
-    geom = [box(36.0, -1.0, 36.01, -0.99), box(36.02, -1.0, 36.03, -0.99)]
-    idx = pd.Index(["c1", "c2"], name="cell_id")
-    pool = gpd.GeoDataFrame(
-        {"pool_status": ["eligible", "gated_out"]}, geometry=geom, crs=4326, index=idx
-    )
-    top = gpd.GeoDataFrame(
-        {"top_rank": [1], "top_score": [0.9], "proposed": [True]},
-        geometry=geom[:1],
-        crs=4326,
-        index=idx[:1],
-    )
-    res = SiteSelectionResult(
-        site_type="degraded",
-        ranked=pool.iloc[:1].assign(rank=1),
-        pool=pool,
-        focal_profile=pd.DataFrame(),
-        params={"top_candidates_n": 10},
-        provenance={},
-        selection_matrix=pd.DataFrame({"cell_id": ["c1"]}),
-        layer_register=pd.DataFrame({"layer_or_query": ["x"]}),
-        screening=ScreeningTables.empty({}),
-        warnings=[],
-        top_candidates=top,
-    )
-    vec = tmp_path / "vectors"
-    paths = export_site_selection(
-        res,
-        tmp_path / "tables",
-        project="TGBS",
-        site="T",
-        run_date="20261111",
-        vector_folder=vec,
-    )
-    t = paths["degraded_top10"]
-    assert t == vec / "TGBS_T_degraded_top10_20261111_v1.gpkg"
-    assert paths["degraded_pool"].parent == vec
-    assert paths["degraded_ranked"].parent == tmp_path / "tables"
-    back = gpd.read_file(t, layer="top_candidates")
-    assert list(back["top_rank"]) == [1]
-    for product in ("degraded_candidates", "degraded_pool", "degraded_top10"):
-        assert set(gpd.read_file(paths[product])["site_role"]) == {"degraded"}
 
 
 def test_sop_pool_columns_keep_mandatory_met_and_automated_scores():
