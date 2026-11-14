@@ -8,6 +8,7 @@ simplified spec (vault ``raw/notes/gee_utils``) for the design rationale.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -2295,6 +2296,47 @@ def _assemble(  # noqa: C901
             "L",
         )
     )
+    # Per-run constants (kept out of the per-cell exports).
+    extra.append(
+        _reg(
+            f"search rung reached: {final['rung'].label}",
+            f"rungs tried: {len(rung_log)}",
+            "H",
+        )
+    )
+    extra.append(
+        _reg(
+            "national class source: "
+            + ("pnv_ecoregion (fallback)" if sets["class_fallback"] else "vecea"),
+            "majority class and WRB group of every cell require ecologist "
+            "confirmation (SOP)",
+            "M",
+        )
+    )
+    if site_type == "degraded" and "pathway_test" in pool.columns:
+        tests = sorted({str(v) for v in pool["pathway_test"].dropna().unique()})
+        extra.append(_reg(f"pathway test: {', '.join(tests) or 'none'}", "", "M"))
+    focal_dw = {
+        c[: -len("_focal")]: round(float(ranked[c].iloc[0]), 4)
+        for c in ranked.columns
+        if c.startswith("dw_") and c.endswith("_focal") and len(ranked)
+    }
+    if focal_dw:
+        extra.append(
+            _reg(
+                f"Dynamic World context of the focal site: {focal_dw}",
+                "mean DW probability; ranked sites carry the same bands",
+                "M",
+            )
+        )
+    extra.append(
+        _reg(
+            "pool export: raw reduction statistics (*_mean/_p10/_p50/_p90) are not in "
+            "the pool GeoPackage",
+            "ScreeningTables cache (screening/*.parquet), keyed by cell_id",
+            "H",
+        )
+    )
     extra.append(_reg("gate reasons (final rung)", str(info.get("gate_reasons")), "H"))
     extra.append(
         _reg(
@@ -2506,19 +2548,24 @@ def export_site_selection(
     """Write a result to local GPKG + CSV files (pure geopandas, no Earth Engine).
 
     Names follow the SOP convention ``<Project>_<Site>_<Product>_<YYYYMMDD>_v<n>``.
-    Candidates and pool are separate spatial files, so either can be reviewed on its
-    own over a basemap:
+    Since 0.9.0 the outputs are slim (vault: 2026-11-14 site-selection output audit):
 
-    - ``<kind>_candidates`` (GPKG, layer 'candidates'): the ranked sites;
-    - ``<kind>_pool`` (GPKG, layer 'pool'): every final cell of the rung reached, with
-      ``pool_status`` ('eligible' / 'gated_out'), ``gate_reason`` and
-      ``landuse_class``;
+    - ``<kind>_pool`` (GPKG, layer 'pool'): every final cell of the rung reached
+      (:func:`pool_export_frame`), with ``pool_status``, ``gate_reason``, the values
+      that were gated and scored, and the shortlist (``rank``, ``role``) and
+      top-candidate (``top_rank``, ``top_score``, ``proposed``) columns. Raw
+      reduction statistics (``*_mean`` / ``_p10`` / ``_p50`` / ``_p90``) are left
+      out: they stay in the ``ScreeningTables`` cache, keyed by ``cell_id``;
     - ``<kind>_top<n>`` (GPKG, layer 'top_candidates'): the best distinct eligible
-      sites by ``top_score`` with ``proposed`` flagging the shortlist (results from
-      0.6.1 on; see ``scoring.select_top_candidates``);
-    - ``<kind>_ranked``, ``<kind>_selection_matrix``, ``<kind>_layer_register`` (CSV).
+      sites by ``top_score`` (:func:`top_candidates_export_frame`), the slim pool rows
+      in ``top_rank`` order, for swapping a proposed site that fails the basemap
+      check. Not written for results without top candidates;
+    - ``<kind>_ranked`` (CSV): the slim shortlist table for reviewers
+      (:func:`shortlist_table`);
+    - ``<kind>_selection_matrix`` and ``<kind>_layer_register`` (CSV).
 
-    Every spatial file carries ``site_role`` ('reference' or 'degraded') for styling.
+    CSVs are written without a row-number index (``cell_id`` is a column). The
+    proposed-sites file is written by :func:`export_proposed_sites`.
 
     Args:
         result: SiteSelectionResult.
@@ -2544,32 +2591,313 @@ def export_site_selection(
         base = vec if ext == "gpkg" else out
         return base / f"{project}_{site}_{product}_{stamp}_v{version}.{ext}"
 
-    spatial = [
-        (f"{kind}_candidates", "candidates", result.ranked),
-        (f"{kind}_pool", "pool", result.pool),
-    ]
-    top = result.top_candidates
-    if top is not None:
-        n_top = int(result.params.get("top_candidates_n", TOP_CANDIDATES_N))
-        spatial.append((f"{kind}_top{n_top}", "top_candidates", top))
     paths: dict[str, Path] = {}
-    for product, layer, gdf in spatial:
-        p = name(product, "gpkg")
-        p.unlink(missing_ok=True)  # one layer per file; never append to an old one
-        out_gdf = gdf.copy()
-        if "site_role" not in out_gdf.columns:
-            out_gdf["site_role"] = kind
-        _gpkg_safe(out_gdf).to_file(p, layer=layer, driver="GPKG")
-        paths[product] = p
+    p = name(f"{kind}_pool", "gpkg")
+    p.unlink(missing_ok=True)  # one layer per file; never append to an old one
+    pool_gdf = pool_export_frame(result)
+    _gpkg_safe(pool_gdf).to_file(p, layer="pool", driver="GPKG")
+    paths[f"{kind}_pool"] = p
+    if result.top_candidates is not None:
+        n_top = int(result.params.get("top_candidates_n", TOP_CANDIDATES_N))
+        p = name(f"{kind}_top{n_top}", "gpkg")
+        p.unlink(missing_ok=True)
+        top_gdf = top_candidates_export_frame(result, pool_gdf)
+        _gpkg_safe(top_gdf).to_file(p, layer="top_candidates", driver="GPKG")
+        paths[f"{kind}_top{n_top}"] = p
     for product, df in (
-        (f"{kind}_ranked", pd.DataFrame(result.ranked.drop(columns="geometry"))),
+        (f"{kind}_ranked", shortlist_table(result)),
         (f"{kind}_selection_matrix", result.selection_matrix),
         (f"{kind}_layer_register", result.layer_register),
     ):
         p = name(product, "csv")
-        df.to_csv(p, index=True)
+        df.to_csv(p, index=False)
         paths[product] = p
     return paths
+
+
+# Exported pool: columns dropped because they are constant per run (moved to the
+# layer register), encoded in cell_id / geometry, or duplicates of a kept column.
+EXPORT_DROP_COLUMNS = (
+    "ix",
+    "iy",
+    "size",
+    "cx",
+    "cy",
+    "area_ha",
+    "dist_to_focal_m",
+    "rung",
+    "class_code",
+    "vecea_class",
+    "pnv_biome",
+    "class_source",
+    "wrb_code",
+    "requires_confirmation",
+    "converted_share",
+    "pathway_test",
+    "gate_land",
+    "gate_class",
+    "gate_substrate",
+    "gate_elevation",
+    "gate_rainfall",
+    "gate_coastal",
+    "gate_hydro",
+    "proposed_rank",
+    "proposed_role",
+)
+# Empty (baseline-window state) or duplicated (= dw_mod_share_persist) in references.
+EXPORT_DROP_REFERENCE = ("ndvi_base", "ndmi_base", "modified_by_baseline")
+# Raw reduction statistics: kept in the ScreeningTables cache, keyed by cell_id.
+_EXPORT_STAT_SUFFIXES = ("_mean", "_p10", "_p50", "_p90")
+# Shortlist columns folded into the pool (blank for cells not shortlisted).
+POOL_SHORTLIST_COLUMNS = (
+    "rank",
+    "role",
+    "covers_unit",
+    "span_note",
+    "fallback",
+    "gate_fallback",
+)
+POOL_TOP_COLUMNS = ("top_rank", "top_score", "intactness_pct", "proposed")
+# Slim shortlist table (<kind>_ranked.csv); columns absent from a result are skipped.
+SHORTLIST_COLUMNS: dict[str, tuple[str, ...]] = {
+    "reference": (
+        "cell_id",
+        "rank",
+        "role",
+        "covers_unit",
+        "tier",
+        "dist_to_focal_km",
+        "national_class",
+        "wrb_group",
+        "rank_score",
+        "intactness",
+        "env_sim",
+        "mess",
+        "mess_mod",
+        "embed_sim",
+        "agree",
+        "intactness_flag",
+        "landuse_class",
+        "natural_persist",
+        "natural_frac",
+        "ghm",
+        "loss_since_2000_frac",
+        "recent_loss_frac",
+        "canopy_height",
+        "mandatory_met",
+        "mandatory_met_relaxed",
+        "matrix_total",
+        "fallback",
+        "gate_fallback",
+        "gate_reason",
+        "top_rank",
+        "top_score",
+        "span_note",
+    ),
+    "degraded": (
+        "cell_id",
+        "rank",
+        "role",
+        "covers_unit",
+        "tier",
+        "dist_to_focal_km",
+        "national_class",
+        "wrb_group",
+        "rank_score",
+        "degradation",
+        "env_sim",
+        "mess",
+        "mess_mod",
+        "below_baseline",
+        "below_baseline_ndvi",
+        "below_baseline_ndmi",
+        "focal_baseline_pct_ndvi",
+        "focal_baseline_pct_ndmi",
+        "anchor_check",
+        "zero_star_likelihood",
+        "landuse_class",
+        "modified_by_baseline",
+        "dw_conversion_year",
+        "pathway_gate",
+        "pathway_example",
+        "signature_pct",
+        "built_frac",
+        "dw_built_share",
+        "dw_crop_share",
+        "dw_bare",
+        "dw_crops",
+        "dw_built",
+        "natural_frac",
+        "ghm",
+        "mandatory_met",
+        "mandatory_met_relaxed",
+        "matrix_total",
+        "fallback",
+        "gate_fallback",
+        "gate_reason",
+        "top_rank",
+        "top_score",
+        "span_note",
+    ),
+}
+
+
+def _is_stat_column(name: str) -> bool:
+    return name.endswith(_EXPORT_STAT_SUFFIXES)
+
+
+def pool_export_frame(result: SiteSelectionResult) -> gpd.GeoDataFrame:
+    """The slim pool written to ``<kind>_pool.gpkg``.
+
+    Starts from ``result.pool`` and drops what the 2026-11-14 output audit marked D:
+    raw reduction statistics (``*_mean`` / ``_p10`` / ``_p50`` / ``_p90``, kept in the
+    ``ScreeningTables`` cache), the always-true Stage 1 ``gate_*`` flags (only
+    survivors reach the pool), ``pred_*`` copies of the MESS predictors, per-run
+    constants (moved to the layer register), columns encoded in ``cell_id`` or the
+    geometry, and empty or duplicate reference columns. The shortlist columns
+    (``POOL_SHORTLIST_COLUMNS``) and the top-candidate columns (``POOL_TOP_COLUMNS``)
+    are joined in, so the pool alone shows which cells were proposed and which are
+    the swap candidates. ``result.pool`` itself is not changed.
+
+    Args:
+        result: SiteSelectionResult.
+
+    Returns:
+        GeoDataFrame indexed by ``cell_id`` with ``site_role`` set.
+    """
+    pool = result.pool.copy()
+    drop = set(EXPORT_DROP_COLUMNS)
+    if result.site_type == "reference":
+        drop |= set(EXPORT_DROP_REFERENCE)
+    keep = [
+        c
+        for c in pool.columns
+        if c == "geometry"
+        or not (c in drop or c.startswith("pred_") or _is_stat_column(c))
+    ]
+    pool = pool[keep]
+    ranked = result.ranked
+    short = [c for c in POOL_SHORTLIST_COLUMNS if c in ranked.columns]
+    if short:
+        pool = pool.drop(columns=short, errors="ignore").join(
+            pd.DataFrame(ranked[short]), how="left"
+        )
+    top = result.top_candidates
+    if top is not None:
+        tops = [c for c in POOL_TOP_COLUMNS if c in top.columns]
+        pool = pool.drop(columns=tops, errors="ignore").join(
+            pd.DataFrame(top[tops]), how="left"
+        )
+        if "proposed" in pool.columns:
+            pool["proposed"] = pool.index.isin(ranked.index)
+    pool["site_role"] = result.site_type
+    return gpd.GeoDataFrame(pool, geometry="geometry", crs=result.pool.crs)
+
+
+def top_candidates_export_frame(
+    result: SiteSelectionResult, pool: gpd.GeoDataFrame | None = None
+) -> gpd.GeoDataFrame:
+    """The slim top-candidates file written to ``<kind>_top<n>.gpkg``.
+
+    The rows of :func:`pool_export_frame` that are top candidates, in ``top_rank``
+    order, with ``top_rank``, ``top_score`` and ``proposed`` first. Same columns as
+    the pool, so a swap can be checked from this file alone.
+
+    Args:
+        result: SiteSelectionResult with ``top_candidates``.
+        pool: Output of :func:`pool_export_frame` (computed if None).
+
+    Returns:
+        GeoDataFrame indexed by ``cell_id`` (empty when there are no top candidates).
+    """
+    pool = pool_export_frame(result) if pool is None else pool
+    top = result.top_candidates
+    if top is None or "top_rank" not in pool.columns:
+        return pool.iloc[0:0]
+    ids = [c for c in top.index if c in pool.index]
+    out = pool.loc[ids].sort_values("top_rank")
+    lead = [c for c in ("top_rank", "top_score", "proposed") if c in out.columns]
+    return out[lead + [c for c in out.columns if c not in lead]]
+
+
+def shortlist_table(result: SiteSelectionResult) -> pd.DataFrame:
+    """The slim shortlist table written to ``<kind>_ranked.csv``.
+
+    One row per proposed site, in rank order, with the columns a reviewer needs
+    (``SHORTLIST_COLUMNS``): identity, rank and role, the scores and flags behind the
+    rank, the SOP summary and the site's top-candidate rank. Every other value is in
+    the pool GeoPackage and the selection matrix, both keyed by ``cell_id``.
+
+    Args:
+        result: SiteSelectionResult.
+
+    Returns:
+        DataFrame with ``cell_id`` as the first column.
+    """
+    ranked = pd.DataFrame(result.ranked.drop(columns="geometry", errors="ignore"))
+    top = result.top_candidates
+    if top is not None:
+        tops = [c for c in ("top_rank", "top_score") if c in top.columns]
+        ranked = ranked.drop(columns=tops, errors="ignore").join(
+            pd.DataFrame(top[tops]), how="left"
+        )
+    ranked = ranked.rename_axis("cell_id").reset_index()
+    cols = [c for c in SHORTLIST_COLUMNS[result.site_type] if c in ranked.columns]
+    return ranked[cols]
+
+
+def export_proposed_sites(
+    focal: str | Path | gpd.GeoDataFrame,
+    results: Sequence[SiteSelectionResult],
+    folder: str | Path,
+    project: str = "Project",
+    site: str = "Site",
+    version: int = 1,
+    run_date: str | None = None,
+) -> Path:
+    """Write the focal site and every shortlisted site to one GeoPackage.
+
+    File ``<Project>_<Site>_proposed_sites_<YYYYMMDD>_v<n>.gpkg``, layer 'sites',
+    EPSG:4326, columns ``site_role`` ('focal' / 'reference' / 'degraded'), ``rank``
+    (0 = focal), ``cell_id`` (blank for the focal site), ``role`` and
+    ``covers_unit``, so every row links to its pool, shortlist and matrix rows.
+
+    Args:
+        focal: Focal site (vector file path or GeoDataFrame).
+        results: Reference and/or degraded results.
+        folder: Output directory (created if missing).
+        project: Project code for the file name.
+        site: Site code for the file name.
+        version: Version number.
+        run_date: YYYYMMDD stamp (default today).
+
+    Returns:
+        Path of the written file.
+    """
+    gdf = focal if isinstance(focal, gpd.GeoDataFrame) else gpd.read_file(focal)
+    if gdf.crs is None:
+        raise ValueError("The focal site has no CRS.")
+    cols = ["site_role", "rank", "cell_id", "role", "covers_unit", "geometry"]
+    parts = [
+        gpd.GeoDataFrame(geometry=gdf.to_crs(4326).geometry.values, crs=4326).assign(
+            site_role="focal", rank=0, cell_id=None
+        )
+    ]
+    for res in results:
+        r = res.ranked.to_crs(4326).rename_axis("cell_id").reset_index()
+        r["site_role"] = res.site_type
+        parts.append(r[[c for c in cols if c in r.columns]])
+    sites = gpd.GeoDataFrame(
+        pd.concat(parts, ignore_index=True), geometry="geometry", crs=4326
+    )
+    sites = sites[[c for c in cols if c in sites.columns]]
+    out = Path(folder)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = run_date or date.today().strftime("%Y%m%d")
+    p = out / f"{project}_{site}_proposed_sites_{stamp}_v{version}.gpkg"
+    p.unlink(missing_ok=True)
+    _gpkg_safe(sites).to_file(p, layer="sites", driver="GPKG")
+    return p
 
 
 def _gpkg_safe(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

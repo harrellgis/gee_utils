@@ -57,11 +57,15 @@ from eetools.site_selection.types import (
     default_degraded_weights,
 )
 from eetools.site_selection.workflows import (
+    export_proposed_sites,
     export_site_selection,
     identify_degraded_sites,
     identify_reference_sites,
+    pool_export_frame,
     resolve_signature_mode,
     result_to_feature_collection,
+    shortlist_table,
+    top_candidates_export_frame,
 )
 
 __all__ = [
@@ -92,11 +96,15 @@ __all__ = [
     "drop_collinear",
     "embedding_query_similarity",
     "envelope_gate",
+    "export_proposed_sites",
     "export_site_selection",
+    "top_candidates_export_frame",
     "focal_baseline_pct",
     "gate_then_thin",
     "identify_degraded_sites",
     "identify_reference_sites",
+    "shortlist_table",
+    "pool_export_frame",
     "intactness_score",
     "landuse_history",
     "mean_embedding_vector",

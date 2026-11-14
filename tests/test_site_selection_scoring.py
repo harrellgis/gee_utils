@@ -512,6 +512,23 @@ def test_layer_register_marks_thresholds_low_confidence():
         reg.loc[reg["layer_or_query"].str.startswith("threshold"), "confidence"] == "L"
     ).all()
     assert reg.loc[reg["layer_or_query"] == "WDPA", "confidence"].item() == "H"
+    floor = reg.loc[reg["layer_or_query"] == "MESS range floors"].iloc[0]
+    assert floor["extent_or_parameters"] == "slope abs 2.0"
+    assert floor["result"] == "not needed"
+
+
+def test_layer_register_merges_mess_floors_into_one_row():
+    reg = build_layer_register(
+        {},
+        {
+            "mess_range_floors": {"slope": ["abs", 2.0], "bio12": ["rel", 0.05]},
+            "mess_range_widened": ["bio12"],
+        },
+        "2026-11-14",
+    )
+    rows = reg[reg["layer_or_query"].str.startswith("MESS")]
+    assert len(rows) == 1
+    assert rows.iloc[0]["result"] == "widened: bio12"
 
 
 # --------------------------------------------------------------------------- #

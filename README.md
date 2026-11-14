@@ -341,6 +341,7 @@ entry points are also importable from `eetools.workflows`.
 ```python
 from eetools.site_selection import (
     ScreeningTables,
+    export_proposed_sites,
     export_site_selection,
     identify_degraded_sites,
     identify_reference_sites,
@@ -368,8 +369,12 @@ ref.warnings              # ladder expansion, relaxed gates, fallbacks, ...
 ref.screening.to_parquet("outputs/screening")   # reload: ScreeningTables.from_parquet
 export_site_selection(ref, "outputs/tables", project="TGBS", site="ITF",
                       vector_folder="outputs/vectors")
-# -> TGBS_ITF_reference_candidates_<date>_v1.gpkg, _reference_pool_..., _reference_top10_...
-#    (vectors, each with site_role) plus ranked / selection-matrix / layer-register CSVs
+# -> TGBS_ITF_reference_pool_<date>_v1.gpkg (slim: every final cell, with the shortlist
+#    and top-candidate columns), _reference_top10_... (the top candidates), plus the
+#    ranked (slim shortlist), selection-matrix and layer-register CSVs. Raw reduction
+#    statistics stay in the ScreeningTables parquet.
+export_proposed_sites(focal_gdf, [ref, deg], "outputs/vectors", project="TGBS", site="ITF")
+# -> TGBS_ITF_proposed_sites_<date>_v1.gpkg (focal + shortlist, with cell_id)
 ```
 
 How it works:
@@ -436,7 +441,8 @@ How it works:
   eligible sites by `top_score`, the mean of the condition percentile (intactness or
   degradation) and `env_sim`, ties broken by `rank_score` and spaced like the shortlist.
   `proposed` flags the shortlisted ones. Use it to swap a proposed site that fails the
-  basemap or field check.
+  basemap or field check. It is exported as `<kind>_top10.gpkg`, and the pool also
+  carries `top_rank`, `top_score` and `proposed`.
 - **Earth Engine use.** Every reduction is memoised in `ScreeningTables`, and gating,
   scoring and ranking run in pandas. Reusing the tables (in memory or from parquet)
   costs no further EECU and gives identical results. Batches are sent in spatial
