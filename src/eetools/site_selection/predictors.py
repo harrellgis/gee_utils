@@ -26,6 +26,8 @@ from eetools.constants import (
     CHIRPS_NATIVE_SCALE_M,
     CORE_FRAC_RADIUS_M,
     DW_BUILT_LABEL,
+    DW_COARSE_BANDS,
+    DW_COARSE_SCALE_M,
     DW_COLLECTION,
     DW_CROP_LABEL,
     DW_LANDUSE_FIRST_YEAR,
@@ -835,6 +837,25 @@ def build_dw_landuse(ctx: RunContext) -> ee.Image:
     return ee.Image.cat(bands).toFloat().updateMask(ctx.outside_mask())
 
 
+def build_dw_coarse(ctx: RunContext) -> ee.Image:
+    """Coarse-screen subset of :func:`build_dw_landuse` (validity and natural shares).
+
+    Reduced at ``DW_COARSE_SCALE_M`` on the Stage 2 coarse survivors of reference
+    runs, so the refinement step can gate and order on land-use persistence. Bands are
+    prefixed ``dwc_`` so they never mix with the 30 m final-cell values when the
+    coarse grid is also the final grid (k = 1).
+
+    Args:
+        ctx: RunContext.
+
+    Returns:
+        ee.Image with bands dwc_valid_share, dwc_nat_share_all,
+        dwc_nat_share_all_but_one.
+    """
+    src = ["dw_valid_share", "dw_nat_share_all", "dw_nat_share_all_but_one"]
+    return build_dw_landuse(ctx).select(src, list(DW_COARSE_BANDS))
+
+
 # --------------------------------------------------------------------------- #
 # Reduction families                                                           #
 # --------------------------------------------------------------------------- #
@@ -1221,6 +1242,9 @@ def families(ctx: RunContext) -> dict[str, Family]:
         "dw_landuse": Family(
             "dw_landuse", tuple(dw_landuse_bands(ctx)), None, DW_LANDUSE_SCALE_M, "mean"
         ),
+        "dw_coarse": Family(
+            "dw_coarse", tuple(DW_COARSE_BANDS), None, DW_COARSE_SCALE_M, "mean"
+        ),
         "labels": Family(
             "labels",
             ("pnv_biome" if ctx.class_fallback else "vecea_class", "wrb_group"),
@@ -1246,6 +1270,7 @@ def family_image_fn(name: str, ctx: RunContext) -> Any:
         "viirs": lambda: build_viirs(ctx),
         "canopy": lambda: build_canopy(ctx),
         "dw_landuse": lambda: build_dw_landuse(ctx),
+        "dw_coarse": lambda: build_dw_coarse(ctx),
         "labels": lambda: build_label_image(ctx),
     }[name]
 

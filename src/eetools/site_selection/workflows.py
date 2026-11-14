@@ -23,6 +23,7 @@ from eetools.constants import (
     ANCHOR_INDICES,
     ANCHOR_REVIEW_PCT,
     CHIRPS_PENTAD_COLLECTION,
+    COARSE_LANDUSE_MIN_AREA_FRACTION,
     COARSE_MIN_SHARE_FLOOR,
     COAST_PREDICTOR,
     COASTAL_MIN_LIMIT_M,
@@ -34,6 +35,8 @@ from eetools.constants import (
     DEGRADATION_TYPE_PROFILES,
     DEGRADED_MAX_BUILT_FRAC,
     DEGRADED_MAX_DW_BUILT,
+    DW_COARSE_BANDS,
+    DW_COARSE_SCALE_M,
     DW_COLLECTION,
     DW_LANDUSE_FIRST_YEAR,
     DYNAMIC_WORLD_FIRST_YEAR,
@@ -105,6 +108,7 @@ from eetools.site_selection.scoring import (
     baseline_window,
     build_layer_register,
     build_selection_matrix,
+    coarse_landuse_screen,
     conversion_pathway,
     degradation_score,
     degraded_exclusion_reasons,
@@ -768,6 +772,13 @@ def _run(
         "project_start_year": (
             int(kw["project_start_year"]) if site_type == "degraded" else None
         ),
+        # Scale of the coarse land-use screen (reference runs). Completable, so tables
+        # built before 0.10.0 (no coarse DW family) are completed, not rejected.
+        "dw_coarse_scale_m": (
+            DW_COARSE_SCALE_M
+            if site_type == "reference" and end_year > DW_LANDUSE_FIRST_YEAR
+            else None
+        ),
     }
     screening = kw.get("screening")
     if screening is not None:
@@ -1233,9 +1244,47 @@ def _score_rung(  # noqa: C901, PLR0913
     cpool["screen_score"] = _screen_score(cpool, site_type, ref_w, deg_w, is_forest)
 
     # ---- Stage 3a: refine best coarse cells ----------------------------------
+    dw_ok = ctx.end_year > DW_LANDUSE_FIRST_YEAR
+    coarse_screen: dict[str, Any] = {"rule": "screen_score (condition weights)"}
+    refine_col = "screen_score"
+    if site_type == "reference" and dw_ok and len(cpool):
+        # Absolute coarse screen (2026-11-14): gate and order on Dynamic World
+        # persistence at 120 m, never on the intactness weights, so re-weighting does
+        # not move the search area. The exact 30 m gate still runs on final cells.
+        ensure("coarse", "dw_coarse", grid.loc[cpool.index])
+        dwc = store.coarse.loc[cpool.index, list(DW_COARSE_BANDS)]
+        cpool = cpool.drop(columns=list(DW_COARSE_BANDS), errors="ignore").join(dwc)
+        fine_area_ha = (fine_size if k > 1 else screen) ** 2 / 1e4
+        cs = coarse_landuse_screen(
+            cpool,
+            natural_persist_years=tol.natural_persist_years,
+            min_natural_persist=tol.min_natural_persist,
+            fine_cell_area_ha=fine_area_ha,
+            min_area_fraction=COARSE_LANDUSE_MIN_AREA_FRACTION,
+            gate=k > 1,
+        )
+        for c in cs.columns:
+            cpool[c] = cs[c]
+        refine_col = "refine_score"
+        coarse_screen = {
+            "rule": (
+                f"Dynamic World natural ({tol.natural_persist_years}) share at "
+                f"{DW_COARSE_SCALE_M} m x (0.5 + 0.5 env_sim)"
+                + (
+                    f"; refined only with >= {COARSE_LANDUSE_MIN_AREA_FRACTION} x "
+                    f"{fine_area_ha:g} ha x {tol.min_natural_persist} persistently "
+                    "natural"
+                    if k > 1
+                    else ""
+                )
+            ),
+            "candidates": int(len(cpool)),
+            "gated": int((~cs["coarse_landuse_gate"]).sum()),
+        }
     # Thin coarse cells so edge neighbours are not refined twice (diagonals allowed).
-    top_ids = thin_spatially(cpool, "screen_score", screen * 1.01)
+    top_ids = thin_spatially(cpool, refine_col, screen * 1.01)
     top_ids = top_ids[: int(kw["refine_pool"])]
+    coarse_screen["refined"] = int(len(top_ids))
     if k > 1:
         fine = refine_cells(grid.loc[top_ids], k)
         fine = apply_exclusions(fine, excl_utm, ctx.crs, tol.exclude_max_share)
@@ -1274,7 +1323,6 @@ def _score_rung(  # noqa: C901, PLR0913
         level = "coarse"
     for fam in ("env", "ndvi", "nbar", "fraction"):
         ensure(level, fam, fcells)
-    dw_ok = ctx.end_year > DW_LANDUSE_FIRST_YEAR
     if dw_ok:
         # Land-use history on every final cell, before any gate or thinning.
         ensure(level, "dw_landuse", fcells)
@@ -1397,6 +1445,7 @@ def _score_rung(  # noqa: C901, PLR0913
         "mess_range_widened": sorted(set(mess.widened) | set(fmess.widened)),
         "mess_dropped": sorted(set(mess.dropped) | set(fmess.dropped)),
         "ndvi_performance_denominator": denom,
+        "coarse_screen": coarse_screen,
         "ndmi_pool_p90": denom_ndmi,
         "coarse_stage2_survivors": int(len(surv2)),
         "refined_coarse_cells": int(len(top_ids)),
@@ -2294,6 +2343,15 @@ def _assemble(  # noqa: C901
             "passed, gHM < 0.4",
             "absolute thresholds; gHM break from Kennedy et al. 2019 (moderate/high)",
             "L",
+        )
+    )
+    cs_info = info.get("coarse_screen") or {}
+    extra.append(
+        _reg(
+            f"coarse screen (Stage 3a refinement): {cs_info.get('rule')}",
+            f"coarse cells {cs_info.get('candidates')}, gated {cs_info.get('gated')}, "
+            f"refined {cs_info.get('refined')} (refine_pool {kw.get('refine_pool')})",
+            "M",
         )
     )
     # Per-run constants (kept out of the per-cell exports).

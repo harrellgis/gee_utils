@@ -820,6 +820,66 @@ def stop_rule_met(
     return True
 
 
+def coarse_landuse_screen(
+    cpool: pd.DataFrame,
+    *,
+    natural_persist_years: str,
+    min_natural_persist: float,
+    fine_cell_area_ha: float,
+    min_area_fraction: float,
+    gate: bool = True,
+) -> pd.DataFrame:
+    """Reference coarse screen: gate and order refinement on land-use persistence.
+
+    Absolute and independent of ``ReferenceWeights``, so re-weighting the intactness
+    score never changes which coarse cells are refined (2026-11-14 review):
+
+    - ``coarse_nat_area_ha`` = ``dwc_nat_share_<years>`` x ``effective_area_ha``;
+    - ``coarse_landuse_gate``: False where that area is below ``min_area_fraction``
+      x ``fine_cell_area_ha`` x ``min_natural_persist`` (the cell cannot hold an
+      eligible fine cell). Cells without a value are never gated;
+    - ``refine_score`` = share x (0.5 + 0.5 env_sim), NaN where gated. A missing
+      share counts as NEUTRAL and a missing env_sim as 0.5.
+
+    Args:
+        cpool: Coarse condition pool with ``dwc_*`` shares, ``effective_area_ha``
+            (or ``size``) and ``env_sim``.
+        natural_persist_years: 'all' or 'all_but_one'.
+        min_natural_persist: Fine-cell reference gate share.
+        fine_cell_area_ha: Area of one fine cell (ha).
+        min_area_fraction: COARSE_LANDUSE_MIN_AREA_FRACTION.
+        gate: Apply the area gate (False when the coarse cells are the final cells,
+            where the exact 30 m gate follows on the same cells).
+
+    Returns:
+        DataFrame indexed like ``cpool`` with coarse_nat_area_ha,
+        coarse_landuse_gate and refine_score.
+    """
+    share = _col(cpool, f"dwc_nat_share_{natural_persist_years}")
+    area = _col(cpool, "effective_area_ha")
+    if area.isna().all():
+        area = _col(cpool, "size") ** 2 / 1e4
+    nat_area = share * area
+    floor = (
+        float(min_area_fraction) * float(fine_cell_area_ha) * float(min_natural_persist)
+    )
+    passed = (
+        nat_area.isna() | (nat_area >= floor)
+        if gate
+        else pd.Series(True, index=cpool.index)
+    )
+    env = 0.5 + 0.5 * _col(cpool, "env_sim").fillna(0.5)
+    score = (share.fillna(NEUTRAL) * env).where(passed)
+    return pd.DataFrame(
+        {
+            "coarse_nat_area_ha": nat_area,
+            "coarse_landuse_gate": passed.astype(bool),
+            "refine_score": score,
+        },
+        index=cpool.index,
+    )
+
+
 def thin_spatially(
     df: pd.DataFrame,
     score_col: str,
