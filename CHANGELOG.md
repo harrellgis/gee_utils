@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-14
+
 Reference intactness and land-use gate defaults from the 2026-11-11 basemap review
 of the TGBS_Ecosia and TGBS_ITF reference pools (vault:
 2026-11-11-gee-utils-site-selection-reference-tuning-basemap-review, section 6).
