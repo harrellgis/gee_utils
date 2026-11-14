@@ -385,16 +385,20 @@ How it works:
   reduction per final cell gives the yearly label history from 2019 to `end_year`, and
   each cell gets a `landuse_class`: `persistent_natural`, `converted` (with mean
   conversion year), `persistent_modified`, `built`, `mixed` or `no_dw`. **Reference
-  cells must be persistently natural** (`tolerances.min_natural_persist` of the cell
-  natural in all but one year of the history, or every year with
-  `natural_persist_years="all"`).
+  cells must be persistently natural** (`tolerances.min_natural_persist`, default 0.9,
+  of the cell natural in every year of the history; `natural_persist_years="all_but_one"`
+  tolerates one off-year label).
   The gate runs inside each search-ladder rung, before scoring, thinning and the stop
   rule, so a thin gated pool widens the search. Natural cover on final cells is the
   pixel-level agreement of WorldCover natural and Dynamic World persistent natural
   (corrects cropland that WorldCover maps as shrub or grass).
 - **Condition.** Within the eligible cells, intactness or degradation from MODIS
   NDVI/NDMI/NBR state and trends, a 250 m fraction image (natural cover, Hansen loss,
-  core area), gHM, Dynamic World natural persistence and WDPA. Percentiles only order
+  core area), gHM, Dynamic World natural persistence and WDPA. Intactness has no
+  greenness term by default (`ReferenceWeights.performance = moisture = 0`): references
+  set the 100% end of the index scales, and plantations are greener than natural
+  vegetation. It leans on all-years natural persistence (0.25) and low Hansen loss
+  since 2000 (0.15), with gHM at 0.10. Percentiles only order
   cells; eligibility and the SOP integrity criterion are absolute: forest, riverine and
   bamboo classes need median canopy height >= 5 m, other vegetation needs the land-use
   gate and gHM < 0.4, so intact does not mean "more trees".

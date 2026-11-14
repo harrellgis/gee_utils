@@ -168,7 +168,8 @@ def test_stop_rule_continues_when_a_unit_is_missing():
 
 def test_tolerances_new_fields_validate():
     t = EnvelopeTolerances()
-    assert t.min_natural_persist == 0.8 and t.unit_coverage_stop
+    assert t.min_natural_persist == 0.9 and t.natural_persist_years == "all"
+    assert t.unit_coverage_stop
     with pytest.raises(ValueError):
         EnvelopeTolerances(natural_persist_years="most")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -190,7 +191,7 @@ def test_default_degraded_weights_drop_pressure_except_settlement():
 
 def test_reference_weights_replace_bii_with_natural_persist():
     w = ReferenceWeights()
-    assert w.natural_persist == pytest.approx(0.10)
+    assert w.natural_persist == pytest.approx(0.25)
     assert not hasattr(w, "bii")
 
 

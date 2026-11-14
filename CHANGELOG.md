@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Reference intactness and land-use gate defaults from the 2026-11-11 basemap review
+of the TGBS_Ecosia and TGBS_ITF reference pools (vault:
+2026-11-11-gee-utils-site-selection-reference-tuning-basemap-review, section 6).
+
+### Changed
+- **Breaking (defaults):** reference results change at every site.
+  - `EnvelopeTolerances` now gates references on natural in **every** Dynamic World
+    year (`natural_persist_years="all"`, was `"all_but_one"`) at
+    `min_natural_persist=0.9` (was 0.8). Coarse-cell sites that need the old
+    tolerance can pass `natural_persist_years="all_but_one", min_natural_persist=0.8`.
+  - `ReferenceWeights` drops greenness from intactness: `performance` (NDVI) and
+    `moisture` (NDMI) are 0 (were 0.10 / 0.05). References set the 100% end of the
+    index scales, and plantations are greener than natural vegetation. Greenness
+    stays in the D1 anchor test and the degradation score.
+  - `naturalness` (1 - gHM) is 0.10 (was 0.25) and `natural_persist` is 0.25 (was
+    0.10). gHM stays in the SOP integrity screen.
+  - The forest-stratum shifts `forest_loss_shift` and `canopy_shift` default to 0
+    (were 0.05 each). `canopy_shift` still comes from `performance`, so opting in
+    needs `performance >= canopy_shift`.
+
+### Added
+- `ReferenceWeights.low_loss` (default 0.15): the intactness component
+  pct(1 - `loss_since_2000_frac`), Hansen loss since 2000. It is written as
+  `c_low_loss` with the other components.
+
+The new defaults reproduce the 2026-11-11 tuned eligibility and intactness scores
+exactly on both saved pools (Ecosia 92, ITF 15 eligible cells).
+
 ## [0.7.3] - 2026-11-13
 
 Structure, fire and phenology builders (E9a-c, vault: 2026-11-12 eetools v0.7 build
