@@ -238,8 +238,16 @@ Static canopy height baselines sit next to `get_canopy_height` (Meta 1 m) in
   `canopy_height_sd`, with no-data 255 masked.
 - `get_glad_canopy_height_2019(aoi=None, pin_projection=False)` returns GLAD 30 m, with
   the water, snow and no-data codes masked.
+- `get_echosat(aoi=None, years=None, mask_water=True, pin_projection=False)` returns
+  ECHOSAT annual canopy height for 2018-2024 at 10 m, as float metres, one
+  `canopy_height_<year>` band per year. The source is int16 centimetres. ECHOSAT has
+  no water mask of its own, so ESA WorldCover water is masked by default.
+  `get_echosat_collection` returns the same data as one `canopy_height` image per
+  year, for the time-series tools.
 
-Each is a single-epoch baseline, so never difference one product against another.
+ETH, GLAD and Meta are single-epoch baselines, so never difference one product against
+another. ECHOSAT is one consistent annual series, so differences within it are
+meaningful, but treat changes of a metre or two as noise.
 
 `get_canopy_height(asset=...)` loads another canopy height image or collection in place
 of Meta v1, for example a project's Meta/WRI CHMv2 clip. The first band becomes

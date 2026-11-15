@@ -380,3 +380,124 @@ def test_eth_and_glad_real_forest_point(ee_session):
     assert 0 <= glad_v["canopy_height"] <= 60
     assert glad.projection().nominalScale().getInfo() == pytest.approx(30, rel=0.1)
     assert eth.bandNames().getInfo() == ["canopy_height", "canopy_height_sd"]
+
+
+# --------------------------------------------------------------------------- #
+# ECHOSAT annual canopy height 2018-2024                                       #
+# --------------------------------------------------------------------------- #
+def test_echosat_constants_and_band_names():
+    from eetools import constants as C
+
+    assert C.ECHOSAT_COLLECTION == "projects/ai4forest/assets/echosat"
+    assert len(C.ECHOSAT_YEARS) == len(C.ECHOSAT_SOURCE_BANDS) == 7
+    assert C.ECHOSAT_SCALE_FACTOR == 0.01  # centimetres
+    assert chm_mod.echosat_band_names([2024, 2018]) == [
+        "canopy_height_2024",
+        "canopy_height_2018",
+    ]
+    assert len(chm_mod.echosat_band_names()) == 7
+
+
+@pytest.mark.parametrize(
+    "years, match",
+    [
+        ([], "at least one"),
+        ([2017], "no maps"),
+        ([2025], "no maps"),
+        ([2020, 2020], "Duplicate"),
+    ],
+)
+def test_echosat_rejects_bad_years(mock_ee, years, match):
+    with pytest.raises(ValueError, match=match):
+        chm_mod.get_echosat(years=years)
+    mock_ee.ImageCollection.assert_not_called()
+
+
+def test_get_echosat_maps_years_to_bands_and_scales(mock_ee):
+    with patch.object(chm_mod, "get_land_cover") as land_cover:
+        out = chm_mod.get_echosat("AOI", years=[2021, 2018])
+    collection = mock_ee.ImageCollection.return_value
+    collection.filterBounds.assert_called_once_with("AOI")
+    mosaic = collection.filterBounds.return_value.mosaic.return_value
+    mosaic.select.assert_called_once_with(
+        ["b4", "b1"], ["canopy_height_2021", "canopy_height_2018"]
+    )
+    scaled = mosaic.select.return_value.toFloat.return_value.multiply
+    scaled.assert_called_once_with(0.01)
+    land_cover.return_value.neq.assert_called_once_with(80)
+    masked = scaled.return_value.updateMask
+    masked.assert_called_once_with(land_cover.return_value.neq.return_value)
+    masked.return_value.clip.assert_called_once_with("AOI")
+    assert out is masked.return_value.clip.return_value
+
+
+def test_get_echosat_no_water_mask_and_pin(mock_ee):
+    with patch.object(chm_mod, "get_land_cover") as land_cover:
+        out = chm_mod.get_echosat(mask_water=False, pin_projection=True)
+    land_cover.assert_not_called()
+    collection = mock_ee.ImageCollection.return_value
+    collection.filterBounds.assert_not_called()
+    scaled = collection.mosaic.return_value.select.return_value.toFloat.return_value
+    pinned = scaled.multiply.return_value.setDefaultProjection
+    pinned.assert_called_once()
+    assert out is pinned.return_value
+
+
+def test_get_echosat_collection_one_image_per_year(mock_ee):
+    with patch.object(chm_mod, "get_echosat") as get_stack:
+        chm_mod.get_echosat_collection("AOI", years=[2019, 2023], mask_water=False)
+    get_stack.assert_called_once_with(
+        "AOI", [2019, 2023], mask_water=False, pin_projection=False
+    )
+    stack = get_stack.return_value
+    assert [c.args for c in stack.select.call_args_list] == [
+        (["canopy_height_2019"], ["canopy_height"]),
+        (["canopy_height_2023"], ["canopy_height"]),
+    ]
+    (images,), _ = mock_ee.ImageCollection.call_args
+    assert len(images) == 2
+    years = [c.args[0]["year"] for c in stack.select.return_value.set.call_args_list]
+    assert years == [2019, 2023]
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_get_echosat_real_metres_and_water_mask(ee_session):
+    ee = ee_session
+    land = ee.Geometry.Point(37.24, -1.10)  # Ecosia project area
+    water = ee.Geometry.Point(33.5, -0.6)  # Lake Victoria open water
+    img = chm_mod.get_echosat(land.buffer(300), pin_projection=True)
+    assert img.bandNames().getInfo() == chm_mod.echosat_band_names()
+    values = img.reduceRegion(ee.Reducer.mean(), land.buffer(300), 10).getInfo()
+    assert all(0 < v < 60 for v in values.values())  # metres, not centimetres
+    assert img.projection().nominalScale().getInfo() == pytest.approx(10, rel=0.01)
+    lake = chm_mod.get_echosat(water.buffer(50))
+    assert lake.reduceRegion(ee.Reducer.first(), water, 10).getInfo() == {
+        n: None for n in chm_mod.echosat_band_names()
+    }
+    raw = chm_mod.get_echosat(water.buffer(50), mask_water=False)
+    assert (
+        raw.reduceRegion(ee.Reducer.first(), water, 10).getInfo()["canopy_height_2018"]
+        is not None
+    )
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_echosat_band_order_matches_hansen_loss_year(ee_session):
+    """Loss in year Y shows as the height drop into band Y-2017 (b1 = 2018)."""
+    ee = ee_session
+    region = ee.Geometry.Rectangle([35.3, -1.0, 36.0, -0.2])  # Mau forest complex
+    hansen = ee.Image("UMD/hansen/global_forest_change_2025_v1_13")
+    loss_2021 = (
+        hansen.select("lossyear").eq(21).And(hansen.select("treecover2000").gte(50))
+    )
+    img = chm_mod.get_echosat(region, years=[2020, 2021, 2022], mask_water=False)
+    med = (
+        img.updateMask(loss_2021)
+        .reduceRegion(ee.Reducer.median(), region, 30, maxPixels=1e9, tileScale=4)
+        .getInfo()
+    )
+    drop_into_2021 = med["canopy_height_2020"] - med["canopy_height_2021"]
+    drop_into_2022 = med["canopy_height_2021"] - med["canopy_height_2022"]
+    assert drop_into_2021 > 3 and drop_into_2021 > drop_into_2022

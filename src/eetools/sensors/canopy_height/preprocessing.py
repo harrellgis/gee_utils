@@ -8,6 +8,12 @@ from eetools.constants import (
     CANOPY_HEIGHT_ASSET_VERSION_PROPERTY,
     CANOPY_HEIGHT_SOURCE_BAND,
     CHM_VALID_FRACTION_BAND,
+    ECHOSAT_BAND_TEMPLATE,
+    ECHOSAT_COLLECTION,
+    ECHOSAT_SCALE_FACTOR,
+    ECHOSAT_SOURCE_BANDS,
+    ECHOSAT_YEARS,
+    ESA_WC_WATER_CLASS,
     ETH_CANOPY_HEIGHT_2020,
     ETH_CANOPY_HEIGHT_NODATA,
     ETH_CANOPY_HEIGHT_SD_2020,
@@ -22,6 +28,7 @@ from eetools.constants import (
     WOODY_FRACTION_MAX_PIXELS,
     WOODY_FRACTION_SCALE_M,
 )
+from eetools.sensors.esa.preprocessing import get_land_cover
 
 # --------------------------------------------------------------------------- #
 # Private helpers                                                              #
@@ -217,6 +224,127 @@ def get_glad_canopy_height_2019(
         native = collection.first().select(CANOPY_HEIGHT_SOURCE_BAND).projection()
         height = height.setDefaultProjection(native)
     return height.clip(aoi) if aoi is not None else height
+
+
+def _check_echosat_years(years: Sequence[int] | None) -> list[int]:
+    if years is None:
+        return list(ECHOSAT_YEARS)
+    out = [int(y) for y in years]
+    if not out:
+        raise ValueError("years must name at least one year.")
+    missing = sorted(set(out) - set(ECHOSAT_YEARS))
+    if missing:
+        raise ValueError(
+            f"ECHOSAT has no maps for {missing}; available years are "
+            f"{list(ECHOSAT_YEARS)}."
+        )
+    if len(set(out)) != len(out):
+        raise ValueError(f"Duplicate years in {out}.")
+    return out
+
+
+def echosat_band_names(years: Sequence[int] | None = None) -> list[str]:
+    """Output band names of ``get_echosat``, e.g. ``['canopy_height_2018', ...]``.
+
+    Args:
+        years: ECHOSAT years (default every year, 2018-2024).
+
+    Returns:
+        list[str], one ``canopy_height_<year>`` per year, in the order given.
+
+    Raises:
+        ValueError: If a year is outside 2018-2024, repeated, or ``years`` is empty.
+    """
+    return [ECHOSAT_BAND_TEMPLATE.format(year=y) for y in _check_echosat_years(years)]
+
+
+def get_echosat(
+    aoi: ee.Geometry | None = None,
+    years: Sequence[int] | None = None,
+    *,
+    mask_water: bool = True,
+    pin_projection: bool = False,
+) -> ee.Image:
+    """ECHOSAT annual canopy height 2018-2024 (10 m), one band per year, in metres.
+
+    The MGRS-zone tiles are mosaicked (filtered to ``aoi`` when given). Bands ``b1..b7``
+    are 2018..2024, stored as int16 centimetres, and are returned as float metres
+    named ``canopy_height_<year>``. ECHOSAT has no water mask of its own (open
+    water reads ~2.5-5.8 m), so ESA WorldCover permanent water (class 80) is masked
+    by default.
+
+    ECHOSAT is one consistent annual series, so year-to-year differences within it
+    are meaningful (unlike differencing two single-date products). Its accuracy is
+    indicative: treat changes of a metre or two as noise, and never difference it
+    against another CHM.
+
+    Args:
+        aoi: Optional area of interest; tiles are filtered to it and the image is clipped to it.
+        years: Years to return (default every year, 2018-2024), in the band order wanted.
+        mask_water: Mask ESA WorldCover v200 permanent water, class 80 (default True).
+        pin_projection: Set the mosaic's default projection to the first tile's native 10 m UTM projection. A bare ``mosaic()`` has none, which ``reduceResolution`` rejects; pass True before aggregating.
+
+    Returns:
+        ee.Image (float) with one ``canopy_height_<year>`` band (metres) per year.
+
+    Raises:
+        ValueError: If a year is outside 2018-2024, repeated, or ``years`` is empty.
+    """
+    wanted = _check_echosat_years(years)
+    sources = [ECHOSAT_SOURCE_BANDS[ECHOSAT_YEARS.index(y)] for y in wanted]
+    names = echosat_band_names(wanted)
+    collection = ee.ImageCollection(ECHOSAT_COLLECTION)
+    if aoi is not None:
+        collection = collection.filterBounds(aoi)
+    height = (
+        collection.mosaic()
+        .select(sources, names)
+        .toFloat()
+        .multiply(ECHOSAT_SCALE_FACTOR)
+    )
+    if mask_water:
+        height = height.updateMask(get_land_cover().neq(ESA_WC_WATER_CLASS))
+    if pin_projection:
+        native = ee.Image(collection.first()).select(sources[0]).projection()
+        height = height.setDefaultProjection(native)
+    return height.clip(aoi) if aoi is not None else height
+
+
+def get_echosat_collection(
+    aoi: ee.Geometry | None = None,
+    years: Sequence[int] | None = None,
+    *,
+    mask_water: bool = True,
+    pin_projection: bool = False,
+) -> ee.ImageCollection:
+    """ECHOSAT as a time series: one ``canopy_height`` image per year.
+
+    The same data as ``get_echosat``, laid out for the time-series tools
+    (``run_site_timeseries``, ``image_collection_to_region_stats_fc``).
+
+    Args:
+        aoi: Optional area of interest (see ``get_echosat``).
+        years: Years to return (default 2018-2024).
+        mask_water: Mask ESA WorldCover permanent water (default True).
+        pin_projection: Pin each image to the first tile's native projection (see ``get_echosat``).
+
+    Returns:
+        ee.ImageCollection of float ``canopy_height`` images (metres), each with ``year`` and ``system:time_start`` (1 January).
+
+    Raises:
+        ValueError: If a year is outside 2018-2024, repeated, or ``years`` is empty.
+    """
+    wanted = _check_echosat_years(years)
+    stack = get_echosat(
+        aoi, wanted, mask_water=mask_water, pin_projection=pin_projection
+    )
+    images = [
+        stack.select([name], ["canopy_height"]).set(
+            {"year": year, "system:time_start": ee.Date.fromYMD(year, 1, 1).millis()}
+        )
+        for year, name in zip(wanted, echosat_band_names(wanted))
+    ]
+    return ee.ImageCollection(images)
 
 
 def woody_fraction_from_chm(
