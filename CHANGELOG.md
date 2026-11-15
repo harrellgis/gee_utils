@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- PALSAR-2 ScanSAR Level 2.2 builder (vault: 2026-11-14 tgbs_rs PALSAR-2 ScanSAR
+  builder proposal). It takes L-band HV past the yearly mosaic's 2024 end. Over the
+  Kenya sites, dual-pol scenes run to 2025-10 and there are none in 2026.
+  - `get_palsar2_scansar(aoi, start, end, polarizations, mask_quality, linear)`:
+    - filters scenes on the `Polarizations` property;
+    - converts DN to gamma0 (`20*log10(DN) - 83`);
+    - masks `MSK` bits 0-2 != 1 (layover, shadow, ocean, invalid);
+    - scales `LIN` to degrees;
+    - validates the dates against the record over the AOI.
+  - `palsar2_scansar_composite(collection, year, months, reducer="median"|"mean")`:
+    - builds one season within one year, reduced in linear power and returned in dB;
+    - adds `scene_count` and `lin_mean`;
+    - pins the default projection to the first scene;
+    - for an empty window, returns masked bands with `scene_count` 0 instead of a
+      band-less image.
+  - `palsar2_scansar_to_gamma0` converts one scene.
+  - Constants `PALSAR2_SCANSAR_*`.
+
 Cloud Score+ as the Sentinel-2 cloud mask (vault: 2026-11-14 tgbs_rs dataset currency
 audit, priority change 5).
 

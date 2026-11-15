@@ -1775,6 +1775,27 @@ PALSAR2_QA_BAND = "qa"
 PALSAR2_QA_LAND = 255
 PALSAR2_SCALE_M = 25
 
+#################### ALOS-2 PALSAR-2 ScanSAR Level 2.2 ###############################
+# JAXA/ALOS/PALSAR-2/Level2_2/ScanSAR: per-scene, 25 m, CARD4L ortho-rectified and
+# terrain-flattened gamma0 (catalog 2014-08-04 to 2026-10-18, read 2026-11-14). Kenya
+# has dual-pol scenes to 2025-10 and none in 2026 (metadata query 2026-11-14).
+# HH/HV/VV/VH are uint16 DN; gamma0 dB = 10*log10(DN^2) + PALSAR2_CALIBRATION_DB.
+# MSK bits 0-2: 1 valid, 2 layover, 3 shadow, 4 ocean, 5 invalid. LIN: local incidence
+# angle in 0.01 deg. The collection mixes single- and dual-pol scenes, listed in the
+# `Polarizations` property (e.g. ['HH', 'HV']).
+PALSAR2_SCANSAR_COLLECTION = "JAXA/ALOS/PALSAR-2/Level2_2/ScanSAR"
+PALSAR2_SCANSAR_POL_PROPERTY = "Polarizations"
+PALSAR2_SCANSAR_POLARIZATIONS: tuple[str, ...] = ("HH", "HV", "VV", "VH")
+PALSAR2_SCANSAR_DEFAULT_POLS: tuple[str, ...] = ("HH", "HV")
+PALSAR2_SCANSAR_QA_BAND = "MSK"
+PALSAR2_SCANSAR_QA_BITMASK = 0b111  # bits 0-2 hold the quality class
+PALSAR2_SCANSAR_QA_VALID = 1
+PALSAR2_SCANSAR_LIN_BAND = "LIN"
+PALSAR2_SCANSAR_LIN_SCALE = 0.01  # DN -> degrees
+PALSAR2_SCANSAR_REDUCERS: tuple[str, ...] = ("median", "mean")
+PALSAR2_SCANSAR_COUNT_BAND = "scene_count"
+PALSAR2_SCANSAR_LIN_MEAN_BAND = "lin_mean"
+
 #################### GEDI monthly rasters (E9) #######################################
 # 25 m monthly rasters of individual shots (catalog checked 2026-11-13: 2019-03 to
 # 2025-07; GEDI V3 is not in EE).
