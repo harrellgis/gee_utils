@@ -1,6 +1,7 @@
 """Tests for the Sentinel-2 masking and preprocessing modules.
 
-The s2cloudless/shadow projection in ``add_cld_shdw_mask`` involves
+The Cloud Score+ mask is a plain threshold, so it is checked by value. The
+s2cloudless/shadow projection in ``add_cld_shdw_mask`` involves
 ``reproject`` + ``directionalDistanceTransform`` which is expensive to
 evaluate per-pixel, so it is checked structurally (band added) rather than by
 reducing values. The water mask and band processing are checked on constant
@@ -44,6 +45,45 @@ def test_s2_add_cld_shdw_mask_adds_band(ee_session):
     # bandNames is graph metadata: confirms the band is wired without evaluating
     # the heavy reproject/DDT pixel computation.
     assert "cloudmask" in out.bandNames().getInfo()
+
+
+@pytest.mark.parametrize(
+    "cs_cdf, threshold, expected",
+    [(0.9, 0.6, 0), (0.3, 0.6, 1), (0.6, 0.6, 0), (0.7, 0.8, 1)],
+)
+def test_s2_add_cs_plus_mask_thresholds(
+    ee_session, first_value, cs_cdf, threshold, expected
+):
+    from eetools.sensors.sentinel.masking import add_cs_plus_mask
+
+    score = ee_session.Image.constant([0.5, cs_cdf]).rename(["cs", "cs_cdf"])
+    img = ee_session.Image.constant(0.2).rename("B4").set("cloud_score_plus", score)
+    out = add_cs_plus_mask(img, threshold=threshold)
+    assert first_value(out, "cloudmask") == expected
+
+
+def test_s2_add_cs_plus_mask_uses_requested_band(ee_session, first_value):
+    from eetools.sensors.sentinel.masking import add_cs_plus_mask
+
+    score = ee_session.Image.constant([0.3, 0.9]).rename(["cs", "cs_cdf"])
+    img = ee_session.Image.constant(0.2).rename("B4").set("cloud_score_plus", score)
+    assert first_value(add_cs_plus_mask(img, band="cs"), "cloudmask") == 1
+    assert first_value(add_cs_plus_mask(img, band="cs_cdf"), "cloudmask") == 0
+
+
+def test_s2_cs_plus_mask_applied_drops_cloudy(ee_session, first_value):
+    from eetools.sensors.sentinel.masking import add_cs_plus_mask, apply_cld_shdw_mask
+
+    def scene(cs_cdf):
+        score = ee_session.Image.constant([cs_cdf, cs_cdf]).rename(["cs", "cs_cdf"])
+        return (
+            ee_session.Image.constant(0.2).rename("B4").set("cloud_score_plus", score)
+        )
+
+    assert first_value(apply_cld_shdw_mask(add_cs_plus_mask(scene(0.2))), "B4") is None
+    assert first_value(
+        apply_cld_shdw_mask(add_cs_plus_mask(scene(0.9))), "B4"
+    ) == pytest.approx(0.2)
 
 
 def test_s2_non_water_mask(ee_session, first_value):
@@ -110,6 +150,24 @@ def test_get_s2_sr_collection_real(ee_session, small_aoi):
         apply_water_masking=False,
     )
     assert isinstance(col, ee_session.ImageCollection)
+    if col.size().getInfo() == 0:
+        pytest.skip("no Sentinel-2 scenes for the AOI/window")
+    assert "NDVI" in col.first().bandNames().getInfo()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cloud_mask", ["cloud_score_plus", "s2cloudless"])
+def test_get_s2_sr_collection_real_cloud_masks(ee_session, small_aoi, cloud_mask):
+    from eetools.sensors.sentinel.preprocessing import get_s2_sr_collection
+
+    col = get_s2_sr_collection(
+        small_aoi,
+        ee_session.Date("2021-06-01"),
+        ee_session.Date("2021-07-01"),
+        apply_water_masking=False,
+        indices=["NDVI"],
+        cloud_mask=cloud_mask,
+    )
     if col.size().getInfo() == 0:
         pytest.skip("no Sentinel-2 scenes for the AOI/window")
     assert "NDVI" in col.first().bandNames().getInfo()

@@ -2,7 +2,10 @@ import ee
 
 from eetools.constants import (
     CLOUD_FILTER,
+    CS_PLUS_BAND,
+    CS_PLUS_THRESH,
     S2_BAND_MAP,
+    S2_DEFAULT_CLOUD_MASK,
     S2_SCALE_FACTOR,
     S2_SR_COLLECTION,
 )
@@ -12,6 +15,7 @@ from eetools.sensors.sentinel.masking import (
     apply_water_mask,
     build_cloudfree_s2sr_col,
     build_s2_non_water_mask,
+    validate_s2_cloud_mask_args,
 )
 from eetools.utils import validate_collection_date_range
 
@@ -88,6 +92,9 @@ def get_s2_sr_collection(
     indices: list[str] | tuple[str, ...] | None = None,
     domains: list[str] | tuple[str, ...] | None = None,
     cloud_filter: float | None = CLOUD_FILTER,
+    cloud_mask: str = S2_DEFAULT_CLOUD_MASK,
+    cs_band: str = CS_PLUS_BAND,
+    cs_threshold: float = CS_PLUS_THRESH,
 ) -> ee.ImageCollection:
     """Build a cloud- and water-masked Sentinel-2 SR collection with spectral indices.
 
@@ -99,20 +106,31 @@ def get_s2_sr_collection(
         indices: Explicit index names each image should contain, or None for the default harmonized core.
         domains: Index domains to include (e.g. ['vegetation', 'soil']), or None. See eetools.sensors.indices.calc_indices.
         cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE before pixel masking (default CLOUD_FILTER, 50). Pass None to keep every scene, e.g. for per-scene site tables (``zonal.export_scene_site_table``), where a mostly cloudy tile can still be clear over a small site; cloudy pixels are still masked.
+        cloud_mask: Pixel cloud-mask method: 'cloud_score_plus' (default, S2_DEFAULT_CLOUD_MASK) or 's2cloudless' (the pre-0.11.0 default, with dark-NIR shadow projection; pass it to reproduce older composites).
+        cs_band: Cloud Score+ band, 'cs_cdf' (default, CS_PLUS_BAND) or 'cs'. Ignored for s2cloudless.
+        cs_threshold: Cloud Score+ clear threshold in [0, 1] (default CS_PLUS_THRESH, 0.60); higher masks more. Ignored for s2cloudless.
 
     Returns:
         ee.ImageCollection with SR bands scaled to [0, 1] and index bands appended.
 
     Raises:
         ValueError: if apply_water_masking is True but the index selection omits NDVI or MNDWI
-            (both required by the spectral water mask).
+            (both required by the spectral water mask), or if ``cloud_mask``,
+            ``cs_band`` or ``cs_threshold`` is invalid.
     """
+    validate_s2_cloud_mask_args(cloud_mask, cs_band, cs_threshold)
     validate_s2_sr_date_range(aoi, start_date, end_date)
     if apply_water_masking:
         validate_water_mask_selection(S2_BAND_MAP, indices, domains)
 
     s2_cloudfree = build_cloudfree_s2sr_col(
-        aoi, start_date, end_date, cloud_filter=cloud_filter
+        aoi,
+        start_date,
+        end_date,
+        cloud_filter=cloud_filter,
+        cloud_mask=cloud_mask,
+        cs_band=cs_band,
+        cs_threshold=cs_threshold,
     )
     s2_processed = s2_cloudfree.map(
         lambda img: process_s2_image(img, indices=indices, domains=domains)

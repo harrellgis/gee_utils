@@ -120,6 +120,19 @@ task = export_image_to_drive(
 print(task.status())
 ```
 
+Sentinel-2 pixels are cloud-masked with **Cloud Score+**
+(`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`) by default. A pixel is kept where
+`cs_cdf >= 0.60`. The score covers cloud, shadow, haze and thin cirrus, so there is no
+separate shadow step. Use `cs_threshold` to tune it (0.50 to 0.65 is the usual range;
+higher masks more) and `cs_band="cs"` to use the per-scene score. Pass
+`cloud_mask="s2cloudless"` to get the s2cloudless probability plus dark-NIR shadow
+projection, which was the default before 0.11.0. Use it to reproduce older composites:
+
+```python
+legacy = get_s2_sr_collection(aoi, start, end, cloud_mask="s2cloudless")
+strict = get_s2_sr_collection(aoi, start, end, cs_threshold=0.65)
+```
+
 By default each collection carries a harmonized core of indices. To choose exactly
 which indices each image gets, pass `indices` (by name) and/or `domains` (whole
 families: `vegetation`, `water`, `moisture`, `soil`, `burn`, `urban`). Selection is
