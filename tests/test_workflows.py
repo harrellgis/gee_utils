@@ -386,6 +386,43 @@ def test_registry_builders_wire_sensor_loaders():
         loader.assert_called_once_with()  # unclipped; clipping is opt-in
 
 
+def test_build_baseline_layers_chm_asset(mock_builders):
+    builders, images = mock_builders
+    with patch.object(workflows, "get_canopy_height") as get_chm:
+        layers = workflows.build_baseline_layers(
+            "REGION", layers=["dem", "canopy_height"], chm_asset="projects/p/chmv2"
+        )
+    get_chm.assert_called_once_with(pin_projection=True, asset="projects/p/chmv2")
+    builders["canopy_height"].assert_not_called()
+    assert layers["canopy_height"] is get_chm.return_value
+    assert layers["dem"] is images["dem"]
+
+
+def test_baseline_layer_register_chm_asset_row():
+    info = {
+        "dataset_id": "projects/p/chmv2",
+        "version": "v2 (acquired 2017..2020)",
+        "licence": "CC BY 4.0 (from asset property)",
+    }
+    with patch.object(
+        workflows, "canopy_height_asset_info", return_value=info
+    ) as get_info:
+        rows = workflows.baseline_layer_register(
+            ["dem", "canopy_height"], chm_asset="projects/p/chmv2"
+        )
+    get_info.assert_called_once_with("projects/p/chmv2")
+    chm = rows[1]
+    assert {k: chm[k] for k in info} == info
+    assert (chm["export_scale_m"], chm["resample"], chm["band"]) == (
+        10,
+        "mean",
+        "canopy_height",
+    )
+    assert rows[0]["dataset_id"] == workflows.BASELINE_LAYER_REGISTRY["dem"].dataset_id
+    # The module registry itself is untouched.
+    assert workflows.BASELINE_LAYER_REGISTRY["canopy_height"].version.startswith("v1")
+
+
 def test_baseline_layer_register_rows():
     rows = workflows.baseline_layer_register(["canopy_height", "soilgrids_wrb"])
     assert [r["name"] for r in rows] == ["canopy_height", "soilgrids_wrb"]
@@ -668,7 +705,7 @@ def test_run_baseline_assessment_wires_collaborators_and_exports_summary():
         )
 
     get_geom.assert_called_once_with(mock_sites)
-    build_layers.assert_called_once_with("aoi", clip=True)
+    build_layers.assert_called_once_with("aoi", clip=True, chm_asset=None)
     summarize.assert_called_once_with(
         sites_fc=mock_sites,
         layers="layers",

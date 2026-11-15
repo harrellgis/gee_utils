@@ -3,6 +3,9 @@ from collections.abc import Sequence
 import ee
 
 from eetools.constants import (
+    CANOPY_HEIGHT_ASSET_DATES_PROPERTY,
+    CANOPY_HEIGHT_ASSET_LICENCE_PROPERTY,
+    CANOPY_HEIGHT_ASSET_VERSION_PROPERTY,
     CANOPY_HEIGHT_SOURCE_BAND,
     CHM_VALID_FRACTION_BAND,
     ETH_CANOPY_HEIGHT_2020,
@@ -12,6 +15,8 @@ from eetools.constants import (
     GLAD_CANOPY_HEIGHT_MAX_M,
     META_CANOPY_HEIGHT_BAND,
     META_CANOPY_HEIGHT_COLLECTION,
+    META_CANOPY_HEIGHT_LICENCE,
+    META_CANOPY_HEIGHT_VERSION,
     WOODY_FRACTION_BAND_PREFIX,
     WOODY_FRACTION_HEIGHTS_M,
     WOODY_FRACTION_MAX_PIXELS,
@@ -47,31 +52,121 @@ def woody_fraction_band_names(heights_m: Sequence[float]) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def get_canopy_height(
-    aoi: ee.Geometry | None = None, *, pin_projection: bool = False
-) -> ee.Image:
-    """Load the Meta/WRI 1m global canopy height mosaic, optionally clipped to an AOI.
+def _is_default_chm(asset: str | None) -> bool:
+    return asset is None or asset == META_CANOPY_HEIGHT_COLLECTION
 
-    The source asset is a tiled ee.ImageCollection; tiles are mosaicked to a single
-    wall-to-wall image. This is a fused 2009-2020 baseline (~80% 2018-2020 imagery),
-    not a dated annual layer -- do not difference it against another epoch to infer
-    change.
+
+def _get_asset_metadata(asset: str) -> dict:
+    """``ee.data.getAsset`` with a readable error when the asset cannot be read."""
+    try:
+        return ee.data.getAsset(asset)
+    except Exception as exc:  # noqa: BLE001 - EE raises a generic EEException
+        raise ValueError(
+            f"Cannot read canopy height asset '{asset}' ({exc}). Check the ID and "
+            "that this Earth Engine project can read it."
+        ) from exc
+
+
+def get_canopy_height(
+    aoi: ee.Geometry | None = None,
+    *,
+    pin_projection: bool = False,
+    asset: str | None = None,
+) -> ee.Image:
+    """Load a canopy height model as a single ``canopy_height`` band (metres).
+
+    By default this is the Meta/WRI 1 m v1 mosaic. Its source is a tiled
+    ee.ImageCollection, so the tiles are mosaicked into one wall-to-wall image. v1 is
+    a fused 2009-2020 baseline (~80% 2018-2020 imagery), not a dated annual layer.
+
+    Pass ``asset`` to load another CHM instead, e.g. a per-project Meta/WRI CHMv2 clip
+    (``projects/<p>/assets/chmv2_...``). An ``ee.Image`` asset is used as it is (it
+    keeps its native projection, so ``pin_projection`` changes nothing). An
+    ``ee.ImageCollection`` asset is mosaicked like v1. Either way the first band
+    becomes ``canopy_height``. Checking the asset type costs one ``ee.data.getAsset``
+    call.
+
+    Every CHM here is a single-date baseline. Never difference one against another
+    epoch or product to infer change.
 
     Args:
         aoi: Optional area of interest as ee.Geometry; if provided, the image is clipped to it.
-        pin_projection: Set the mosaic's default projection to its tiles' native (~1 m) projection. A bare ``mosaic()`` has none, which ``reduceResolution`` rejects; pass True before aggregating.
+        pin_projection: Set a mosaic's default projection to its tiles' native (~1 m) projection. A bare ``mosaic()`` has none, which ``reduceResolution`` rejects; pass True before aggregating.
+        asset: Optional EE ID of another canopy height image or image collection (metres in the first band). None (default) loads Meta v1.
 
     Returns:
         ee.Image with a single 'canopy_height' band (metres), clipped to aoi when provided.
+
+    Raises:
+        ValueError: If ``asset`` cannot be read or is neither an image nor an image collection.
     """
-    collection = ee.ImageCollection(META_CANOPY_HEIGHT_COLLECTION)
-    canopy = collection.mosaic().select([META_CANOPY_HEIGHT_BAND], ["canopy_height"])
-    if pin_projection:
-        native = collection.first().select(META_CANOPY_HEIGHT_BAND).projection()
-        canopy = canopy.setDefaultProjection(native)
+    if _is_default_chm(asset):
+        collection = ee.ImageCollection(META_CANOPY_HEIGHT_COLLECTION)
+        canopy = collection.mosaic().select(
+            [META_CANOPY_HEIGHT_BAND], ["canopy_height"]
+        )
+        if pin_projection:
+            native = collection.first().select(META_CANOPY_HEIGHT_BAND).projection()
+            canopy = canopy.setDefaultProjection(native)
+    else:
+        asset_id = str(asset)
+        kind = _get_asset_metadata(asset_id).get("type")
+        if kind == "IMAGE":
+            canopy = ee.Image(asset_id).select([0], ["canopy_height"])
+        elif kind == "IMAGE_COLLECTION":
+            collection = ee.ImageCollection(asset_id)
+            canopy = collection.mosaic().select([0], ["canopy_height"])
+            if pin_projection:
+                native = ee.Image(collection.first()).select(0).projection()
+                canopy = canopy.setDefaultProjection(native)
+        else:
+            raise ValueError(
+                f"Canopy height asset '{asset_id}' is a {kind}; expected an IMAGE "
+                "or IMAGE_COLLECTION."
+            )
     if aoi is not None:
         canopy = canopy.clip(aoi)
     return canopy
+
+
+def canopy_height_asset_info(asset: str | None = None) -> dict[str, str]:
+    """Data-register fields of the canopy height source used by ``get_canopy_height``.
+
+    For the default Meta v1 mosaic this needs no EE call. For another asset it reads
+    the asset's ``version``, ``acq_dates`` and ``license`` properties, which the
+    CHMv2 project clips carry. A missing property is reported as such and never
+    guessed. A licence read from an asset property is the uploader's record, not the
+    provider's terms page.
+
+    Args:
+        asset: EE ID passed to ``get_canopy_height(asset=...)``; None for Meta v1.
+
+    Returns:
+        dict with ``dataset_id``, ``version`` (e.g. 'v2 (acquired 2017-02-12..2020-02-20)') and ``licence``.
+
+    Raises:
+        ValueError: If ``asset`` cannot be read.
+    """
+    if _is_default_chm(asset):
+        return {
+            "dataset_id": META_CANOPY_HEIGHT_COLLECTION,
+            "version": META_CANOPY_HEIGHT_VERSION,
+            "licence": META_CANOPY_HEIGHT_LICENCE,
+        }
+    asset_id = str(asset)
+    props = _get_asset_metadata(asset_id).get("properties", {}) or {}
+    version = str(props.get(CANOPY_HEIGHT_ASSET_VERSION_PROPERTY) or "unrecorded")
+    dates = props.get(CANOPY_HEIGHT_ASSET_DATES_PROPERTY)
+    if dates:
+        version = f"{version} (acquired {dates})"
+    licence = props.get(CANOPY_HEIGHT_ASSET_LICENCE_PROPERTY)
+    return {
+        "dataset_id": asset_id,
+        "version": version,
+        "licence": (
+            f"{licence} (from asset property)" if licence else "unrecorded on asset"
+        ),
+    }
 
 
 def get_eth_canopy_height_2020(aoi: ee.Geometry | None = None) -> ee.Image:
@@ -143,9 +238,11 @@ def woody_fraction_from_chm(
     pixels can be screened out. Output is float32 in [0, 1];
     ``export_composites_per_site`` scales it to int16 like the other bands.
 
-    The default CHM is the Meta/WRI 1 m canopy height (``get_canopy_height``): a
-    fused 2009-2020 baseline (~80% 2018-2020 imagery), not a dated layer. Never
-    difference it against another epoch to infer change.
+    The default CHM is the Meta/WRI 1 m v1 canopy height (``get_canopy_height``): a
+    fused 2009-2020 baseline (~80% 2018-2020 imagery), not a dated layer. For
+    another CHM (e.g. a CHMv2 project clip) pass
+    ``chm=get_canopy_height(asset=..., pin_projection=True)``. Never difference a
+    CHM against another epoch to infer change.
 
     Gotcha: ``reduceResolution`` defaults to ``maxPixels=64``, but 10 m from 1 m
     needs 100 input pixels per output pixel, so the default here is 256. Raise it

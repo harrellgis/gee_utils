@@ -486,6 +486,14 @@ META_CANOPY_HEIGHT_COLLECTION = (
     "projects/sat-io/open-datasets/facebook/meta-canopy-height"
 )
 META_CANOPY_HEIGHT_BAND = "cover_code"
+META_CANOPY_HEIGHT_VERSION = "v1 (fused 2009-2020 baseline)"
+META_CANOPY_HEIGHT_LICENCE = "CC BY 4.0"
+# Other canopy height assets (e.g. Meta/WRI CHMv2 per-project clips, uploaded as
+# single images with band canopy_height, EPSG:3857 ~1.19 m) are passed explicitly as
+# get_canopy_height(asset=...). Their register row is read from these asset properties.
+CANOPY_HEIGHT_ASSET_VERSION_PROPERTY = "version"
+CANOPY_HEIGHT_ASSET_LICENCE_PROPERTY = "license"
+CANOPY_HEIGHT_ASSET_DATES_PROPERTY = "acq_dates"
 # ETH Global Canopy Height 2020, 10 m (Lang et al. 2023; community assets, checked
 # 2026-11-13): one image each for height and its standard deviation, band b1, integer
 # metres, no-data 255 (built-up, snow/ice, permanent water). CC BY 4.0.
@@ -1575,8 +1583,8 @@ BASELINE_LAYER_METADATA: dict[str, dict[str, object]] = {
         categorical=False,
         resample="mean",
         dataset_id=META_CANOPY_HEIGHT_COLLECTION,
-        version="v1 (fused 2009-2020 baseline)",
-        licence="CC BY 4.0",
+        version=META_CANOPY_HEIGHT_VERSION,
+        licence=META_CANOPY_HEIGHT_LICENCE,
         unit="m",
         band="canopy_height",
     ),

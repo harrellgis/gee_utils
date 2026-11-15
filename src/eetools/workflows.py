@@ -1,7 +1,7 @@
 import math
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 import ee
@@ -27,7 +27,10 @@ from eetools.io import (
     snapped_transform,
 )
 from eetools.sensors.bii.preprocessing import get_bii_image
-from eetools.sensors.canopy_height.preprocessing import get_canopy_height
+from eetools.sensors.canopy_height.preprocessing import (
+    canopy_height_asset_info,
+    get_canopy_height,
+)
 from eetools.sensors.dem.preprocessing import get_terrain
 from eetools.sensors.esa.preprocessing import get_land_cover
 from eetools.sensors.hansen.preprocessing import (
@@ -271,22 +274,33 @@ def _resolve_layer_names(layers: Sequence[str] | None) -> list[str]:
     return names
 
 
-def baseline_layer_register(layers: Sequence[str] | None = None) -> list[dict]:
+def baseline_layer_register(
+    layers: Sequence[str] | None = None, *, chm_asset: str | None = None
+) -> list[dict]:
     """Dataset metadata of baseline layers, one row per layer, for a data register.
 
     Args:
         layers: Registry keys; defaults to every layer in ``BASELINE_LAYER_REGISTRY``.
+        chm_asset: Canopy height asset passed to ``build_baseline_layers``. When given, the ``canopy_height`` row's dataset_id, version and licence come from ``canopy_height_asset_info`` (one ``ee.data.getAsset`` call), so the register names the CHM that was actually used. None keeps Meta v1.
 
     Returns:
         list[dict]. Per layer: name, dataset_id, version, licence, unit, band, categorical, native_scale_m, export_scale_m, resample.
 
     Raises:
-        ValueError: If a name is not in the registry.
+        ValueError: If a name is not in the registry, or ``chm_asset`` cannot be read.
     """
     names = list(BASELINE_LAYER_REGISTRY) if layers is None else layers
     rows = []
     for name in _resolve_layer_names(names):
         spec = BASELINE_LAYER_REGISTRY[name]
+        if name == "canopy_height" and chm_asset is not None:
+            info = canopy_height_asset_info(chm_asset)
+            spec = replace(
+                spec,
+                dataset_id=info["dataset_id"],
+                version=info["version"],
+                licence=info["licence"],
+            )
         rows.append(
             {
                 "name": spec.name,
@@ -309,6 +323,7 @@ def build_baseline_layers(
     layers: Sequence[str] | None = None,
     clip: bool = False,
     *,
+    chm_asset: str | None = None,
     aoi: ee.Geometry | None = None,
 ) -> dict[str, ee.Image]:
     """Build static baseline layers from the registry over a region.
@@ -325,6 +340,7 @@ def build_baseline_layers(
         region: Region the layers are built for (and clipped to when ``clip=True``).
         layers: Registry keys to build; defaults to the nine ``BASELINE_LAYER_NAMES`` (dem, slope, hillshade, canopy_height, land_cover, soil_carbon, bii_all, forest_2000, forest_loss).
         clip: Clip every layer to ``region`` (default False; before 0.7.1 layers were always clipped).
+        chm_asset: EE ID of the canopy height image or collection for the ``canopy_height`` layer (e.g. a project's CHMv2 clip); None (default) keeps Meta v1. Pass the same ID to ``baseline_layer_register`` so the register names it.
         aoi: Deprecated alias for ``region``.
 
     Returns:
@@ -346,7 +362,10 @@ def build_baseline_layers(
         raise ValueError("clip=True needs a region.")
     out: dict[str, ee.Image] = {}
     for name in _resolve_layer_names(layers):
-        image = BASELINE_LAYER_REGISTRY[name].builder(cast(ee.Geometry, region))
+        if name == "canopy_height" and chm_asset is not None:
+            image = get_canopy_height(pin_projection=True, asset=chm_asset)
+        else:
+            image = BASELINE_LAYER_REGISTRY[name].builder(cast(ee.Geometry, region))
         out[name] = image.clip(region) if clip else image
     return out
 
@@ -569,6 +588,8 @@ def run_baseline_assessment(
     include_landcover_areas: bool = True,
     export_summary: bool = True,
     summary_file_prefix: str = "baseline_site_summaries",
+    *,
+    chm_asset: str | None = None,
 ) -> tuple[dict[str, ee.Image], ee.FeatureCollection]:
     """Run the full static baseline assessment workflow for a site FeatureCollection.
 
@@ -609,6 +630,8 @@ def run_baseline_assessment(
         summary_file_prefix: Filename prefix (without extension) and EE task
             description for the summary CSV export (default
             'baseline_site_summaries').
+        chm_asset: Canopy height asset for the ``canopy_height`` layer (see
+            :func:`build_baseline_layers`); None (default) keeps Meta v1.
 
     Returns:
         tuple of (layers, summary_fc): the full baseline layers dict (as built
@@ -618,7 +641,7 @@ def run_baseline_assessment(
         started as a side effect.
     """
     aoi = get_sites_geometry(sites_fc)
-    layers = build_baseline_layers(aoi, clip=True)
+    layers = build_baseline_layers(aoi, clip=True, chm_asset=chm_asset)
 
     summary_fc = summarize_baseline_layers(
         sites_fc=sites_fc,

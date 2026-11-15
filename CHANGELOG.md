@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Canopy height source option (vault: 2026-11-14 tgbs_rs dataset currency audit,
+  priority change 1).
+  - **Loader:** `get_canopy_height(asset=...)` loads any canopy height `ee.Image`
+    (e.g. a Meta/WRI CHMv2 project clip) or `ee.ImageCollection` (mosaicked)
+    instead of Meta v1. The first band becomes `canopy_height`.
+  - **Baseline layer:** `build_baseline_layers`, `run_baseline_assessment` and
+    `baseline_layer_register` take `chm_asset=`. The register row's
+    `dataset_id`, `version` (e.g. `v2 (acquired 2017-02-12..2020-02-20)`) and
+    `licence` come from the asset's own properties via the new
+    `canopy_height_asset_info`.
+  - **Defaults unchanged:** there is no environment-variable override, so site
+    selection and every default call still read Meta v1.
+  - Constants `META_CANOPY_HEIGHT_VERSION`, `META_CANOPY_HEIGHT_LICENCE` and
+    `CANOPY_HEIGHT_ASSET_*_PROPERTY`.
 - PALSAR-2 ScanSAR Level 2.2 builder (vault: 2026-11-14 tgbs_rs PALSAR-2 ScanSAR
   builder proposal). It takes L-band HV past the yearly mosaic's 2024 end. Over the
   Kenya sites, dual-pol scenes run to 2025-10 and there are none in 2026.

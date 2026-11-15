@@ -101,6 +101,79 @@ def test_get_canopy_height_pin_projection(mock_ee):
     assert out is mosaic.setDefaultProjection.return_value
 
 
+V2 = "projects/p/assets/chmv2_clip"
+
+
+def test_get_canopy_height_default_makes_no_asset_call(mock_ee):
+    chm_mod.get_canopy_height()
+    chm_mod.get_canopy_height(asset=chm_mod.META_CANOPY_HEIGHT_COLLECTION)
+    mock_ee.data.getAsset.assert_not_called()
+
+
+def test_get_canopy_height_image_asset(mock_ee):
+    mock_ee.data.getAsset.return_value = {"type": "IMAGE"}
+    out = chm_mod.get_canopy_height(asset=V2, pin_projection=True)
+    mock_ee.data.getAsset.assert_called_once_with(V2)
+    mock_ee.Image.assert_called_once_with(V2)
+    mock_ee.Image.return_value.select.assert_called_once_with([0], ["canopy_height"])
+    # A single image keeps its own native projection: nothing to pin.
+    selected = mock_ee.Image.return_value.select.return_value
+    selected.setDefaultProjection.assert_not_called()
+    assert out is selected
+    mock_ee.ImageCollection.assert_not_called()
+
+
+def test_get_canopy_height_collection_asset_pins_and_clips(mock_ee):
+    mock_ee.data.getAsset.return_value = {"type": "IMAGE_COLLECTION"}
+    out = chm_mod.get_canopy_height("AOI", asset=V2, pin_projection=True)
+    mock_ee.ImageCollection.assert_called_once_with(V2)
+    mosaic = mock_ee.ImageCollection.return_value.mosaic.return_value
+    mosaic.select.assert_called_once_with([0], ["canopy_height"])
+    pinned = mosaic.select.return_value.setDefaultProjection.return_value
+    pinned.clip.assert_called_once_with("AOI")
+    assert out is pinned.clip.return_value
+
+
+def test_get_canopy_height_rejects_bad_asset(mock_ee):
+    mock_ee.data.getAsset.return_value = {"type": "TABLE"}
+    with pytest.raises(ValueError, match="TABLE"):
+        chm_mod.get_canopy_height(asset=V2)
+    mock_ee.data.getAsset.side_effect = RuntimeError("not found")
+    with pytest.raises(ValueError, match="Cannot read"):
+        chm_mod.get_canopy_height(asset=V2)
+
+
+def test_canopy_height_asset_info_default_and_v2(mock_ee):
+    default = chm_mod.canopy_height_asset_info()
+    assert default == {
+        "dataset_id": chm_mod.META_CANOPY_HEIGHT_COLLECTION,
+        "version": "v1 (fused 2009-2020 baseline)",
+        "licence": "CC BY 4.0",
+    }
+    mock_ee.data.getAsset.assert_not_called()
+
+    mock_ee.data.getAsset.return_value = {
+        "type": "IMAGE",
+        "properties": {
+            "version": "v2",
+            "acq_dates": "2017-02-12..2020-02-20",
+            "license": "CC BY 4.0 (Meta, WRI; imagery Vantor)",
+        },
+    }
+    assert chm_mod.canopy_height_asset_info(V2) == {
+        "dataset_id": V2,
+        "version": "v2 (acquired 2017-02-12..2020-02-20)",
+        "licence": "CC BY 4.0 (Meta, WRI; imagery Vantor) (from asset property)",
+    }
+
+
+def test_canopy_height_asset_info_missing_properties(mock_ee):
+    mock_ee.data.getAsset.return_value = {"type": "IMAGE"}
+    info = chm_mod.canopy_height_asset_info(V2)
+    assert info["version"] == "unrecorded"
+    assert info["licence"] == "unrecorded on asset"
+
+
 @pytest.mark.parametrize(
     "kwargs, match",
     [
@@ -194,6 +267,36 @@ def test_woody_fraction_real_meta_bounds_and_ordering(ee_session):
     assert stats["min_min"] >= 0
     assert stats["max_max"] <= 1
     assert stats["h5_minus_h2_max"] <= 1e-6
+
+
+CHMV2_ECOSIA = "projects/charrell-personal/assets/chmv2_tgbs_ecosia"
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_get_canopy_height_chmv2_asset_real(ee_session):
+    ee = ee_session
+    try:
+        ee.data.getAsset(CHMV2_ECOSIA)
+    except Exception:  # noqa: BLE001
+        pytest.skip("CHMv2 Ecosia asset not readable from this project")
+    img = chm_mod.get_canopy_height(asset=CHMV2_ECOSIA, pin_projection=True)
+    assert img.bandNames().getInfo() == ["canopy_height"]
+    assert img.projection().nominalScale().getInfo() == pytest.approx(1.19, rel=0.05)
+    info = chm_mod.canopy_height_asset_info(CHMV2_ECOSIA)
+    assert info["version"].startswith("v2")
+    # The woody fraction runs on it without an explicit setDefaultProjection.
+    transform = [10, 0, 300000, 0, -10, 9880000]
+    frac = chm_mod.woody_fraction_from_chm(
+        img, crs="EPSG:32737", crs_transform=transform
+    )
+    region = ee.Geometry.Rectangle(
+        [300000, 9879800, 300200, 9880000], "EPSG:32737", False
+    )
+    stats = frac.reduceRegion(
+        ee.Reducer.minMax(), region, crs="EPSG:32737", crsTransform=transform
+    ).getInfo()
+    assert 0 <= stats["woody_frac_h2_min"] <= stats["woody_frac_h2_max"] <= 1
 
 
 # --------------------------------------------------------------------------- #
