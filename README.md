@@ -217,6 +217,16 @@ Biomass, radar and lidar:
   `agb_change_sd` / `agb_change_qf`, for the published year pairs only.
 - `get_palsar2_yearly(aoi, start_year, end_year)` returns PALSAR-2 HH/HV as gamma-naught
   dB, masked to land.
+- `get_palsar2_scansar(aoi, start, end, polarizations=("HH", "HV"))` returns PALSAR-2
+  ScanSAR L2.2 scenes as gamma-naught dB at 25 m (or linear power with `linear=True`).
+  It keeps only scenes that have every requested polarisation, masks every pixel whose
+  `MSK` class is not valid, and keeps `LIN` (local incidence angle in degrees). The
+  record extends past the yearly mosaic's 2024 end.
+- `palsar2_scansar_composite(collection, year, months=(6, 9))` reduces one season within
+  one year. It averages in linear power and converts back to dB, and adds a
+  `scene_count` band (the analogue of S2's `clear_count`) and a `lin_mean` band. Use the
+  same months every year. ScanSAR reads about 1 dB away from the yearly mosaic, so
+  don't mix the two in one series.
 - `get_gedi_l4a_monthly` / `get_gedi_l2a_monthly` return quality-masked GEDI shots
   (`agbd`, `agbd_se` / `rh*`).
 - `gedi_footprint_counts(collection, regions, start_year, end_year, scale=25)` counts
