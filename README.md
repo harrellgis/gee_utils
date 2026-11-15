@@ -241,6 +241,23 @@ Static canopy height baselines sit next to `get_canopy_height` (Meta 1 m) in
 
 Each is a single-epoch baseline, so never difference one product against another.
 
+`get_canopy_height(asset=...)` loads another canopy height image or collection in place
+of Meta v1, for example a project's Meta/WRI CHMv2 clip. The first band becomes
+`canopy_height`. To use it in the E6 baseline layer, pass the same ID to both calls so
+the data register names the CHM you actually used:
+
+```python
+chm = "projects/my-project/assets/chmv2_site_clip"
+layers = build_baseline_layers(region, chm_asset=chm)
+register = baseline_layer_register(chm_asset=chm)  # version/licence from asset properties
+woody = woody_fraction_from_chm(
+    get_canopy_height(asset=chm, pin_projection=True), crs="EPSG:32737"
+)
+```
+
+The asset is only used where you pass it. Site selection and every default call still
+read Meta v1.
+
 ### Sites, zonal statistics, and workflows
 
 Site boundaries are usually local files. `eetools.vectors` turns any format
