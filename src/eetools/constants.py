@@ -5,6 +5,7 @@ CHIRPS_PRECIP_BAND = "precipitation"
 # Sentinel-2 SR
 S2_SR_COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
 S2_CLOUD_PROB_COLLECTION = "COPERNICUS/S2_CLOUD_PROBABILITY"
+S2_CLOUD_SCORE_PLUS_COLLECTION = "GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED"
 
 # Landsat-8 SR
 L8_SR_COLLECTION = "LANDSAT/LC08/C02/T1_L2"
@@ -119,6 +120,17 @@ S2_SCALE = 10
 
 # Sentinel-2 cloud masking parameters
 CLOUD_FILTER = 50  # % max CLOUDY_PIXEL_PERCENTAGE per image
+# Pixel cloud-mask methods for S2 SR. Cloud Score+ is the default since 0.11.0;
+# s2cloudless (+ dark-NIR shadow projection) is kept so older projects reproduce.
+S2_CLOUD_MASK_METHODS = ("cloud_score_plus", "s2cloudless")
+S2_DEFAULT_CLOUD_MASK = "cloud_score_plus"
+# Cloud Score+: scores are 0-1, higher = clearer; a pixel is kept where score >= thresh.
+# cs_cdf (score relative to the pixel's own time series) is Google's recommended band;
+# 0.60 is Google's suggested default (0.50-0.65 is the usual range).
+CS_PLUS_BANDS = ("cs", "cs_cdf")
+CS_PLUS_BAND = "cs_cdf"
+CS_PLUS_THRESH = 0.60
+# s2cloudless
 CLD_PRB_THRESH = 40  # % s2cloudless probability threshold
 NIR_DRK_THRESH = 0.15  # reflectance threshold for dark (shadow candidate) pixels
 CLD_PRJ_DIST_KM = 1.0  # max shadow search distance in km

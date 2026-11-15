@@ -41,10 +41,26 @@ def test_get_s2_sr_collection_passes_cloud_filter(cloud_filter):
         preprocessing.get_s2_sr_collection(
             "AOI", "S", "E", apply_water_masking=False, cloud_filter=cloud_filter
         )
-    build.assert_called_once_with("AOI", "S", "E", cloud_filter=cloud_filter)
+    build.assert_called_once_with(
+        "AOI",
+        "S",
+        "E",
+        cloud_filter=cloud_filter,
+        cloud_mask="cloud_score_plus",
+        cs_band="cs_cdf",
+        cs_threshold=0.60,
+    )
 
 
 def test_build_cloudfree_s2sr_col_passes_cloud_filter():
-    with patch.object(masking, "get_s2_sr_cld_col") as get_col:
+    with patch.object(masking, "get_s2_sr_cs_col") as get_col:
         masking.build_cloudfree_s2sr_col("AOI", "S", "E", cloud_filter=None)
+    get_col.assert_called_once_with("AOI", "S", "E", cloud_filter=None)
+
+
+def test_build_cloudfree_s2sr_col_s2cloudless_passes_cloud_filter():
+    with patch.object(masking, "get_s2_sr_cld_col") as get_col:
+        masking.build_cloudfree_s2sr_col(
+            "AOI", "S", "E", cloud_filter=None, cloud_mask="s2cloudless"
+        )
     get_col.assert_called_once_with("AOI", "S", "E", cloud_filter=None)

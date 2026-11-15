@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Cloud Score+ as the Sentinel-2 cloud mask (vault: 2026-11-14 tgbs_rs dataset currency
+audit, priority change 5).
+
+### Changed
+- **Breaking (S2 composites):** `get_s2_sr_collection` and `build_cloudfree_s2sr_col`
+  now mask clouds with Cloud Score+ (`GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`) by
+  default. A pixel is kept where `cs_cdf >= 0.60`. The score covers cloud, shadow,
+  haze and thin cirrus, so no shadow projection or morphology is applied. Expect
+  cleaner composites and usually fewer clear observations (`clear_count`,
+  `clear_frac`) than before, most of all where there is haze or thin cloud.
+  - Pass `cloud_mask="s2cloudless"` to reproduce composites built before this
+    release (s2cloudless > `CLD_PRB_THRESH` + dark-NIR shadow projection).
+  - S2 scenes with no matching Cloud Score+ image are dropped, as unmatched
+    s2cloudless scenes already were.
+
+### Added
+- `cloud_mask=`, `cs_band=` and `cs_threshold=` on `get_s2_sr_collection` and
+  `build_cloudfree_s2sr_col`. They are checked before any graph is built.
+- `sentinel.masking.get_s2_sr_cs_col`, `add_cs_plus_mask` and
+  `validate_s2_cloud_mask_args`.
+- Constants `S2_CLOUD_SCORE_PLUS_COLLECTION`, `S2_CLOUD_MASK_METHODS`,
+  `S2_DEFAULT_CLOUD_MASK` (`"cloud_score_plus"`), `CS_PLUS_BANDS`, `CS_PLUS_BAND`
+  (`"cs_cdf"`) and `CS_PLUS_THRESH` (0.60).
+
 ## [0.10.0] - 2026-11-14
 
 Absolute coarse screen for reference runs (vault: 2026-11-14 intactness-defaults note,

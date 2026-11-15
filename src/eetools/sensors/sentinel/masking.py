@@ -1,3 +1,16 @@
+"""Sentinel-2 SR cloud, shadow and water masking.
+
+Two pixel cloud masks are available, chosen with ``cloud_mask=``:
+
+* ``"cloud_score_plus"`` (default): Google Cloud Score+ (``cs`` / ``cs_cdf``, 0-1,
+  higher = clearer). One score covers cloud, shadow, haze and thin cirrus, so no
+  separate shadow step is needed. A pixel is kept where the score is >= the threshold.
+* ``"s2cloudless"``: s2cloudless probability > ``CLD_PRB_THRESH`` plus a dark-NIR
+  shadow projection and morphological opening (the eetools default before 0.11.0).
+
+Both write a ``cloudmask`` band (1 = exclude) that ``apply_cld_shdw_mask`` applies.
+"""
+
 import ee
 
 from eetools.constants import (
@@ -5,11 +18,17 @@ from eetools.constants import (
     CLD_PRB_THRESH,
     CLD_PRJ_DIST_KM,
     CLOUD_FILTER,
+    CS_PLUS_BAND,
+    CS_PLUS_BANDS,
+    CS_PLUS_THRESH,
     DDT_SCALE_M,
     ERODE_RADIUS_M,
     MORPH_SCALE_M,
     NIR_DRK_THRESH,
+    S2_CLOUD_MASK_METHODS,
     S2_CLOUD_PROB_COLLECTION,
+    S2_CLOUD_SCORE_PLUS_COLLECTION,
+    S2_DEFAULT_CLOUD_MASK,
     S2_SR_COLLECTION,
 )
 from eetools.sensors import masking as _masking
@@ -26,6 +45,95 @@ def mask_edges(image: ee.Image) -> ee.Image:
     """
     return image.updateMask(image.select("B8A").mask()).updateMask(
         image.select("B9").mask()
+    )
+
+
+def validate_s2_cloud_mask_args(
+    cloud_mask: str,
+    cs_band: str = CS_PLUS_BAND,
+    cs_threshold: float = CS_PLUS_THRESH,
+) -> None:
+    """Check the Sentinel-2 cloud-mask options before any graph is built.
+
+    Args:
+        cloud_mask: Pixel cloud-mask method, one of ``S2_CLOUD_MASK_METHODS``
+            ('cloud_score_plus' or 's2cloudless').
+        cs_band: Cloud Score+ band, one of ``CS_PLUS_BANDS`` ('cs' or 'cs_cdf').
+            Only checked when ``cloud_mask`` is 'cloud_score_plus'.
+        cs_threshold: Cloud Score+ clear threshold in [0, 1]. Only checked when
+            ``cloud_mask`` is 'cloud_score_plus'.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If ``cloud_mask`` or ``cs_band`` is unknown, or ``cs_threshold``
+            is outside [0, 1].
+    """
+    if cloud_mask not in S2_CLOUD_MASK_METHODS:
+        raise ValueError(
+            f"Unknown cloud_mask '{cloud_mask}'. Expected one of "
+            f"{list(S2_CLOUD_MASK_METHODS)}."
+        )
+    if cloud_mask != "cloud_score_plus":
+        return
+    if cs_band not in CS_PLUS_BANDS:
+        raise ValueError(
+            f"Unknown Cloud Score+ band '{cs_band}'. Expected one of "
+            f"{list(CS_PLUS_BANDS)}."
+        )
+    if not 0 <= cs_threshold <= 1:
+        raise ValueError(
+            f"cs_threshold must be in [0, 1] (Cloud Score+ scores are 0-1), "
+            f"got {cs_threshold}."
+        )
+
+
+def _get_s2_sr_base_col(
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    cloud_filter: float | None,
+) -> ee.ImageCollection:
+    """S2 SR scenes over the AOI and dates, scene-filtered and edge-masked."""
+    s2_sr_col = (
+        ee.ImageCollection(S2_SR_COLLECTION)
+        .filterBounds(aoi)
+        .filterDate(start_date, end_date)
+    )
+    if cloud_filter is not None:
+        s2_sr_col = s2_sr_col.filter(
+            ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_filter)
+        )
+    return s2_sr_col.map(mask_edges)
+
+
+def _join_on_index(
+    primary: ee.ImageCollection,
+    secondary_id: str,
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    property_name: str,
+) -> ee.ImageCollection:
+    """Save the matching secondary image (same system:index) as a property.
+
+    ``Join.saveFirst`` drops primary scenes with no match, so a scene whose cloud
+    product is missing is left out rather than passed through unmasked.
+    """
+    secondary = (
+        ee.ImageCollection(secondary_id)
+        .filterBounds(aoi)
+        .filterDate(start_date, end_date)
+    )
+    return ee.ImageCollection(
+        ee.Join.saveFirst(property_name).apply(
+            primary=primary,
+            secondary=secondary,
+            condition=ee.Filter.equals(
+                leftField="system:index", rightField="system:index"
+            ),
+        )
     )
 
 
@@ -47,32 +155,65 @@ def get_s2_sr_cld_col(
     Returns:
         ee.ImageCollection of Sentinel-2 SR images with the corresponding s2cloudless probability image saved as the 's2cloudless' property on each image.
     """
-    s2_sr_col = (
-        ee.ImageCollection(S2_SR_COLLECTION)
-        .filterBounds(aoi)
-        .filterDate(start_date, end_date)
-    )
-    if cloud_filter is not None:
-        s2_sr_col = s2_sr_col.filter(
-            ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cloud_filter)
-        )
-    s2_sr_col = s2_sr_col.map(mask_edges)
-
-    s2_cloudless_col = (
-        ee.ImageCollection(S2_CLOUD_PROB_COLLECTION)
-        .filterBounds(aoi)
-        .filterDate(start_date, end_date)
+    return _join_on_index(
+        _get_s2_sr_base_col(aoi, start_date, end_date, cloud_filter),
+        S2_CLOUD_PROB_COLLECTION,
+        aoi,
+        start_date,
+        end_date,
+        "s2cloudless",
     )
 
-    return ee.ImageCollection(
-        ee.Join.saveFirst("s2cloudless").apply(
-            primary=s2_sr_col,
-            secondary=s2_cloudless_col,
-            condition=ee.Filter.equals(
-                leftField="system:index", rightField="system:index"
-            ),
-        )
+
+def get_s2_sr_cs_col(
+    aoi: ee.Geometry,
+    start_date: ee.Date,
+    end_date: ee.Date,
+    cloud_filter: float | None = CLOUD_FILTER,
+) -> ee.ImageCollection:
+    """Build a joined Sentinel-2 SR and Cloud Score+ collection filtered to the AOI and
+    date range.
+
+    Args:
+        aoi: Area of interest as ee.Geometry.
+        start_date: Collection start date as ee.Date.
+        end_date: Collection end date as ee.Date.
+        cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE (default CLOUD_FILTER, 50). None keeps every scene. See get_s2_sr_cld_col.
+
+    Returns:
+        ee.ImageCollection of Sentinel-2 SR images with the matching Cloud Score+ image (bands 'cs', 'cs_cdf') saved as the 'cloud_score_plus' property on each image. Scenes without a Cloud Score+ match are dropped.
+    """
+    return _join_on_index(
+        _get_s2_sr_base_col(aoi, start_date, end_date, cloud_filter),
+        S2_CLOUD_SCORE_PLUS_COLLECTION,
+        aoi,
+        start_date,
+        end_date,
+        "cloud_score_plus",
     )
+
+
+def add_cs_plus_mask(
+    image: ee.Image,
+    band: str = CS_PLUS_BAND,
+    threshold: float = CS_PLUS_THRESH,
+) -> ee.Image:
+    """Add a 'cloudmask' band from the joined Cloud Score+ image.
+
+    Cloud Score+ already scores shadows, haze and thin cirrus, so no shadow
+    projection or morphology is applied (Google's recommended usage). Pixels where
+    the score itself is masked stay masked once the cloud mask is applied.
+
+    Args:
+        image: Sentinel-2 ee.Image with the 'cloud_score_plus' property set (output of get_s2_sr_cs_col).
+        band: Cloud Score+ band to threshold, 'cs_cdf' (default, CS_PLUS_BAND) or 'cs'.
+        threshold: Clear threshold in [0, 1] (default CS_PLUS_THRESH, 0.60); pixels with score < threshold are flagged.
+
+    Returns:
+        ee.Image with an additional 'cloudmask' band where 1 = cloud, shadow or haze pixel.
+    """
+    score = ee.Image(image.get("cloud_score_plus")).select(band)
+    return image.addBands(score.lt(threshold).rename("cloudmask"))
 
 
 def add_cld_shdw_mask(image: ee.Image) -> ee.Image:
@@ -121,7 +262,7 @@ def apply_cld_shdw_mask(image: ee.Image) -> ee.Image:
     all bands.
 
     Args:
-        image: ee.Image with a 'cloudmask' band added by add_cld_shdw_mask.
+        image: ee.Image with a 'cloudmask' band added by add_cld_shdw_mask or add_cs_plus_mask.
 
     Returns:
         ee.Image with cloud and shadow pixels masked out across all bands.
@@ -134,6 +275,9 @@ def build_cloudfree_s2sr_col(
     start_date: ee.Date,
     end_date: ee.Date,
     cloud_filter: float | None = CLOUD_FILTER,
+    cloud_mask: str = S2_DEFAULT_CLOUD_MASK,
+    cs_band: str = CS_PLUS_BAND,
+    cs_threshold: float = CS_PLUS_THRESH,
 ) -> ee.ImageCollection:
     """Build a Sentinel-2 SR collection with cloud and shadow masking fully applied.
 
@@ -142,13 +286,26 @@ def build_cloudfree_s2sr_col(
         start_date: Collection start date as ee.Date.
         end_date: Collection end date as ee.Date.
         cloud_filter: Maximum scene CLOUDY_PIXEL_PERCENTAGE (default CLOUD_FILTER); None keeps every scene. See get_s2_sr_cld_col.
+        cloud_mask: Pixel cloud-mask method: 'cloud_score_plus' (default, S2_DEFAULT_CLOUD_MASK) or 's2cloudless' (the pre-0.11.0 default; pass it to reproduce older composites).
+        cs_band: Cloud Score+ band, 'cs_cdf' (default) or 'cs'. Ignored for s2cloudless.
+        cs_threshold: Cloud Score+ clear threshold in [0, 1] (default CS_PLUS_THRESH, 0.60). Ignored for s2cloudless.
 
     Returns:
         ee.ImageCollection of cloud- and shadow-masked Sentinel-2 SR images.
+
+    Raises:
+        ValueError: If ``cloud_mask``, ``cs_band`` or ``cs_threshold`` is invalid (see validate_s2_cloud_mask_args).
     """
+    validate_s2_cloud_mask_args(cloud_mask, cs_band, cs_threshold)
+    if cloud_mask == "s2cloudless":
+        return (
+            get_s2_sr_cld_col(aoi, start_date, end_date, cloud_filter=cloud_filter)
+            .map(add_cld_shdw_mask)
+            .map(apply_cld_shdw_mask)
+        )
     return (
-        get_s2_sr_cld_col(aoi, start_date, end_date, cloud_filter=cloud_filter)
-        .map(add_cld_shdw_mask)
+        get_s2_sr_cs_col(aoi, start_date, end_date, cloud_filter=cloud_filter)
+        .map(lambda img: add_cs_plus_mask(img, band=cs_band, threshold=cs_threshold))
         .map(apply_cld_shdw_mask)
     )
 

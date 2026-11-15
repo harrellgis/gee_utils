@@ -61,6 +61,7 @@ def test_scale_factors_are_positive(scale_factor):
         C.CHIRPS_COLLECTION,
         C.S2_SR_COLLECTION,
         C.S2_CLOUD_PROB_COLLECTION,
+        C.S2_CLOUD_SCORE_PLUS_COLLECTION,
         C.L8_SR_COLLECTION,
         C.HLS_L30_COLLECTION,
         C.HLS_S30_COLLECTION,
