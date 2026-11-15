@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     selection and every default call still read Meta v1.
   - Constants `META_CANOPY_HEIGHT_VERSION`, `META_CANOPY_HEIGHT_LICENCE` and
     `CANOPY_HEIGHT_ASSET_*_PROPERTY`.
+- ECHOSAT annual canopy height builder (vault: 2026-11-14 tgbs_rs dataset currency
+  audit, ECHOSAT moves to EE). `get_echosat(aoi, years, mask_water, pin_projection)`
+  mosaics the `projects/ai4forest/assets/echosat` MGRS tiles. Bands `b1..b7` become
+  `canopy_height_2018..2024` in metres (int16 centimetres x 0.01). ESA WorldCover
+  water (class 80) is masked by default. Also added: `get_echosat_collection` (one
+  image per year), `echosat_band_names` and constants `ECHOSAT_*` and
+  `ESA_WC_WATER_CLASS`.
+  - **Units:** centimetres, as stated by the dataset page (echosat.uni-muenster.de).
+  - **Band order:** not published. Checked against Hansen loss years in the Mau
+    forest: the height drop for loss year Y falls at band Y-2017.
+  - **No water mask in the source:** open water reads ~2.5-5.8 m, hence the default
+    mask.
 - PALSAR-2 ScanSAR Level 2.2 builder (vault: 2026-11-14 tgbs_rs PALSAR-2 ScanSAR
   builder proposal). It takes L-band HV past the yearly mosaic's 2024 end. Over the
   Kenya sites, dual-pol scenes run to 2025-10 and there are none in 2026.

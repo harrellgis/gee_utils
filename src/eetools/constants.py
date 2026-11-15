@@ -507,6 +507,22 @@ ETH_CANOPY_HEIGHT_NODATA = 255
 GLAD_CANOPY_HEIGHT_2019 = "projects/sat-io/open-datasets/GLAD/GEDI_V27"
 GLAD_CANOPY_HEIGHT_MAX_M = 60
 CANOPY_HEIGHT_SOURCE_BAND = "b1"
+# ECHOSAT annual canopy height 2018-2024, 10 m (AI4Forest; arXiv 2602.21421; data
+# CC BY 4.0 per the repo README, read 2026-11-14). 643 tiles on an aggregated
+# Sentinel-2 MGRS grid (ECHOSAT_T<zone><band>, e.g. T37M), native UTM. 7 int16 bands
+# b1..b7 = 2018..2024 in CENTIMETRES ("7 bands/years of canopy height in centimeters",
+# echosat.uni-muenster.de). The band->year order is not published. It was checked
+# 2026-11-15 against Hansen loss years in the Mau forest: the height drop for loss
+# year Y falls at band Y-2017 (2021 -> b4, 2022 -> b5, 2023 -> b6). The asset has no
+# no-data or water mask: open water reads ~2.5-5.8 m (Lake Victoria, Naivasha, Indian
+# Ocean), so get_echosat masks ESA WorldCover water (class 80) by default.
+ECHOSAT_COLLECTION = "projects/ai4forest/assets/echosat"
+ECHOSAT_YEARS: tuple[int, ...] = (2018, 2019, 2020, 2021, 2022, 2023, 2024)
+ECHOSAT_SOURCE_BANDS: tuple[str, ...] = ("b1", "b2", "b3", "b4", "b5", "b6", "b7")
+ECHOSAT_SCALE_FACTOR = 0.01  # cm -> m
+ECHOSAT_SCALE_M = 10
+ECHOSAT_BAND_TEMPLATE = "canopy_height_{year}"
+ESA_WC_WATER_CLASS = 80
 # Woody fraction from a CHM (woody_fraction_from_chm): share of each output pixel
 # covered by canopy >= h m, per height threshold. Bands woody_frac_h<label>, with
 # label "2" for 2 m and "2p5" for 2.5 m, plus chm_valid_frac.
