@@ -12,6 +12,8 @@ from typing import Any, Literal
 import geopandas as gpd
 import pandas as pd
 
+from eetools.constants import NATURAL_COVER_DEGRADATION_TYPES
+
 DegradationType = Literal[
     "generic",
     "mining",
@@ -21,6 +23,7 @@ DegradationType = Literal[
     "overgrazing",
     "rangeland",
     "settlement",
+    "natural_degradation",
 ]
 SiteType = Literal["reference", "degraded"]
 
@@ -30,7 +33,7 @@ _WEIGHT_TOL = 1e-6
 # a run that does not use the field, e.g. a reference run without
 # project_start_year) are reused, and the reusing run records its value. A field only
 # mismatches when both keys set it to different values.
-COMPLETABLE_KEY_FIELDS = ("project_start_year", "dw_coarse_scale_m")
+COMPLETABLE_KEY_FIELDS = ("project_start_year", "dw_coarse_scale_m", "s2_anchor")
 
 
 class ScreeningTablesMismatch(ValueError):
@@ -175,7 +178,10 @@ class DegradedWeights:
     ranking weight (a weight penalised sites further along the same pathway). The
     defaults are the original weights without the 0.35 signature term, renormalised
     (thirteenths). ``loss`` applies to forest strata only; otherwise it is
-    redistributed proportionally to the four STATE terms.
+    redistributed proportionally to the STATE terms. ``bare`` (pct of the 10 m
+    Sentinel-2 dry-window BSI, or of the WorldCover bare fraction without it) is a
+    STATE term used by the natural-cover pathways (0 by default; see
+    :func:`default_degraded_weights`).
     """
 
     perf_deficit: float = 3 / 13
@@ -185,6 +191,7 @@ class DegradedWeights:
     browning: float = 1 / 13
     nbr_decline: float = 1 / 13
     loss: float = 1 / 13
+    bare: float = 0.0
 
     def __post_init__(self) -> None:
         _check_weights(self)
@@ -198,6 +205,13 @@ def default_degraded_weights(degradation_type: str) -> DegradedWeights:
     ``degradation_type='settlement'``; for every other pathway its weight is 0 and the
     remaining terms keep their proportions.
 
+    Natural-cover pathways (``NATURAL_COVER_DEGRADATION_TYPES``, 2026-11-18 spec)
+    replace ``unnatural`` with ``bare``: once the cropland gate has removed modified
+    land, natural cover is near-constant across the pool, while bare soil separates
+    degraded bushland from references. Their weights are perf 3/13, moist 2/13, bare
+    3/13, browning 1/13, NBR decline 1/13 and loss 1/13, with the freed 2/13 spread
+    over the three STATE terms in proportion.
+
     Args:
         degradation_type: Degradation pathway.
 
@@ -207,6 +221,19 @@ def default_degraded_weights(degradation_type: str) -> DegradedWeights:
     w = DegradedWeights()
     if degradation_type == "settlement":
         return w
+    if degradation_type in NATURAL_COVER_DEGRADATION_TYPES:
+        state = w.perf_deficit + w.moist_deficit + w.unnatural  # 8/13
+        scale = (state + w.pressure) / state  # spread pressure's 2/13 over state
+        return DegradedWeights(
+            perf_deficit=w.perf_deficit * scale,
+            moist_deficit=w.moist_deficit * scale,
+            unnatural=0.0,
+            pressure=0.0,
+            browning=w.browning,
+            nbr_decline=w.nbr_decline,
+            loss=w.loss,
+            bare=w.unnatural * scale,
+        )
     rest = 1.0 - w.pressure
     return DegradedWeights(
         perf_deficit=w.perf_deficit / rest,
@@ -216,6 +243,7 @@ def default_degraded_weights(degradation_type: str) -> DegradedWeights:
         browning=w.browning / rest,
         nbr_decline=w.nbr_decline / rest,
         loss=w.loss / rest,
+        bare=w.bare / rest,
     )
 
 

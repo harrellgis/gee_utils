@@ -1428,6 +1428,29 @@ DEGRADED_EXCLUDE_MAX_FRAC = (
 DEGRADED_MAX_BUILT_FRAC = 0.02  # ESA WorldCover (2021) built-up fraction
 DEGRADED_MAX_DW_BUILT = 0.05  # Dynamic World built-label share (dw_landuse family)
 DW_BUILT_LABEL = 6  # Dynamic World 'label' code for built
+# Degraded cropland gate (natural-cover pathways only, 2026-11-18 spec): a final cell
+# whose Dynamic World crop-label share (most frequent label over the state window,
+# dw_landuse family) exceeds this is gated out ('cropland'). [L]: matches the built-up
+# tolerance. Conversion pathways keep cropland (max_dw_crop=None).
+DEGRADED_MAX_DW_CROP = 0.05
+# Land-use classes the natural-cover cropland gate also removes ("converted" reason).
+CONVERTED_LANDUSE_CLASSES = ("converted", "persistent_modified")
+# 10 m Sentinel-2 anchor (s2_anchor family, 2026-11-18 spec): dry-window median NDVI,
+# NDMI and BSI in the baseline and state windows, for the D1 anchor constraint and the
+# natural-cover 'bare' ranking term. MODIS 250/500 m pixels mix a small focal site
+# with its surroundings (TGBS_Ecosia, 5.8 ha: the MODIS focal baseline sat above the
+# reference mean; on S2 the order was degraded < focal < reference).
+S2_ANCHOR_SCALE_M = 10
+S2_ANCHOR_FIRST_YEAR = 2019  # S2 L2A is global from Dec 2018; earlier -> MODIS fallback
+S2_ANCHOR_BANDS = (
+    "s2_ndvi_base",
+    "s2_ndmi_base",
+    "s2_bsi_base",
+    "s2_ndvi_state",
+    "s2_ndmi_state",
+    "s2_bsi_state",
+)
+ANCHOR_SENSORS = ("modis", "s2")
 
 # Dynamic World land-use history (dw_landuse family, 2026-11-09 robustness review).
 # One 30 m reduction of yearly DW label modes from DW_LANDUSE_FIRST_YEAR to end_year on
@@ -1463,6 +1486,12 @@ LANDUSE_CLASSES = (
 # rangeland) keep the D2 signature gate and are not separated from references by class.
 CONVERSION_DEGRADATION_TYPES = frozenset(
     {"generic", "cropland", "settlement", "mining", "bare_soil", "deforestation"}
+)
+# Pathways inside natural cover (2026-11-18 spec): the D2 signature gate, the
+# near-reference drop, the absolute cropland gate (DEGRADED_MAX_DW_CROP), a coarse
+# screen gated on natural area and, by default, the 10 m Sentinel-2 anchor.
+NATURAL_COVER_DEGRADATION_TYPES = frozenset(
+    {"natural_degradation", "overgrazing", "rangeland"}
 )
 PA_EXCLUDE_MIN_SHARE = 0.5  # exclude_protected: drop cells this share inside a PA
 # Degraded anchor (2026-11-07 amendment): the degraded site is the 0% end of the TGBS
@@ -1508,6 +1537,13 @@ DEGRADATION_TYPE_PROFILES: dict[str, dict[str, list]] = {
             ("natural_frac", -1),
             ("ghm", 1),
         ],
+        "layers": [],
+    },
+    # Degradation inside natural cover with no named driver (2026-11-18 spec): the
+    # natural-cover counterpart of 'generic'. s2_bsi_state comes from the s2_anchor
+    # family (anchor_sensor='s2'); absent columns are skipped.
+    "natural_degradation": {
+        "terms": [("ndvi_state", -1), ("ndmi_state", -1), ("s2_bsi_state", 1)],
         "layers": [],
     },
 }

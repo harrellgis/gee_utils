@@ -14,7 +14,9 @@ import pandas as pd
 
 from eetools.constants import (
     ANCHOR_INDICES,
+    ANCHOR_SENSORS,
     CONVERSION_DEGRADATION_TYPES,
+    CONVERTED_LANDUSE_CLASSES,
     DEGRADED_BASELINE_WINDOW_YEARS,
     DEGRADED_EXCLUDE_MAX_FRAC,
     DW_LANDUSE_FIRST_YEAR,
@@ -197,7 +199,9 @@ def degradation_score(
 
     The signature is not a ranking term: it is the pathway gate (:func:`pathway_gate`),
     applied before scoring. ``loss`` applies to forest strata only; otherwise its
-    weight goes proportionally to the four STATE terms.
+    weight goes proportionally to the STATE terms. ``bare`` is pct(``s2_bsi_state``,
+    the 10 m Sentinel-2 dry-window BSI) where that column has values, else
+    pct(``bare_frac``); its weight is 0 except for natural-cover pathways.
 
     Args:
         df: Candidate pool (percentiles are taken over it).
@@ -216,6 +220,7 @@ def degradation_score(
         "browning": percentile_normalise(-_col(df, "ndvi_trend")),
         "nbr_decline": percentile_normalise(-_col(df, "nbr_trend")),
         "loss": percentile_normalise(_col(df, "forest_loss_frac")),
+        "bare": percentile_normalise(_bare_signal(df)),
     }
     wts = {
         "perf_deficit": w.perf_deficit,
@@ -225,14 +230,74 @@ def degradation_score(
         "browning": w.browning,
         "nbr_decline": w.nbr_decline,
         "loss": w.loss,
+        "bare": w.bare,
     }
     if not is_forest:
-        state = ["perf_deficit", "moist_deficit", "unnatural", "pressure"]
+        state = ["perf_deficit", "moist_deficit", "unnatural", "pressure", "bare"]
         state_total = sum(wts[k] for k in state)
         for k in state:
             wts[k] += wts["loss"] * wts[k] / state_total
         wts["loss"] = 0.0
     return _combine(comps, wts)
+
+
+def _bare_signal(df: pd.DataFrame) -> pd.Series:
+    """Bare-soil signal for the ``bare`` term: S2 BSI if present, else WorldCover bare."""
+    bsi = _col(df, "s2_bsi_state")
+    if bsi.notna().any():
+        return bsi
+    return _col(df, "bare_frac")
+
+
+def anchor_view(df: pd.DataFrame, sensor: str) -> pd.DataFrame:
+    """The anchor-index columns D1/D4 read, for one anchor sensor.
+
+    ``'modis'`` returns the MODIS ``ndvi_/ndmi_base`` and ``ndvi_/ndmi_state``
+    columns; ``'s2'`` returns the 10 m Sentinel-2 ``s2_*`` columns under the same
+    names, so :func:`anchor_constraint` and :func:`focal_baseline_pct` run unchanged.
+    Missing columns come back as NaN (the candidate then fails D1: unverifiable).
+
+    Args:
+        df: Candidate cells.
+        sensor: 'modis' or 's2' (ANCHOR_SENSORS).
+
+    Returns:
+        DataFrame with ``<x>_base`` / ``<x>_state`` for each ANCHOR_INDICES x.
+
+    Raises:
+        ValueError: If ``sensor`` is unknown.
+    """
+    if sensor not in ANCHOR_SENSORS:
+        raise ValueError(f"anchor sensor must be one of {ANCHOR_SENSORS}.")
+    prefix = "s2_" if sensor == "s2" else ""
+    out = pd.DataFrame(index=df.index)
+    for x in ANCHOR_INDICES:
+        for w in ("base", "state"):
+            out[f"{x}_{w}"] = _col(df, f"{prefix}{x}_{w}")
+    return out
+
+
+def natural_cover_refine_score(cs: pd.DataFrame, env_sim: pd.Series) -> pd.Series:
+    """Coarse refinement order for natural-cover degraded runs (2026-11-18 spec F3).
+
+    Gated cells (``coarse_landuse_gate`` False) get NaN; the rest are ordered by
+    environmental similarity only, ``0.5 + 0.5 env_sim`` (missing env_sim -> 0.5).
+    The natural share is the gate, not the order: ordering by it favours intact
+    blocks, which are reference country rather than degraded natural cover. Like the
+    reference screen, it is independent of the degradation weights.
+
+    Args:
+        cs: Output of :func:`coarse_landuse_screen` (``coarse_landuse_gate``).
+        env_sim: Coarse env_sim, aligned to ``cs``.
+
+    Returns:
+        Series of refinement scores (NaN = not refined).
+    """
+    gate = cs["coarse_landuse_gate"].astype(bool)
+    score = 0.5 + 0.5 * pd.to_numeric(env_sim, errors="coerce").reindex(
+        cs.index
+    ).fillna(0.5)
+    return score.where(gate)
 
 
 # --------------------------------------------------------------------------- #
@@ -435,6 +500,7 @@ def degraded_exclusion_reasons(
     keep_built: bool = False,
     exclude_protected: bool = False,
     max_dw_built: float | None = None,
+    max_dw_crop: float | None = None,
 ) -> pd.Series:
     """Why each cell is excluded from a degraded pool (None = kept).
 
@@ -444,8 +510,11 @@ def degraded_exclusion_reasons(
     built-up land); on final cells WorldCover ``built_frac > max_built_frac`` ->
     'built_wc' and Dynamic World ``dw_built_share > max_dw_built`` -> 'built_dw' (NaN
     is kept: a missing value is not evidence of built-up land), because GBS focal sites
-    hold no built structures. ``exclude_protected`` -> 'protected'. The first matching
-    reason wins. Applied before thinning (gate, then thin).
+    hold no built structures. Natural-cover pathways also pass ``max_dw_crop``
+    (2026-11-18 spec): on final cells a Dynamic World crop-label share above it ->
+    'cropland', and a ``landuse_class`` of 'converted' or 'persistent_modified' ->
+    'converted' (NaN is kept). ``exclude_protected`` -> 'protected'. The first
+    matching reason wins. Applied before thinning (gate, then thin).
 
     Args:
         pool: Cells with water_frac, built_frac and (optionally) pa_share and
@@ -456,6 +525,8 @@ def degraded_exclusion_reasons(
         exclude_protected: Also drop cells >= PA_EXCLUDE_MIN_SHARE inside a PA.
         max_dw_built: Maximum Dynamic World built-label share for final cells; None
             disables the Dynamic World test.
+        max_dw_crop: Maximum Dynamic World crop-label share for final cells; None
+            (conversion pathways) keeps cropland and converted land.
 
     Returns:
         Series of reason strings (None where the cell is kept), aligned to ``pool``.
@@ -481,6 +552,12 @@ def degraded_exclusion_reasons(
                 mark((dwb > max_dw_built).fillna(False), "built_dw")
         else:
             mark(built >= DEGRADED_EXCLUDE_MAX_FRAC, "built_wc")
+    if final and max_dw_crop is not None:
+        if "dw_crop_share" in pool.columns:
+            crop = pd.to_numeric(pool["dw_crop_share"], errors="coerce")
+            mark((crop > max_dw_crop).fillna(False), "cropland")
+        if "landuse_class" in pool.columns:
+            mark(pool["landuse_class"].isin(CONVERTED_LANDUSE_CLASSES), "converted")
     if exclude_protected:
         mark(col("pa_share") >= PA_EXCLUDE_MIN_SHARE, "protected")
     return reason
@@ -494,6 +571,7 @@ def degraded_exclusions(
     keep_built: bool = False,
     exclude_protected: bool = False,
     max_dw_built: float | None = None,
+    max_dw_crop: float | None = None,
 ) -> pd.Series:
     """Cells to drop from a degraded pool (True = drop); see degraded_exclusion_reasons.
 
@@ -504,6 +582,7 @@ def degraded_exclusions(
         keep_built: Skip the built-up rules (settlement pathway).
         exclude_protected: Also drop cells >= PA_EXCLUDE_MIN_SHARE inside a PA.
         max_dw_built: Maximum Dynamic World built-label share for final cells.
+        max_dw_crop: Maximum Dynamic World crop-label share for final cells.
 
     Returns:
         Boolean Series aligned to ``pool`` (True = drop).
@@ -515,6 +594,7 @@ def degraded_exclusions(
         keep_built=keep_built,
         exclude_protected=exclude_protected,
         max_dw_built=max_dw_built,
+        max_dw_crop=max_dw_crop,
     ).notna()
 
 

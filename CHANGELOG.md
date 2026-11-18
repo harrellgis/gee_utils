@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Natural-cover degraded pathway with a cropland gate (vault: 2026-11-18
+`gee_utils_natural_cover_degraded_pathway_spec`). Lets a project use degraded natural
+vegetation, not cropland, as the TGBS 0% anchor.
+
+### Added
+- `degradation_type="natural_degradation"`: the natural-cover counterpart of
+  `generic`. It joins `overgrazing` and `rangeland` in the new
+  `NATURAL_COVER_DEGRADATION_TYPES`, which use the D2 signature gate and the
+  near-reference drop (not the conversion test).
+- **Cropland gate** (natural-cover pathways): `identify_degraded_sites(max_dw_crop=)`.
+  A final cell with a Dynamic World crop-label share above it is gated out
+  (`gate_reason="cropland"`), and so is one whose land-use class is `converted` or
+  `persistent_modified` (`"converted"`). It runs before thinning and uses the cached
+  `dw_landuse` family, so it costs no new reduction. `"auto"` (default) means
+  `DEGRADED_MAX_DW_CROP` (0.05) for natural-cover pathways and off for conversion
+  pathways. `degraded_exclusion_reasons` / `degraded_exclusions` take `max_dw_crop`.
+- **Coarse screen for natural-cover pathways:** the reference run's absolute
+  `dw_coarse` gate (enough persistently natural area for one fine cell), ordered by
+  env_sim only (`scoring.natural_cover_refine_score`), never by the degradation
+  weights. Natural-cover runs therefore zoom into natural blocks, not cropland blocks.
+- **10 m Sentinel-2 anchor:** `identify_degraded_sites(anchor_sensor=, anchor_months=)`
+  and the `s2_anchor` reduction family. It holds dry-window median NDVI, NDMI and
+  BSI for the baseline and state windows: S2 SR harmonized, Cloud Score+
+  `cs_cdf >= 0.60`, scenes `CLOUDY_PIXEL_PERCENTAGE <= 50`, at 10 m. D1 and D4 read it
+  through `scoring.anchor_view`, and the focal site is reduced at 10 m
+  (`predictors.reduce_focal_s2_anchor`). `"auto"` uses S2 for natural-cover pathways
+  when `anchor_months` is given. It falls back to MODIS, with a warning, when a window
+  starts before `S2_ANCHOR_FIRST_YEAR` (2019). With S2, D4's 100% value is the ranked
+  references' S2 state.
+- **Bare-soil ranking term:** `DegradedWeights.bare` (default 0), pct of `s2_bsi_state`,
+  or of WorldCover `bare_frac` without it. `default_degraded_weights` gives natural-cover
+  pathways perf 3.75/13, moist 2.5/13, bare 3.75/13, browning, NBR decline and loss
+  1/13 each, with no unnaturalness or pressure.
+- **References below the focal baseline** (S2 anchor, report only): the degraded run
+  warns about, and registers, ranked references whose S2 baseline NDVI or NDMI is below
+  the focal site's (`params["anchor"]["references_below_focal"]`).
+- `workflows.resolve_degraded_options` (pure resolution of the new options);
+  constants `NATURAL_COVER_DEGRADATION_TYPES`, `DEGRADED_MAX_DW_CROP`,
+  `CONVERTED_LANDUSE_CLASSES`, `S2_ANCHOR_*` and `ANCHOR_SENSORS`. `s2_anchor` is a
+  completable provenance-key field. The degraded shortlist table gains `s2_ndvi_base`,
+  `s2_ndmi_base` and `s2_bsi_state`.
+
+### Changed
+- `overgrazing` and `rangeland` now default to the cropland gate, the natural-cover
+  coarse screen and the natural-cover weights. Pass `max_dw_crop=None` and
+  `weights=` to restore the 0.11.0 behaviour. The coarse-screen ordering cannot be
+  restored.
+- The RUE trend is reduced only in `signature_mode="rules"`, the only place it is
+  read. Embedding-mode overgrazing/rangeland runs no longer pay for it.
+- Conversion pathways (`generic`, `cropland`, ...) are unchanged with default
+  arguments.
+
 ## [0.11.0] - 2026-11-15
 
 Dataset currency updates from the 2026-11-14 tgbs_rs dataset audit:
