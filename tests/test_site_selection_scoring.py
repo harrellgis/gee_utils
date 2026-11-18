@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from eetools.constants import SOP_MATRIX_THRESHOLDS
 from eetools.site_selection.scoring import (
     MatrixContext,
     anchor_check,
@@ -382,18 +383,31 @@ def _cand(**over):
     return row
 
 
-def test_matrix_elevation_and_rainfall_bands_never_narrower_than_half_tolerance():
+def test_matrix_elevation_and_rainfall_bands_never_narrower_than_sop_bands():
+    # Elevation 2: focal +/- elevation_band_m (200 m); 1: +/- elevation_tol_m (300 m).
+    # Rainfall 2: focal +/- 12.5%; 1: +/- 25%.
     cands = pd.DataFrame(
         [
-            _cand(elevation_p50=1149, rain_mean_annual=1124),
-            _cand(elevation_p50=1151, rain_mean_annual=1126),
+            _cand(elevation_p50=1199, rain_mean_annual=1124),
+            _cand(elevation_p50=1201, rain_mean_annual=1126),
             _cand(elevation_p50=1301, rain_mean_annual=1260),
         ],
         index=["a", "b", "c"],
     )
     m = build_selection_matrix(cands, _ctx())
+    assert SOP_MATRIX_THRESHOLDS["elevation_band_m"] == 200.0
     assert list(m["elevation_score"]) == [2, 1, 0]
     assert list(m["rainfall_score"]) == [2, 1, 0]
+
+
+def test_matrix_elevation_band_ecosia_case():
+    """TGBS_Ecosia 2026-11-18: a candidate 166 m below the focal site now scores 2."""
+    ctx = _ctx(elevation=1657.0, elevation_p5=1657.0, elevation_p95=1657.0)
+    cands = pd.DataFrame(
+        [_cand(elevation_p50=1491), _cand(elevation_p50=1450)], index=["d2", "far"]
+    )
+    m = build_selection_matrix(cands, ctx)
+    assert list(m["elevation_score"]) == [2, 1]
 
 
 def test_matrix_integrity_exclusive_and_exhaustive():
