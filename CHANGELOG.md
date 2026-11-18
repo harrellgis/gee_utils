@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `visualization.plots.plot_pool_condition`: the site-selection condition diagnostic straight from a reference and a degraded pool (`result.pool` or the exported `<kind>_pool.gpkg`), for any project and no Earth Engine. Returns the figure and the separation table; panels are ordered by the highest AUC shown.
+- `condition_cells_from_pools`: per-cell condition table from the two pools (eligible cells only; `dw_nat_share_all` -> `dw_natural_persist` and `dw_crop_share` -> `dw_crop_recent` via `POOL_CONDITION_COLUMNS`; groups `in_ref_pool`, `in_deg_pool`, `ref_topq` (intactness top quartile) and `strict_pa` (`pa_strict_share >= 0.5`)).
+- `circular_condition_signals(reference_weights, degradation_type)`: signals whose reference top quartile vs degraded pool AUC is circular, because the top quartile is cut from intactness (non-zero `ReferenceWeights` fields, `CONDITION_SIGNAL_WEIGHTS`) or the degraded pool is selected on them (NDVI / NDMI state for every pathway; the Dynamic World conversion test or the cropland gate by pathway). With default weights every top-quartile AUC is circular, so the plot shows the strict-PA vs rest AUC only.
+
+### Changed
+- `condition_separation_table` and `plot_condition_signals` take `circular`: those top-quartile AUCs become NaN (flagged in `topq_vs_deg_circular`) and are left out of the panel titles. `plot_condition_signals` takes `sort_by_auc`. Unchanged when `circular` is not given.
+
 ## [0.12.0] - 2026-11-18
 
 Site-selection changes from the 2026-11-18 TGBS_Ecosia degraded-site review (vault:
