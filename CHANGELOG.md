@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Natural-cover degraded pathway with a cropland gate (vault: 2026-11-18
-`gee_utils_natural_cover_degraded_pathway_spec`). Lets a project use degraded natural
-vegetation, not cropland, as the TGBS 0% anchor.
+## [0.12.0] - 2026-11-18
+
+Site-selection changes from the 2026-11-18 TGBS_Ecosia degraded-site review (vault:
+`gee_utils_natural_cover_degraded_pathway_spec`):
+- New natural-cover degraded pathway with a cropland gate. It lets a project use
+  degraded natural vegetation, not cropland, as the TGBS 0% anchor.
+- New 10 m Sentinel-2 anchor for the degraded D1/D4 checks.
+- The SOP selection-matrix elevation score-2 band is now ±200 m (was ±150 m).
 
 ### Added
 - `degradation_type="natural_degradation"`: the natural-cover counterpart of
