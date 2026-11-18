@@ -1563,7 +1563,12 @@ SOP_MATRIX_THRESHOLDS = {
     "degraded_loss_1": 0.01,
     "pathway_2": 0.75,
     "pathway_1": 0.5,
-    "elevation_band_m": 150.0,
+    # Elevation score 2 band: focal +/- this (or the focal p5-p95 range if wider); the
+    # Stage 1 gate (and score 1) stays at EnvelopeTolerances.elevation_tol_m (300 m).
+    # 200 m from 2026-11-18 (was 150 m, half the SOP tolerance): at TGBS_Ecosia a
+    # natural degraded candidate 166 m below the focal site scored 1 and failed
+    # mandatory_met. Project decision; field-check.
+    "elevation_band_m": 200.0,
     "rainfall_band_frac": 0.125,
 }
 # intactness_flag "weak" when 1 - ghm is below this, i.e. gHM >= 0.4 (the integrity break)

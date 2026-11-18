@@ -50,6 +50,15 @@ vegetation, not cropland, as the TGBS 0% anchor.
   `s2_ndmi_base` and `s2_bsi_state`.
 
 ### Changed
+- **SOP selection matrix, elevation score 2 band widened from focal ±150 m to ±200 m**
+  (`SOP_MATRIX_THRESHOLDS["elevation_band_m"]`, or the focal p5–p95 range if wider).
+  The Stage 1 gate and score 1 stay at `EnvelopeTolerances.elevation_tol_m` (±300 m).
+  The project decided this (2026-11-18): at TGBS_Ecosia a natural degraded candidate
+  166 m below the focal site scored 1 and failed `mandatory_met`. Eligibility is
+  unchanged. `mandatory_met` and `elevation_score` can change for cells 150–200 m from
+  the focal elevation. That can change the reference spanning selection, which
+  prefers candidates meeting all mandatory criteria, but not degraded shortlist
+  order. Not part of the ScreeningTables provenance key, so cached tables are reused.
 - `overgrazing` and `rangeland` now default to the cropland gate, the natural-cover
   coarse screen and the natural-cover weights. Pass `max_dw_crop=None` and
   `weights=` to restore the 0.11.0 behaviour. The coarse-screen ordering cannot be
