@@ -22,19 +22,24 @@ import shapely
 from eetools.constants import (
     ANCHOR_INDICES,
     ANCHOR_REVIEW_PCT,
+    ANCHOR_SENSORS,
     CHIRPS_PENTAD_COLLECTION,
+    CLOUD_FILTER,
     COARSE_LANDUSE_MIN_AREA_FRACTION,
     COARSE_MIN_SHARE_FLOOR,
     COAST_PREDICTOR,
     COASTAL_MIN_LIMIT_M,
     COASTAL_TRIGGER_M,
     CONVERSION_DEGRADATION_TYPES,
+    CS_PLUS_BAND,
+    CS_PLUS_THRESH,
     DEFAULT_EXCLUDE_BUFFER_M,
     DEFAULT_FOCAL_SAMPLES,
     DEFAULT_REFERENCE_BUFFER_M,
     DEGRADATION_TYPE_PROFILES,
     DEGRADED_MAX_BUILT_FRAC,
     DEGRADED_MAX_DW_BUILT,
+    DEGRADED_MAX_DW_CROP,
     DW_COARSE_BANDS,
     DW_COARSE_SCALE_M,
     DW_COLLECTION,
@@ -53,11 +58,16 @@ from eetools.constants import (
     MODIS_NBAR_COLLECTION,
     MODIS_NBAR_SCALE_M,
     MODIS_VI_COLLECTION,
+    NATURAL_COVER_DEGRADATION_TYPES,
     PA_EXCLUDE_MIN_SHARE,
     PATHWAY_GATE_PCT,
     PNV_BIOME_IMAGE,
     RECENT_LOSS_YEARS,
     RESOLVE_ECOREGIONS_COLLECTION,
+    S2_ANCHOR_FIRST_YEAR,
+    S2_ANCHOR_SCALE_M,
+    S2_CLOUD_SCORE_PLUS_COLLECTION,
+    S2_SR_COLLECTION,
     SATELLITE_EMBEDDING_COLLECTION,
     STATE_WINDOW_YEARS,
     TERRACLIMATE_COLLECTION,
@@ -105,6 +115,7 @@ from eetools.site_selection.scoring import (
     MatrixContext,
     anchor_check,
     anchor_constraint,
+    anchor_view,
     baseline_window,
     build_layer_register,
     build_selection_matrix,
@@ -120,6 +131,7 @@ from eetools.site_selection.scoring import (
     intactness_score,
     landuse_history,
     mandatory_criteria,
+    natural_cover_refine_score,
     near_references,
     pathway_example,
     pathway_gate,
@@ -307,6 +319,9 @@ def identify_degraded_sites(
     reference_result: SiteSelectionResult | None = None,
     max_built_frac: float = DEGRADED_MAX_BUILT_FRAC,
     max_dw_built: float | None = DEGRADED_MAX_DW_BUILT,
+    max_dw_crop: float | Literal["auto"] | None = "auto",
+    anchor_sensor: Literal["auto", "modis", "s2"] = "auto",
+    anchor_months: tuple[int, int] | None = None,
     exclude_protected: bool = False,
     exclude_fc: ee.FeatureCollection | None = None,
     asset_overrides: dict[str, str] | None = None,
@@ -331,14 +346,24 @@ def identify_degraded_sites(
        end of the baseline window, or is persistently modified (deforestation also
        passes on Hansen loss >= 10%). Converted cells are then disjoint from the
        reference land-use gate by construction. For pathways inside natural cover
-       (overgrazing, rangeland) the D2 gate stays: pct(signature_sim) >=
-       ``pathway_gate_pct``, and candidates within the thinning distance of
-       ``reference_result``'s ranked sites are dropped. The signature (Satellite
+       (natural_degradation, overgrazing, rangeland) the D2 gate stays:
+       pct(signature_sim) >= ``pathway_gate_pct``, and candidates within the
+       thinning distance of ``reference_result``'s ranked sites are dropped.
+       Natural-cover runs also gate out cropland and converted land (``max_dw_crop``)
+       and refine only coarse cells that can hold a persistently natural fine cell
+       (ordered by env_sim, never by the degradation weights). The signature (Satellite
        Embedding cosine similarity in ``project_start_year - 1``, or a rule-based
        profile) is always reported and feeds the informational pathway matrix row; it
        never ranks.
     3. **Rank** on STATE (productivity and moisture deficit, unnaturalness, plus gHM
-       pressure for 'settlement' only) + TRAJECTORY (browning, NBR decline, loss).
+       pressure for 'settlement' only; natural-cover pathways replace unnaturalness
+       with bare soil, the 10 m S2 dry-window BSI) + TRAJECTORY (browning, NBR
+       decline, loss).
+
+    The anchor indices of D1/D4 come from MODIS (250/500 m) or, with
+    ``anchor_sensor='s2'``, from 10 m Sentinel-2 dry-window composites
+    (``anchor_months``; Cloud Score+ cs_cdf >= 0.60). MODIS pixels mix a small focal
+    site with its surroundings; S2 measures the site itself.
 
     Each ranked site also reports ``focal_baseline_pct_<x>`` (where the focal
     baseline falls on that site's 0-100% scale), ``anchor_check='review'`` when any
@@ -386,6 +411,20 @@ def identify_degraded_sites(
             Dynamic World filter. Ignored for 'settlement'. Default 0.05: tolerates
             scattered smallholder homesteads, while a cell up to 5% built changes
             cell-mean NDVI/NDMI little next to the anchor gaps D1 selects on.
+        max_dw_crop: Maximum Dynamic World crop-label share (most frequent label over
+            the state window) of a final cell ([L]); cells above it, and cells whose
+            land-use class is 'converted' or 'persistent_modified', are gated out
+            ('cropland' / 'converted'). 'auto' (default) means
+            ``DEGRADED_MAX_DW_CROP`` (0.05) for natural-cover pathways and None
+            (cropland kept) for conversion pathways.
+        anchor_sensor: Anchor indices for D1/D4: 'modis' (MOD13Q1 / MCD43A4 annual
+            medians), 's2' (10 m Sentinel-2 dry-window medians, the ``s2_anchor``
+            family) or 'auto' (default): 's2' for natural-cover pathways when
+            ``anchor_months`` is given, else 'modis'. Falls back to 'modis', with a
+            warning, when a window starts before ``S2_ANCHOR_FIRST_YEAR``.
+        anchor_months: (first, last) month of the S2 anchor windows, within one year,
+            e.g. (6, 9) for a June-September dry season. Required for 's2'. Part of
+            the ScreeningTables provenance key.
         exclude_protected: Drop cells at least half inside designated WDPA areas.
         exclude_fc: Optional areas to exclude.
         asset_overrides: Optional {'vecea': id, 'soilgrids_wrb': id}.
@@ -423,6 +462,9 @@ def identify_degraded_sites(
         reference_result=reference_result,
         max_built_frac=max_built_frac,
         max_dw_built=max_dw_built,
+        max_dw_crop=max_dw_crop,
+        anchor_sensor=anchor_sensor,
+        anchor_months=anchor_months,
         exclude_protected=exclude_protected,
         exclude_fc=exclude_fc,
         asset_overrides=asset_overrides,
@@ -474,6 +516,92 @@ def resolve_signature_mode(
             f"{latest_embedding_year}); use signature_mode='rules'."
         )
     return baseline, signature_mode, msg
+
+
+def resolve_degraded_options(
+    degradation_type: str,
+    *,
+    max_dw_crop: float | str | None = "auto",
+    anchor_sensor: str = "auto",
+    anchor_months: tuple[int, int] | Sequence[int] | None = None,
+    baseline_start_year: int | None = None,
+    state_start_year: int | None = None,
+) -> tuple[float | None, str, tuple[int, int] | None, list[str]]:
+    """Resolve the cropland gate and the anchor sensor of a degraded run (pure).
+
+    'auto' choices follow the pathway family (2026-11-18 spec): natural-cover
+    pathways get the cropland gate (``DEGRADED_MAX_DW_CROP``) and, when
+    ``anchor_months`` is given, the 10 m Sentinel-2 anchor; conversion pathways keep
+    cropland and the MODIS anchor. An S2 anchor whose baseline or state window starts
+    before ``S2_ANCHOR_FIRST_YEAR`` falls back to MODIS.
+
+    Args:
+        degradation_type: Degradation pathway.
+        max_dw_crop: Float in [0, 1], None (off) or 'auto'.
+        anchor_sensor: 'auto', 'modis' or 's2'.
+        anchor_months: (first, last) month within one year, or None.
+        baseline_start_year: First year of the anchor baseline window (None if none).
+        state_start_year: First year of the state window.
+
+    Returns:
+        (max_dw_crop, anchor_sensor, anchor_months or None, warnings).
+
+    Raises:
+        ValueError: For an out-of-range ``max_dw_crop``, an unknown sensor, invalid
+            months, or ``anchor_sensor='s2'`` without ``anchor_months``.
+    """
+    msgs: list[str] = []
+    natural = degradation_type in NATURAL_COVER_DEGRADATION_TYPES
+    if isinstance(max_dw_crop, str):
+        if max_dw_crop != "auto":
+            raise ValueError("max_dw_crop must be a float in [0, 1], None or 'auto'.")
+        crop: float | None = DEGRADED_MAX_DW_CROP if natural else None
+    elif max_dw_crop is None:
+        crop = None
+    else:
+        crop = float(max_dw_crop)
+        if not 0.0 <= crop <= 1.0:
+            raise ValueError("max_dw_crop must be in [0, 1], None or 'auto'.")
+    months: tuple[int, int] | None = None
+    if anchor_months is not None:
+        m = tuple(int(v) for v in anchor_months)
+        if len(m) != 2 or not 1 <= m[0] <= m[1] <= 12:
+            raise ValueError(
+                "anchor_months must be (first, last) months with 1 <= first <= last "
+                "<= 12 (windows cannot cross the year)."
+            )
+        months = (m[0], m[1])
+    if anchor_sensor == "auto":
+        sensor = "s2" if (natural and months is not None) else "modis"
+        if natural and months is None:
+            msgs.append(
+                f"degradation_type '{degradation_type}' is a natural-cover pathway but "
+                "anchor_months is not set: the D1 anchor uses MODIS, which mixes a "
+                "small focal site with its surroundings. Pass anchor_months (the dry "
+                "season) for the 10 m Sentinel-2 anchor."
+            )
+    elif anchor_sensor in ANCHOR_SENSORS:
+        sensor = anchor_sensor
+    else:
+        raise ValueError(f"anchor_sensor must be 'auto' or one of {ANCHOR_SENSORS}.")
+    if sensor == "s2":
+        if months is None:
+            raise ValueError("anchor_sensor='s2' needs anchor_months, e.g. (6, 9).")
+        early = [
+            y
+            for y in (baseline_start_year, state_start_year)
+            if y is not None and y < S2_ANCHOR_FIRST_YEAR
+        ]
+        if early:
+            msgs.append(
+                f"S2 anchor window starts in {min(early)}, before "
+                f"{S2_ANCHOR_FIRST_YEAR} (global Sentinel-2 L2A): the D1 anchor uses "
+                "MODIS instead."
+            )
+            sensor = "modis"
+    if sensor == "modis":
+        months = None
+    return crop, sensor, months, msgs
 
 
 def _majority(hist_json: Any) -> tuple[int | None, float]:
@@ -630,6 +758,30 @@ def _run(
                 f"{kw['project_start_year']}: the anchor constraint uses the current "
                 "window only (D_now <= F_now)."
             )
+        crop, sensor, months, msgs = resolve_degraded_options(
+            degradation_type,
+            max_dw_crop=kw.get("max_dw_crop", "auto"),
+            anchor_sensor=kw.get("anchor_sensor", "auto"),
+            anchor_months=kw.get("anchor_months"),
+            baseline_start_year=base_win[0] if base_win else None,
+            state_start_year=state_start,
+        )
+        warn.extend(msgs)
+        kw["max_dw_crop"], kw["anchor_sensor"], kw["anchor_months"] = (
+            crop,
+            sensor,
+            months,
+        )
+        if (
+            degradation_type in NATURAL_COVER_DEGRADATION_TYPES
+            and kw.get("reference_result") is None
+        ):
+            warn.append(
+                f"degradation_type '{degradation_type}' is a natural-cover pathway and "
+                "no reference_result was given: land-use classes cannot separate "
+                "degraded natural cover from references, and the near-reference drop "
+                "needs the ranked references. Pass reference_result=<reference run>."
+            )
 
     asset_ids = check_required_assets(kw.get("asset_overrides"))
 
@@ -740,9 +892,14 @@ def _run(
         hand_riparian=sets["hand_riparian"],
         baseline_start_year=base_win[0] if base_win else None,
         baseline_end_year=base_win[1] if base_win else None,
+        anchor_months=kw.get("anchor_months") if site_type == "degraded" else None,
+    )
+    s2_anchor = site_type == "degraded" and kw.get("anchor_sensor") == "s2"
+    natural_cover = (
+        site_type == "degraded" and degradation_type in NATURAL_COVER_DEGRADATION_TYPES
     )
     if site_type == "degraded":
-        kw["_focal_anchor"] = _focal_anchor(ctx, base_win, warn)
+        kw["_focal_anchor"] = _focal_anchor(ctx, base_win, warn, s2=s2_anchor)
         kw["_reference_state"] = _reference_state(kw.get("reference_result"))
 
     key = {
@@ -776,7 +933,23 @@ def _run(
         # built before 0.10.0 (no coarse DW family) are completed, not rejected.
         "dw_coarse_scale_m": (
             DW_COARSE_SCALE_M
-            if site_type == "reference" and end_year > DW_LANDUSE_FIRST_YEAR
+            if (site_type == "reference" or natural_cover)
+            and end_year > DW_LANDUSE_FIRST_YEAR
+            else None
+        ),
+        # The 10 m Sentinel-2 anchor family (degraded runs with anchor_sensor='s2').
+        # Completable: runs without it leave None and their tables are completed.
+        "s2_anchor": (
+            {
+                "collection": S2_SR_COLLECTION,
+                "cloud_mask": S2_CLOUD_SCORE_PLUS_COLLECTION,
+                "cs_band": CS_PLUS_BAND,
+                "cs_threshold": CS_PLUS_THRESH,
+                "cloud_filter": CLOUD_FILTER,
+                "months": list(kw["anchor_months"]),
+                "scale_m": S2_ANCHOR_SCALE_M,
+            }
+            if s2_anchor
             else None
         ),
     }
@@ -832,7 +1005,8 @@ def _run(
         if site_type == "degraded"
         else set()
     )
-    need_rue = "rue" in extra_layers
+    # rue_trend is read only by the rules-mode signature (as viirs and canopy).
+    need_rue = "rue" in extra_layers and signature_mode == "rules"
     need_viirs = "viirs" in extra_layers and signature_mode == "rules"
     need_canopy = is_forest or ("canopy" in extra_layers and signature_mode == "rules")
     rung_log: list[dict[str, Any]] = []
@@ -1104,10 +1278,18 @@ def _unit_keys(row: pd.Series, sets: dict[str, Any], group_relaxed: bool) -> set
 
 
 def _focal_anchor(
-    ctx: P.RunContext, base_win: tuple[int, int] | None, warn: list[str]
+    ctx: P.RunContext,
+    base_win: tuple[int, int] | None,
+    warn: list[str],
+    *,
+    s2: bool = False,
 ) -> dict[str, float]:
-    """Focal NDVI/NDMI in the baseline and current windows (anchor constraint, D1)."""
-    vals = P.reduce_focal_anchor_state(ctx)
+    """Focal NDVI/NDMI in the baseline and current windows (anchor constraint, D1).
+
+    ``s2=True`` reads the 10 m Sentinel-2 anchor (also returns ``bsi_base`` /
+    ``bsi_state``); otherwise the MODIS values.
+    """
+    vals = P.reduce_focal_s2_anchor(ctx) if s2 else P.reduce_focal_anchor_state(ctx)
     for x in ANCHOR_INDICES:
         missing = [
             w
@@ -1134,6 +1316,59 @@ def _reference_state(result: SiteSelectionResult | None) -> dict[str, float]:
         if col in result.ranked.columns and len(result.ranked):
             out[x] = float(pd.to_numeric(result.ranked[col], errors="coerce").mean())
     return out
+
+
+def _reference_state_s2(
+    result: SiteSelectionResult | None,
+    store: P.TableStore,
+    ctx: P.RunContext,
+    level: str,
+    focal: dict[str, float],
+) -> tuple[dict[str, float], list[str]]:
+    """Ranked references' mean S2 anchor state, and those below the focal baseline.
+
+    Reduces the ``s2_anchor`` family on the reference run's ranked cells (memoised in
+    the shared tables; the ranked cells sit on the same grid). A reference is "below
+    the focal baseline" when its S2 baseline NDVI or NDMI is lower than the focal
+    site's (report only, 2026-11-18 spec F5).
+
+    Args:
+        result: Reference SiteSelectionResult, or None.
+        store: TableStore.
+        ctx: RunContext with anchor_months set.
+        level: Grid level of the ranked cells ('fine' or 'coarse').
+        focal: Focal S2 anchor values (``<x>_base`` / ``<x>_state``).
+
+    Returns:
+        ({index: mean S2 state of the ranked references}, [cell_id below focal]).
+    """
+    if result is None or not len(result.ranked):
+        return {}, []
+    if result.site_type != "reference":
+        raise ValueError("reference_result must come from identify_reference_sites.")
+    cells = pd.DataFrame(result.ranked[["ix", "iy", "size"]])
+    P.ensure_family(
+        store,
+        level,
+        P.families(ctx)["s2_anchor"],
+        cells,
+        P.family_image_fn("s2_anchor", ctx),
+        ctx,
+    )
+    tab = store.table(level).reindex(cells.index)
+    view = anchor_view(tab, "s2")
+    state = {
+        x: float(pd.to_numeric(view[f"{x}_state"], errors="coerce").mean())
+        for x in ANCHOR_INDICES
+    }
+    below = pd.Series(False, index=view.index)
+    for x in ANCHOR_INDICES:
+        f = focal.get(f"{x}_base", np.nan)
+        if pd.notna(f):
+            below |= (pd.to_numeric(view[f"{x}_base"], errors="coerce") < f).fillna(
+                False
+            )
+    return {k: v for k, v in state.items() if pd.notna(v)}, list(view.index[below])
 
 
 def _dataset_ids() -> dict[str, str]:
@@ -1245,12 +1480,17 @@ def _score_rung(  # noqa: C901, PLR0913
 
     # ---- Stage 3a: refine best coarse cells ----------------------------------
     dw_ok = ctx.end_year > DW_LANDUSE_FIRST_YEAR
+    natural_cover = (
+        site_type == "degraded" and degradation_type in NATURAL_COVER_DEGRADATION_TYPES
+    )
     coarse_screen: dict[str, Any] = {"rule": "screen_score (condition weights)"}
     refine_col = "screen_score"
-    if site_type == "reference" and dw_ok and len(cpool):
+    if (site_type == "reference" or natural_cover) and dw_ok and len(cpool):
         # Absolute coarse screen (2026-11-14): gate and order on Dynamic World
         # persistence at 120 m, never on the intactness weights, so re-weighting does
         # not move the search area. The exact 30 m gate still runs on final cells.
+        # Natural-cover degraded runs (2026-11-18) use the same gate but order by
+        # env_sim only: ordering by natural share favours intact reference country.
         ensure("coarse", "dw_coarse", grid.loc[cpool.index])
         dwc = store.coarse.loc[cpool.index, list(DW_COARSE_BANDS)]
         cpool = cpool.drop(columns=list(DW_COARSE_BANDS), errors="ignore").join(dwc)
@@ -1263,13 +1503,19 @@ def _score_rung(  # noqa: C901, PLR0913
             min_area_fraction=COARSE_LANDUSE_MIN_AREA_FRACTION,
             gate=k > 1,
         )
+        if natural_cover:
+            cs["refine_score"] = natural_cover_refine_score(cs, cpool["env_sim"])
         for c in cs.columns:
             cpool[c] = cs[c]
         refine_col = "refine_score"
         coarse_screen = {
             "rule": (
-                f"Dynamic World natural ({tol.natural_persist_years}) share at "
-                f"{DW_COARSE_SCALE_M} m x (0.5 + 0.5 env_sim)"
+                (
+                    "0.5 + 0.5 env_sim (natural-cover degraded pathway)"
+                    if natural_cover
+                    else f"Dynamic World natural ({tol.natural_persist_years}) "
+                    f"share at {DW_COARSE_SCALE_M} m x (0.5 + 0.5 env_sim)"
+                )
                 + (
                     f"; refined only with >= {COARSE_LANDUSE_MIN_AREA_FRACTION} x "
                     f"{fine_area_ha:g} ha x {tol.min_natural_persist} persistently "
@@ -1336,6 +1582,9 @@ def _score_rung(  # noqa: C901, PLR0913
         # Anchor constraint (D1): baseline-window state on the final cells only.
         ensure(level, "ndvi_base", fcells)
         ensure(level, "nbar_base", fcells)
+    if site_type == "degraded" and kw.get("anchor_sensor") == "s2":
+        # 10 m Sentinel-2 anchor (D1/D4) and the natural-cover bare term.
+        ensure(level, "s2_anchor", fcells)
     ensure("labels", "labels", fcells)
     if need_rue:
         ensure(level, "rue", fcells)
@@ -1422,6 +1671,11 @@ def _score_rung(  # noqa: C901, PLR0913
             keep_built=degradation_type == "settlement",
             exclude_protected=bool(kw.get("exclude_protected")),
             max_dw_built=float(max_dw) if (dw_ok and max_dw is not None) else None,
+            max_dw_crop=(
+                float(kw["max_dw_crop"])
+                if (dw_ok and kw.get("max_dw_crop") is not None)
+                else None
+            ),
         )
         reasons = reasons.where(reasons.notna(), excl)
     if dw_ok and len(pool):
@@ -1485,6 +1739,7 @@ def _score_rung(  # noqa: C901, PLR0913
             reasons=reasons,
             dw_ok=dw_ok,
             min_sep=min_sep,
+            level=level,
         )
     reasons[~reasons.index.isin(pool.index) & reasons.isna()] = "unscored"
     pool_all = pool_all.assign(gate_reason=reasons)
@@ -1791,6 +2046,7 @@ def _rank_degraded(
     reasons: pd.Series,
     dw_ok: bool,
     min_sep: float,
+    level: str = "fine",
 ) -> pd.DataFrame:
     """Constrain -> pathway test -> rank (spec §5.3, amended §0a and 2026-11-09).
 
@@ -1805,9 +2061,10 @@ def _rank_degraded(
     """
     focal: dict[str, float] = kw.get("_focal_anchor") or {}
     n_candidates = int(len(pool))
+    sensor = str(kw.get("anchor_sensor") or "modis")
 
     # ---- D1: anchor constraint ------------------------------------------------
-    anchor = anchor_constraint(pool, focal)
+    anchor = anchor_constraint(anchor_view(pool, sensor), focal)
     for c in anchor.columns:
         pool[c] = anchor[c]
     survivors = pool.loc[pool["below_baseline"]]
@@ -1925,8 +2182,24 @@ def _rank_degraded(
         "ndvi": info.get("ndvi_performance_denominator", np.nan),
         "ndmi": info.get("ndmi_pool_p90", np.nan),
     }
+    ref_below: list[str] = []
+    if sensor == "s2":
+        # D4's 100% value on the same sensor: the ranked references' S2 state (no
+        # pool fallback: the pool p90 is MODIS). F5: references below the focal
+        # baseline are reported, never gated.
+        ref_state, ref_below = _reference_state_s2(
+            kw.get("reference_result"), store, ctx, level, focal
+        )
+        pool_ref = {}
+        if ref_below:
+            rw.append(
+                "Ranked reference(s) below the focal baseline on the 10 m S2 anchor "
+                f"(NDVI or NDMI): {', '.join(ref_below)}. A reference below the focal "
+                "site breaks the 0-100% rescale; review them (they may be degraded "
+                "natural cover rather than references)."
+            )
     reference = {x: ref_state.get(x, pool_ref.get(x, np.nan)) for x in ANCHOR_INDICES}
-    pcts = focal_baseline_pct(pool, focal, reference)
+    pcts = focal_baseline_pct(anchor_view(pool, sensor), focal, reference)
     for c in pcts.columns:
         pool[c] = pcts[c]
     pool["anchor_check"] = anchor_check(pcts, float(kw["anchor_review_pct"]))
@@ -1955,8 +2228,15 @@ def _rank_degraded(
         "reference_source": (
             "reference_result"
             if ref_state
-            else "pool p90 (ndvi_performance denominator)"
+            else (
+                "none (S2 anchor needs reference_result)"
+                if sensor == "s2"
+                else "pool p90 (ndvi_performance denominator)"
+            )
         ),
+        "sensor": sensor,
+        "months": list(kw["anchor_months"]) if kw.get("anchor_months") else None,
+        "references_below_focal": ref_below,
     }
     return pool
 
@@ -2277,7 +2557,14 @@ def _assemble(  # noqa: C901
                 "reference_result_supplied": kw.get("reference_result") is not None,
                 "max_built_frac": kw.get("max_built_frac"),
                 "max_dw_built": kw.get("max_dw_built"),
+                "max_dw_crop": kw.get("max_dw_crop"),
+                "anchor_sensor": kw.get("anchor_sensor"),
+                "anchor_months": (
+                    list(kw["anchor_months"]) if kw.get("anchor_months") else None
+                ),
                 "conversion_pathway": degradation_type in CONVERSION_DEGRADATION_TYPES,
+                "natural_cover_pathway": degradation_type
+                in NATURAL_COVER_DEGRADATION_TYPES,
             }
         )
     provenance = _provenance(ctx)
@@ -2410,15 +2697,48 @@ def _assemble(  # noqa: C901
         extra.append(_reg("ScreeningTables reused", f"created {store.created}", "H"))
     if site_type == "degraded":
         anc = info.get("anchor", {})
+        s2_used = anc.get("sensor") == "s2"
         extra.append(
             _reg(
                 "anchor constraint (D1): NDVI + NDMI, D_base <= F_base and "
                 "D_now <= min(F_base, F_now)",
-                f"baseline window {anc.get('baseline_window')} (MODIS proxy; repeat "
-                "on the survey sensor)",
+                (
+                    f"baseline window {anc.get('baseline_window')}, months "
+                    f"{anc.get('months')} (Sentinel-2 SR 10 m, Cloud Score+ "
+                    f"{CS_PLUS_BAND} >= {CS_PLUS_THRESH}, window medians)"
+                    if s2_used
+                    else f"baseline window {anc.get('baseline_window')} (MODIS "
+                    "proxy; repeat on the survey sensor)"
+                ),
                 "M",
             )
         )
+        if s2_used:
+            extra.append(
+                _reg(
+                    "references below the focal baseline (S2 anchor, report only): "
+                    f"{anc.get('references_below_focal') or 'none'}",
+                    "a reference below the focal site breaks the 0-100% rescale",
+                    "M",
+                )
+            )
+        if kw.get("max_dw_crop") is not None:
+            extra.append(
+                _reg(
+                    f"cropland filter: Dynamic World crop-label share <= "
+                    f"{kw.get('max_dw_crop')}, and landuse_class not converted / "
+                    "persistent_modified (natural-cover pathway, final cells, before "
+                    "thinning)",
+                    (
+                        "most frequent label over the state window; smallholder "
+                        "cropland that both land-cover maps call natural is not "
+                        "caught (basemap check stays compulsory)"
+                        if info.get("landuse_available")
+                        else "not applied: no Dynamic World"
+                    ),
+                    "L",
+                )
+            )
         if anc.get("pathway_test") == "landuse":
             extra.append(
                 _reg(
@@ -2772,6 +3092,9 @@ SHORTLIST_COLUMNS: dict[str, tuple[str, ...]] = {
         "focal_baseline_pct_ndvi",
         "focal_baseline_pct_ndmi",
         "anchor_check",
+        "s2_ndvi_base",
+        "s2_ndmi_base",
+        "s2_bsi_state",
         "zero_star_likelihood",
         "landuse_class",
         "modified_by_baseline",

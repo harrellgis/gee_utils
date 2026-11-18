@@ -219,6 +219,51 @@ def test_baseline_state_and_focal_anchor(ee_session, small_aoi):
 
 
 @pytest.mark.slow
+def test_s2_anchor_bands_and_focal_reduction(ee_session, small_aoi):
+    """10 m Sentinel-2 anchor (2026-11-18 spec): bands, focal values, masking."""
+    from eetools.constants import S2_ANCHOR_BANDS
+    from eetools.site_selection.predictors import (
+        RunContext,
+        build_s2_anchor,
+        reduce_focal_s2_anchor,
+    )
+
+    focal = ee_session.Geometry.Rectangle([39.22, -4.28, 39.225, -4.275])
+    ctx = RunContext(
+        focal_ee=focal,
+        exclusion_ee=focal.buffer(500),
+        search_ee=small_aoi,
+        crs=CRS,
+        end_year=2024,
+        trend_start_year=2010,
+        state_start_year=2022,
+        asset_ids={},
+        baseline_start_year=2019,
+        baseline_end_year=2021,
+        anchor_months=(1, 3),
+    )
+    assert build_s2_anchor(ctx).bandNames().getInfo() == list(S2_ANCHOR_BANDS)
+    vals = reduce_focal_s2_anchor(ctx)
+    assert set(vals) == {b[3:] for b in S2_ANCHOR_BANDS}
+    for k, v in vals.items():
+        assert -1.0 <= v <= 1.0, k
+    # Candidate image is masked inside the focal site + buffer.
+    inside = (
+        build_s2_anchor(ctx)
+        .select("s2_ndvi_state")
+        .reduceRegion(ee_session.Reducer.count(), focal, 10, crs=CRS)
+        .getInfo()
+    )
+    assert inside["s2_ndvi_state"] == 0
+    no_base = reduce_focal_s2_anchor(
+        RunContext(**{**ctx.__dict__, "baseline_start_year": None})
+    )
+    assert pd.isna(no_base["ndvi_base"]) and pd.notna(no_base["ndvi_state"])
+    with pytest.raises(ValueError):
+        build_s2_anchor(RunContext(**{**ctx.__dict__, "anchor_months": None}))
+
+
+@pytest.mark.slow
 def test_dw_landuse_bands_ranges_and_disjoint_shares(ee_session, small_aoi):
     """Land-use history family: band set, share ranges, converted + persistent <= 1."""
     from eetools.site_selection.predictors import (

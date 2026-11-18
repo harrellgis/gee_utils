@@ -24,7 +24,10 @@ import shapely.geometry
 from eetools.constants import (
     CANOPY_HEIGHT_REDUCE_SCALE_M,
     CHIRPS_NATIVE_SCALE_M,
+    CLOUD_FILTER,
     CORE_FRAC_RADIUS_M,
+    CS_PLUS_BAND,
+    CS_PLUS_THRESH,
     DW_BUILT_LABEL,
     DW_COARSE_BANDS,
     DW_COARSE_SCALE_M,
@@ -53,6 +56,8 @@ from eetools.constants import (
     PREDICTOR_NATIVE_SCALE_M,
     REDUCE_BATCH_SIZE,
     REDUCE_RESOLUTION_MAX_PIXELS,
+    S2_ANCHOR_BANDS,
+    S2_ANCHOR_SCALE_M,
     SATELLITE_EMBEDDING_BANDS,
     SATELLITE_EMBEDDING_COLLECTION,
     SITE_SELECTION_INDICATOR_SCALE_M,
@@ -91,6 +96,11 @@ from eetools.sensors.modis.preprocessing import (
 )
 from eetools.sensors.pnv.preprocessing import get_pnv_biome
 from eetools.sensors.resolve.preprocessing import get_ecoregion_image
+from eetools.sensors.sentinel.masking import (
+    add_cs_plus_mask,
+    apply_cld_shdw_mask,
+    get_s2_sr_cs_col,
+)
 from eetools.sensors.soilgrids.preprocessing import get_soilgrids_wrb
 from eetools.sensors.terraclimate.preprocessing import get_terraclimate_climatology
 from eetools.sensors.vecea.preprocessing import get_vecea_class
@@ -151,6 +161,9 @@ class RunContext:
     hand_riparian: bool = False
     baseline_start_year: int | None = None  # degraded anchor window (None: not used)
     baseline_end_year: int | None = None
+    # Months (start, end; same year) of the 10 m Sentinel-2 anchor windows (s2_anchor
+    # family); None when the run uses the MODIS anchor.
+    anchor_months: tuple[int, int] | None = None
 
     def outside_mask(self) -> ee.Image:
         """1 outside the focal site + buffer (and user exclusions), 0 inside."""
@@ -468,6 +481,135 @@ def reduce_focal_anchor_state(ctx: RunContext) -> dict[str, float]:
     )
     keys = ("ndvi_state", "ndmi_state", "ndvi_base", "ndmi_base")
     return {k: float("nan") if vals.get(k) is None else float(vals[k]) for k in keys}
+
+
+def _s2_window_composite(
+    region: ee.Geometry, start_year: int, end_year: int, months: tuple[int, int]
+) -> ee.Image:
+    """Median Cloud Score+ masked S2 SR composite (B2, B4, B8, B11) of one window.
+
+    Every clear scene in ``months`` of ``start_year``..``end_year`` (scenes with
+    CLOUDY_PIXEL_PERCENTAGE <= CLOUD_FILTER; pixels with cs_cdf >= CS_PLUS_THRESH),
+    reduced to one per-pixel median.
+
+    Args:
+        region: Region to filter scenes on.
+        start_year: First year (inclusive).
+        end_year: Last year (inclusive).
+        months: (first, last) month, inclusive, within one year.
+
+    Returns:
+        ee.Image with bands B2, B4, B8, B11 (raw SR digital numbers).
+    """
+    col = get_s2_sr_cs_col(
+        region,
+        ee.Date.fromYMD(int(start_year), 1, 1),
+        ee.Date.fromYMD(int(end_year) + 1, 1, 1),
+        cloud_filter=CLOUD_FILTER,
+    ).filter(ee.Filter.calendarRange(int(months[0]), int(months[1]), "month"))
+    col = col.map(
+        lambda img: apply_cld_shdw_mask(
+            add_cs_plus_mask(img, band=CS_PLUS_BAND, threshold=CS_PLUS_THRESH)
+        )
+    )
+    return col.select(["B2", "B4", "B8", "B11"]).median()
+
+
+def _s2_anchor_indices(img: ee.Image, suffix: str) -> ee.Image:
+    """NDVI, NDMI and BSI of a composite, named ``s2_<index>_<suffix>``."""
+    bands = {
+        "blue": img.select("B2"),
+        "red": img.select("B4"),
+        "nir": img.select("B8"),
+        "swir1": img.select("B11"),
+    }
+    ndvi = img.expression("(nir - red) / (nir + red)", bands)
+    ndmi = img.expression("(nir - swir1) / (nir + swir1)", bands)
+    bsi = img.expression(
+        "((swir1 + red) - (nir + blue)) / ((swir1 + red) + (nir + blue))", bands
+    )
+    return ee.Image.cat(
+        [
+            ndvi.rename(f"s2_ndvi_{suffix}"),
+            ndmi.rename(f"s2_ndmi_{suffix}"),
+            bsi.rename(f"s2_bsi_{suffix}"),
+        ]
+    )
+
+
+def build_s2_anchor(ctx: RunContext, masked: bool = True) -> ee.Image:
+    """10 m Sentinel-2 anchor state: dry-window NDVI, NDMI and BSI (2026-11-18 spec).
+
+    One median composite per window over ``ctx.anchor_months``: the baseline window
+    (``baseline_start_year``..``baseline_end_year``) and the state window
+    (``state_start_year``..``end_year``). It feeds the D1 anchor constraint and D4
+    when ``anchor_sensor='s2'``, and the natural-cover ``bare`` ranking term
+    (``s2_bsi_state``). Without a baseline window the ``*_base`` bands are fully
+    masked (NaN after reduction).
+
+    Args:
+        ctx: RunContext with ``anchor_months`` set.
+        masked: Mask out the focal site + buffer (candidate reductions).
+
+    Returns:
+        ee.Image with the S2_ANCHOR_BANDS bands.
+
+    Raises:
+        ValueError: If ``ctx.anchor_months`` is unset.
+    """
+    if ctx.anchor_months is None:
+        raise ValueError("RunContext has no anchor_months (S2 anchor not configured).")
+    months = ctx.anchor_months
+    state = _s2_anchor_indices(
+        _s2_window_composite(ctx.search_ee, ctx.state_start_year, ctx.end_year, months),
+        "state",
+    )
+    if ctx.baseline_start_year is not None and ctx.baseline_end_year is not None:
+        base = _s2_anchor_indices(
+            _s2_window_composite(
+                ctx.search_ee, ctx.baseline_start_year, ctx.baseline_end_year, months
+            ),
+            "base",
+        )
+    else:
+        base = (
+            ee.Image.constant([0, 0, 0])
+            .rename(["s2_ndvi_base", "s2_ndmi_base", "s2_bsi_base"])
+            .updateMask(0)
+        )
+    img = ee.Image.cat([base, state]).select(list(S2_ANCHOR_BANDS)).toFloat()
+    return img.updateMask(ctx.outside_mask()) if masked else img
+
+
+def reduce_focal_s2_anchor(ctx: RunContext) -> dict[str, float]:
+    """Focal-site means of the S2 anchor bands (unmasked, at 10 m; one round trip).
+
+    Args:
+        ctx: RunContext with ``anchor_months`` set.
+
+    Returns:
+        {'ndvi_base', 'ndmi_base', 'bsi_base', 'ndvi_state', 'ndmi_state',
+        'bsi_state'} -> float (NaN where unavailable), i.e. S2_ANCHOR_BANDS without
+        the ``s2_`` prefix, so the dict plugs into anchor_constraint directly.
+    """
+    vals = cast(
+        dict,
+        build_s2_anchor(ctx, masked=False)
+        .reduceRegion(
+            ee.Reducer.mean(),
+            ctx.focal_ee,
+            scale=S2_ANCHOR_SCALE_M,
+            crs=ctx.crs,
+            tileScale=ctx.tile_scale,
+            maxPixels=int(1e10),
+        )
+        .getInfo()
+        or {},
+    )
+    return {
+        b[len("s2_") :]: float("nan") if vals.get(b) is None else float(vals[b])
+        for b in S2_ANCHOR_BANDS
+    }
 
 
 def build_rue_trend(ctx: RunContext) -> ee.Image:
@@ -1232,6 +1374,11 @@ def families(ctx: RunContext) -> dict[str, Family]:
         "nbar_base": Family(
             "nbar_base", ("ndmi_base",), None, MODIS_NBAR_SCALE_M, "mean"
         ),
+        # 10 m Sentinel-2 anchor (2026-11-18 spec), final cells of degraded runs with
+        # anchor_sensor='s2' (and the ranked references, for D4).
+        "s2_anchor": Family(
+            "s2_anchor", tuple(S2_ANCHOR_BANDS), None, S2_ANCHOR_SCALE_M, "mean"
+        ),
         "rue": Family("rue", ("rue_trend",), None, MODIS_VI_SCALE_M, "mean"),
         "viirs": Family("viirs", ("viirs",), None, VIIRS_REDUCE_SCALE_M, "mean"),
         "canopy": Family(
@@ -1266,6 +1413,7 @@ def family_image_fn(name: str, ctx: RunContext) -> Any:
         "ndvi_base": lambda: build_baseline_state(ctx, "ndvi"),
         "nbar_base": lambda: build_baseline_state(ctx, "ndmi"),
         "fraction": lambda: build_fraction_image(ctx),
+        "s2_anchor": lambda: build_s2_anchor(ctx),
         "rue": lambda: build_rue_trend(ctx),
         "viirs": lambda: build_viirs(ctx),
         "canopy": lambda: build_canopy(ctx),
