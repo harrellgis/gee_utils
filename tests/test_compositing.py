@@ -369,3 +369,89 @@ def test_period_and_seasonal_composites_clear_count(ee_session, masked_triplet):
         season_name="wet",
     )
     assert ee_session.Image(default.first()).bandNames().getInfo() == ["b"]
+
+
+# --------------------------------------------------------------------------- #
+# build_period_stack
+# --------------------------------------------------------------------------- #
+def test_period_stack_band_names():
+    from eetools.compositing import period_stack_band_names
+
+    assert period_stack_band_names(["a", "b"], ["p1", "p2"]) == [
+        "a_p1",
+        "b_p1",
+        "a_p2",
+        "b_p2",
+    ]
+    assert period_stack_band_names(["a"], ["p1"], add_clear_count=True) == [
+        "a_p1",
+        "clear_count_p1",
+    ]
+    assert period_stack_band_names(["a"], ["x"], band_name="{label}|{band}") == ["x|a"]
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"bands": []}, "bands"),
+        ({"periods": []}, "periods"),
+        ({"periods": [("p", "2021-01-01", "2022-01-01")] * 2}, "unique"),
+        ({"band_name": "{band}"}, "band_name"),
+        ({"composite_stat": "max"}, "composite_stat"),
+    ],
+)
+def test_build_period_stack_validates_before_ee(kwargs, match):
+    from eetools.compositing import build_period_stack
+
+    args = {
+        "collection": None,
+        "bands": ["b"],
+        "periods": [("p", "2021-01-01", "2022-01-01")],
+        **kwargs,
+    }
+    with pytest.raises(ValueError, match=match):
+        build_period_stack(**args)
+
+
+@pytest.mark.ee
+def test_build_period_stack_keeps_empty_periods(ee_session, masked_triplet):
+    from eetools.compositing import build_period_stack
+
+    periods = [
+        ("apr", "2021-04-01", "2021-05-01"),
+        ("none", "2022-01-01", "2022-02-01"),
+    ]
+    stack = build_period_stack(masked_triplet, ["b"], periods, add_clear_count=True)
+    assert stack.bandNames().getInfo() == [
+        "b_apr",
+        "clear_count_apr",
+        "b_none",
+        "clear_count_none",
+    ]
+    assert _value_at(ee_session, stack, "b_apr", 0.5) == pytest.approx(0.4)
+    assert _value_at(ee_session, stack, "b_apr", -0.5) == pytest.approx(0.5)
+    assert _value_at(ee_session, stack, "clear_count_apr", 0.5) == 3
+    assert _value_at(ee_session, stack, "clear_count_apr", -0.5) == 2
+    assert _value_at(ee_session, stack, "b_none", 0.5) is None  # masked
+    assert _value_at(ee_session, stack, "clear_count_none", 0.5) == 0
+    types = stack.bandTypes().getInfo()
+    assert types["clear_count_none"]["precision"] == "int"
+
+
+@pytest.mark.ee
+def test_build_period_stack_merges_typed_range_bands(ee_session):
+    """Index bands are typed Float<-1, 1>; without the cast EE refuses the merge."""
+    from eetools.compositing import build_period_stack
+
+    ee = ee_session
+    images = [
+        ee.Image.constant([0.5, 0.1])
+        .rename(["x", "y"])
+        .normalizedDifference(["x", "y"])  # Float<-1, 1>, value 0.6667
+        .rename("nd")
+        .set("system:time_start", ee.Date("2021-06-01").millis())
+    ]
+    stack = build_period_stack(
+        ee.ImageCollection(images), ["nd"], [("jun", "2021-06-01", "2021-07-01")]
+    )
+    assert _value_at(ee, stack, "nd_jun", 0.5) == pytest.approx(2 / 3, rel=1e-5)

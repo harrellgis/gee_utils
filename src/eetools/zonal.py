@@ -268,6 +268,7 @@ def image_collection_to_region_stats_fc(
     reducers: ee.Reducer | None = None,
     image_properties: list[str] | None = None,
     tile_scale: int = 4,
+    crs: str | None = None,
 ) -> ee.FeatureCollection:
     """Reduce each image in a collection over polygon regions and return a flat
     FeatureCollection of per-region statistics.
@@ -280,6 +281,7 @@ def image_collection_to_region_stats_fc(
         reducers: ee.Reducer to apply; defaults to mean combined with stdDev and minMax.
         image_properties: List of image properties to copy onto each output feature; when None (default), all scalar image properties are copied via image.toDictionary().
         tile_scale: EE tileScale parameter to avoid memory limits (default 4).
+        crs: Optional reduction CRS, e.g. a project UTM zone so ``scale`` pixels sit on its grid (default None: EE picks the image's, which for composites is WGS84).
 
     Returns:
         ee.FeatureCollection of region-level statistics, one feature per region per image, with image properties attached.
@@ -302,6 +304,7 @@ def image_collection_to_region_stats_fc(
             collection=regions_fc,
             reducer=reducers,
             scale=scale,
+            crs=crs,
             tileScale=tile_scale,
         )
         return fc.map(lambda f: ee.Feature(f).setMulti(props))
