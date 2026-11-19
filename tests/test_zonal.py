@@ -449,3 +449,19 @@ def test_scene_site_rows_live_fractions(ee_session):
     assert a2["ndvi"] == pytest.approx(0.6)
     assert b2["footprint_frac"] == pytest.approx(1.0, abs=tol)
     assert b2["clear_frac"] == pytest.approx(1.0, abs=tol)
+
+
+@pytest.mark.ee
+def test_region_stats_fc_crs_puts_pixels_on_the_projected_grid(ee_session):
+    """A 100 m square aligned to the UTM 10 m grid holds exactly 100 pixels there."""
+    from eetools.zonal import image_collection_to_region_stats_fc
+
+    ee = ee_session
+    utm = "EPSG:32737"
+    square = ee.Geometry.Rectangle([300000, 9870000, 300100, 9870100], utm, False)
+    regions = ee.FeatureCollection([ee.Feature(square, {"site_id": "s"})])
+    col = ee.ImageCollection([ee.Image.constant(1).rename("b")])
+    fc = image_collection_to_region_stats_fc(
+        col, regions, ["b"], scale=10, reducers=ee.Reducer.count(), crs=utm
+    )
+    assert fc.first().get("count").getInfo() == 100

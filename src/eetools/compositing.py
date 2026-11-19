@@ -1,3 +1,6 @@
+from collections.abc import Sequence
+from typing import Any
+
 import ee
 
 from eetools.constants import CLEAR_COUNT_BAND
@@ -142,6 +145,109 @@ def build_composite(
         composite_stat,
         add_clear_count,
     )
+
+
+PERIOD_BAND_NAME = "{band}_{label}"
+
+
+def _validate_periods(
+    bands: Sequence[str], periods: Sequence[tuple[str, Any, Any]], band_name: str
+) -> list[str]:
+    if not bands:
+        raise ValueError("bands must name at least one band.")
+    if not periods:
+        raise ValueError("periods must hold at least one (label, start, end).")
+    labels = [str(p[0]) for p in periods]
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"period labels must be unique; got {labels}")
+    if "{band}" not in band_name or "{label}" not in band_name:
+        raise ValueError("band_name must contain '{band}' and '{label}'.")
+    return labels
+
+
+def period_stack_band_names(
+    bands: Sequence[str],
+    labels: Sequence[str],
+    add_clear_count: bool = False,
+    band_name: str = PERIOD_BAND_NAME,
+) -> list[str]:
+    """The band names :func:`build_period_stack` writes, in order (client-side, no EE).
+
+    Args:
+        bands: Composite bands, in order.
+        labels: Period labels, in order.
+        add_clear_count: Whether each period also has a ``clear_count`` band.
+        band_name: Format string with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``).
+
+    Returns:
+        List of output band names: for each period, its bands (then ``clear_count``).
+    """
+    per = [*bands, CLEAR_COUNT_BAND] if add_clear_count else list(bands)
+    return [band_name.format(band=b, label=lab) for lab in labels for b in per]
+
+
+def build_period_stack(
+    collection: ee.ImageCollection,
+    bands: Sequence[str],
+    periods: Sequence[tuple[str, str | ee.Date, str | ee.Date]],
+    composite_stat: str = "median",
+    add_clear_count: bool = False,
+    band_name: str = PERIOD_BAND_NAME,
+) -> ee.Image:
+    """Composite each named period and stack the results into one multi-band image,
+    keeping every period, including empty ones.
+
+    Use this when the band list must be fixed by the arguments alone, e.g. for
+    export stacks with manifests or parameter hashes. :func:`build_period_composites`
+    and :func:`build_seasonal_composites` drop empty periods instead. Here an empty
+    period, or a pixel with no clear observation, gives masked composite bands and
+    ``clear_count`` 0.
+
+    Bands are cast to float before compositing. Index bands carry typed ranges
+    (e.g. ``Float<-1, 1>``), and Earth Engine refuses to merge them with the
+    placeholder that keeps empty periods ("Expected a homogeneous image collection").
+    The cast leaves the values unchanged.
+
+    Args:
+        collection: ee.ImageCollection to composite (e.g. a cloud-masked Sentinel-2 collection).
+        bands: Bands to composite, in output order; ``clear_count`` counts the first band's unmasked observations.
+        periods: (label, start, end) per period, end exclusive; dates as 'YYYY-MM-DD' strings or ee.Date. Labels must be unique and are written into the band names.
+        composite_stat: 'mean', 'median' (default) or 'sum'.
+        add_clear_count: Add a uint16 ``clear_count`` band per period (0 where no clear observation).
+        band_name: Format string for output band names, with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``, ``{band}_{label}``); ``clear_count`` is named the same way.
+
+    Returns:
+        ee.Image with the bands of :func:`period_stack_band_names`, period by period. Composite bands are float; ``clear_count`` bands are uint16.
+
+    Raises:
+        ValueError: If composite_stat is invalid, bands or periods are empty, period labels repeat, or band_name lacks a placeholder.
+    """
+    _validate_composite_stat(composite_stat)
+    bands = list(bands)
+    labels = _validate_periods(bands, periods, band_name)
+
+    col = ee.ImageCollection(collection).select(bands)
+    empty = ee.Image.constant([0] * len(bands)).rename(bands).toFloat()
+    empty_col = ee.ImageCollection([empty.updateMask(ee.Image(0))])
+
+    parts = []
+    for label, (_, start, end) in zip(labels, periods, strict=True):
+        sub = col.filterDate(start, end).map(lambda i: ee.Image(i).toFloat())
+        merged = sub.merge(empty_col)
+        comp = _apply_stat(merged, composite_stat)
+        if add_clear_count:
+            count = (
+                merged.select(bands[0])
+                .count()
+                .unmask(0)
+                .toUint16()
+                .rename(CLEAR_COUNT_BAND)
+            )
+            comp = comp.addBands(count)
+        names = period_stack_band_names(bands, [label], add_clear_count, band_name)
+        per = [*bands, CLEAR_COUNT_BAND] if add_clear_count else bands
+        parts.append(comp.select(per).rename(names))
+    return ee.Image.cat(parts)
 
 
 def build_period_composites(
