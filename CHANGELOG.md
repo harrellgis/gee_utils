@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-19
+
+- Site-selection condition diagnostic for any project (`plot_pool_condition`), with circular AUCs removed.
+- `build_period_stack`: fixed-band period stacks that keep empty periods, and a fix for the merge of typed index bands
+  that blocked tgbs_rs survey composites.
+- An optional `crs` on `image_collection_to_region_stats_fc`.
+
 ### Added
 - `visualization.plots.plot_pool_condition`: the site-selection condition diagnostic straight from a reference and a degraded pool (`result.pool` or the exported `<kind>_pool.gpkg`), for any project and no Earth Engine. Returns the figure and the separation table; panels are ordered by the highest AUC shown.
 - `condition_cells_from_pools`: per-cell condition table from the two pools (eligible cells only; `dw_nat_share_all` -> `dw_natural_persist` and `dw_crop_share` -> `dw_crop_recent` via `POOL_CONDITION_COLUMNS`; groups `in_ref_pool`, `in_deg_pool`, `ref_topq` (intactness top quartile) and `strict_pa` (`pa_strict_share >= 0.5`)).
