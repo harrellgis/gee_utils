@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Standard composite QA layers, first slice (vault: `feature_backlog/composite_qa_layers`):
-per-pixel observation dates on period stacks, and scene lineage in export manifests.
-Opt-in, so existing band lists and `params_hash` values are unchanged.
+## [0.14.0] - 2026-11-23
+
+- Standard composite QA layers, first slice (vault: `feature_backlog/composite_qa_layers`): per-pixel observation
+  dates on period stacks (`build_period_stack(qa_layers=("doy",))`) and scene lineage in export manifests
+  (`collection_lineage`, `export_composites_per_site(lineage=...)`).
+- Opt-in: existing band lists and `params_hash` values are unchanged.
 
 ### Added
 - `build_period_stack(qa_layers=...)`: per-pixel QA layers from `COMPOSITE_QA_LAYERS`. `"clear_count"` is the same as `add_clear_count=True`. `"doy"` adds `obs_doy_median`, `obs_doy_min` and `obs_doy_max` per period: the median, earliest and latest day of the clear observations of the first band, counted from 1 January of the period's start year (monotonic across a year end; masked where there is no clear observation). `period_stack_band_names(qa_layers=...)` gives the names client-side.
