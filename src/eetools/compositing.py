@@ -11,6 +11,7 @@ from eetools.constants import (
     LINEAGE_PROPERTIES,
     OBS_DOY_BAND,
     OBS_DOY_BANDS,
+    OBS_GAP_BAND,
 )
 
 # --------------------------------------------------------------------------- #
@@ -38,17 +39,19 @@ def _composite(
     collection: ee.ImageCollection,
     bands: list[str],
     composite_stat: str,
-    add_clear_count: bool,
+    layers: Sequence[str],
+    start: Any = None,
+    end: Any = None,
 ) -> ee.Image:
-    # `collection` is already band-selected. clear_count counts the unmasked
-    # observations of the first band per pixel (masked = cloud/shadow/invalid).
-    composite = _apply_stat(collection, composite_stat)
-    if not add_clear_count:
-        return composite
-    clear_count = (
-        collection.select(bands[0]).count().toUint16().rename(CLEAR_COUNT_BAND)
-    )
-    return composite.addBands(clear_count)
+    # `collection` is already band-selected. QA layers are computed on the first
+    # band's mask (masked = cloud/shadow/invalid); see _qa_layer_images.
+    if not layers:
+        return _apply_stat(collection, composite_stat)
+    col = _with_obs_doy(collection, bands[0], layers, start)
+    source = collection if col is collection else col.select(bands)
+    composite = _apply_stat(source, composite_stat)
+    extra = _qa_layer_images(col, bands, layers, start, end, zero_count=False)
+    return composite.addBands(extra[0] if len(extra) == 1 else ee.Image.cat(extra))
 
 
 def _time_windows(
@@ -122,14 +125,15 @@ def build_composite(
     bands: list[str],
     composite_stat: str = "median",
     add_clear_count: bool = False,
+    qa_layers: Sequence[str] = (),
 ) -> ee.Image:
     """Reduce an ImageCollection to a single composite image.
 
     Applies the specified statistic across all images in the collection after
     selecting the requested bands. Use this when you have already filtered a
     collection to a date window and need one composite image. For multi-period
-    compositing see :func:`build_period_composites` and
-    :func:`build_seasonal_composites`.
+    compositing see :func:`build_period_composites`, :func:`build_seasonal_composites`
+    and :func:`build_period_stack`.
 
     Args:
         collection: ee.ImageCollection to composite.
@@ -139,19 +143,27 @@ def build_composite(
         add_clear_count: Add a uint16 'clear_count' band: the number of
             unmasked observations of the first band in ``bands`` per pixel
             (cloud-free valid observations when the collection is cloud-masked).
+            Same as ``"clear_count"`` in ``qa_layers``.
+        qa_layers: Per-pixel QA layers (see :func:`build_period_stack`): ``"clear_count"`` and ``"doy"``. Without a window, ``obs_doy_*`` is the calendar day of year of each observation (it restarts at 1 on 1 January). ``"gap"`` needs a window, so it is not available here.
 
     Returns:
-        ee.Image of the composited bands (plus 'clear_count' if requested).
+        ee.Image of the composited bands, then the requested QA bands (``clear_count`` uint16, masked where 0; ``obs_doy_*`` float).
 
     Raises:
-        ValueError: If composite_stat is not 'mean', 'median', or 'sum'.
+        ValueError: If composite_stat is not 'mean', 'median', or 'sum', qa_layers names an unknown layer, or ``"gap"`` is requested.
     """
     _validate_composite_stat(composite_stat)
+    layers = _resolve_qa_layers(add_clear_count, qa_layers)
+    if "gap" in layers:
+        raise ValueError(
+            "qa_layers 'gap' needs a window; use build_period_stack, "
+            "build_period_composites or build_seasonal_composites."
+        )
     return _composite(
         ee.ImageCollection(collection).select(bands),
         bands,
         composite_stat,
-        add_clear_count,
+        layers,
     )
 
 
@@ -187,10 +199,12 @@ def _resolve_qa_layers(add_clear_count: bool, qa_layers: Sequence[str]) -> list[
 
 
 def _qa_band_names(layers: Sequence[str]) -> list[str]:
-    out: list[str] = []
-    for layer in layers:
-        out += [CLEAR_COUNT_BAND] if layer == "clear_count" else list(OBS_DOY_BANDS)
-    return out
+    names = {
+        "clear_count": [CLEAR_COUNT_BAND],
+        "doy": list(OBS_DOY_BANDS),
+        "gap": [OBS_GAP_BAND],
+    }
+    return [n for layer in layers for n in names[layer]]
 
 
 def period_stack_band_names(
@@ -207,10 +221,10 @@ def period_stack_band_names(
         labels: Period labels, in order.
         add_clear_count: Whether each period also has a ``clear_count`` band (same as ``"clear_count"`` in ``qa_layers``).
         band_name: Format string with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``).
-        qa_layers: Per-pixel QA layers, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``).
+        qa_layers: Per-pixel QA layers, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``, ``"gap"``).
 
     Returns:
-        List of output band names: for each period, its bands, then ``clear_count``, then ``obs_doy_median``, ``obs_doy_min``, ``obs_doy_max`` (each when requested).
+        List of output band names: for each period, its bands, then ``clear_count``, then ``obs_doy_median``, ``obs_doy_min``, ``obs_doy_max``, then ``obs_gap_max`` (each when requested).
 
     Raises:
         ValueError: If ``qa_layers`` names an unknown layer.
@@ -220,13 +234,27 @@ def period_stack_band_names(
     return [band_name.format(band=b, label=lab) for lab in labels for b in per]
 
 
+def _jan1(start: Any, image: ee.Image) -> ee.Date:
+    """1 January of the window's start year, or of the image's own year without a window."""
+    year = (
+        ee.Date(image.get("system:time_start")).get("year")
+        if start is None
+        else ee.Date(start).get("year")
+    )
+    return ee.Date.fromYMD(year, 1, 1)
+
+
+def _day_number(date: ee.Date, jan1: ee.Date) -> ee.Number:
+    """1-based day of ``date`` counted from ``jan1`` (1 = 1 January)."""
+    return ee.Date(date).difference(jan1, "day").floor().add(1)
+
+
 def _add_obs_doy(image: ee.Image, first_band: str, start: Any) -> ee.Image:
-    """Add an ``obs_doy`` band: the image's day counted from 1 January of the period's
-    start year (1-based), masked where ``first_band`` is masked (no clear observation).
-    """
+    """Add an ``obs_doy`` band: the image's day counted from 1 January of the window's
+    start year (of its own year when ``start`` is None), masked where ``first_band``
+    is masked (no clear observation)."""
     image = ee.Image(image)
-    jan1 = ee.Date.fromYMD(ee.Date(start).get("year"), 1, 1)
-    day = ee.Date(image.get("system:time_start")).difference(jan1, "day").floor().add(1)
+    day = _day_number(ee.Date(image.get("system:time_start")), _jan1(start, image))
     doy = (
         ee.Image.constant(day)
         .toFloat()
@@ -234,6 +262,62 @@ def _add_obs_doy(image: ee.Image, first_band: str, start: Any) -> ee.Image:
         .updateMask(image.select(first_band).mask())
     )
     return image.addBands(doy)
+
+
+def _with_obs_doy(
+    col: ee.ImageCollection, first_band: str, layers: Sequence[str], start: Any
+) -> ee.ImageCollection:
+    if "doy" not in layers and "gap" not in layers:
+        return col
+    return col.map(lambda i: _add_obs_doy(i, first_band, start))
+
+
+def _obs_gap(
+    col: ee.ImageCollection, start: Any, end: Any, count: ee.Image
+) -> ee.Image:
+    """Longest interval (days) between consecutive clear observations, with the window
+    start and end as boundaries; the window length where there is none."""
+    jan1 = ee.Date.fromYMD(ee.Date(start).get("year"), 1, 1)
+    first = _day_number(ee.Date(start), jan1)
+    after = _day_number(ee.Date(end), jan1)  # first day after the window
+    window = after.subtract(first)
+    days = col.select(OBS_DOY_BAND).toArray().arrayProject([0])
+    bounds = ee.Image.constant(first).addBands(ee.Image.constant(after)).toFloat()
+    arr = days.arrayCat(bounds.toArray(), 0).arraySort()
+    diffs = arr.arraySlice(0, 1).subtract(arr.arraySlice(0, 0, -1))
+    gap = diffs.arrayReduce(ee.Reducer.max(), [0]).arrayGet([0])
+    return gap.unmask(window).where(count.eq(0), window).toFloat().rename(OBS_GAP_BAND)
+
+
+def _qa_layer_images(
+    col: ee.ImageCollection,
+    bands: Sequence[str],
+    layers: Sequence[str],
+    start: Any,
+    end: Any,
+    *,
+    zero_count: bool,
+) -> list[ee.Image]:
+    """QA band images in layer order. ``col`` carries ``obs_doy`` when "doy" or "gap"
+    is requested; ``zero_count`` writes clear_count 0 (not masked) without data."""
+    count = col.select(bands[0]).count()
+    if zero_count:
+        count = count.unmask(0)
+    out: list[ee.Image] = []
+    for layer in layers:
+        if layer == "clear_count":
+            out.append(count.toUint16().rename(CLEAR_COUNT_BAND))
+        elif layer == "doy":
+            reducer = (
+                ee.Reducer.median()
+                .combine(ee.Reducer.min(), sharedInputs=True)
+                .combine(ee.Reducer.max(), sharedInputs=True)
+            )
+            stats = col.select(OBS_DOY_BAND).reduce(reducer)
+            out.append(stats.rename(list(OBS_DOY_BANDS)))
+        else:  # gap
+            out.append(_obs_gap(col, start, end, count.unmask(0)))
+    return out
 
 
 def build_period_stack(
@@ -271,6 +355,12 @@ def build_period_stack(
       band's median can come from a different scene, so they are not "the date of the
       median value". Each image needs ``system:time_start``. Cost: about one extra
       composited band (scene loading and masking, the main cost, is shared).
+    - ``"gap"``: ``obs_gap_max``, the longest interval in days between consecutive
+      clear observations, with the period's start and end as boundaries (the
+      clear-sky-observation gap statistic of FORCE). An observation on the first day
+      gives 0 at the start; a period without a clear observation gives its length in
+      days. It shows a window that is "clear" only at its ends. Cost: a per-pixel
+      array sort of the observation days, more than "doy"; measure it on one window.
 
     Args:
         collection: ee.ImageCollection to composite (e.g. a cloud-masked Sentinel-2 collection).
@@ -279,10 +369,10 @@ def build_period_stack(
         composite_stat: 'mean', 'median' (default) or 'sum'.
         add_clear_count: Add a uint16 ``clear_count`` band per period (0 where no clear observation); same as ``"clear_count"`` in ``qa_layers``.
         band_name: Format string for output band names, with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``, ``{band}_{label}``); QA bands are named the same way.
-        qa_layers: Per-pixel QA layers to add, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``); default none.
+        qa_layers: Per-pixel QA layers to add, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``, ``"gap"``); default none.
 
     Returns:
-        ee.Image with the bands of :func:`period_stack_band_names`, period by period. Composite and ``obs_doy_*`` bands are float; ``clear_count`` bands are uint16.
+        ee.Image with the bands of :func:`period_stack_band_names`, period by period. Composite, ``obs_doy_*`` and ``obs_gap_max`` bands are float; ``clear_count`` bands are uint16.
 
     Raises:
         ValueError: If composite_stat is invalid, bands or periods are empty, period labels repeat, band_name lacks a placeholder, or qa_layers names an unknown layer.
@@ -291,37 +381,21 @@ def build_period_stack(
     bands = list(bands)
     labels = _validate_periods(bands, periods, band_name)
     layers = _resolve_qa_layers(add_clear_count, qa_layers)
-    doy = "doy" in layers
+    days = "doy" in layers or "gap" in layers
 
     col = ee.ImageCollection(collection).select(bands)
-    placeholder = [*bands, OBS_DOY_BAND] if doy else bands
+    placeholder = [*bands, OBS_DOY_BAND] if days else bands
     empty = ee.Image.constant([0] * len(placeholder)).rename(placeholder).toFloat()
     empty_col = ee.ImageCollection([empty.updateMask(ee.Image(0))])
-    doy_reducer = (
-        ee.Reducer.median()
-        .combine(ee.Reducer.min(), sharedInputs=True)
-        .combine(ee.Reducer.max(), sharedInputs=True)
-    )
 
     parts = []
     for label, (_, start, end) in zip(labels, periods, strict=True):
         sub = col.filterDate(start, end).map(lambda i: ee.Image(i).toFloat())
-        if doy:
-            sub = sub.map(lambda i, s=start: _add_obs_doy(i, bands[0], s))
-        merged = sub.merge(empty_col)
+        merged = _with_obs_doy(sub, bands[0], layers, start).merge(empty_col)
         comp = _apply_stat(merged.select(bands), composite_stat)
-        if "clear_count" in layers:
-            count = (
-                merged.select(bands[0])
-                .count()
-                .unmask(0)
-                .toUint16()
-                .rename(CLEAR_COUNT_BAND)
-            )
-            comp = comp.addBands(count)
-        if doy:
-            stats = merged.select(OBS_DOY_BAND).reduce(doy_reducer)
-            comp = comp.addBands(stats.rename(list(OBS_DOY_BANDS)))
+        extra = _qa_layer_images(merged, bands, layers, start, end, zero_count=True)
+        if extra:
+            comp = comp.addBands(extra[0] if len(extra) == 1 else ee.Image.cat(extra))
         names = period_stack_band_names(
             bands, [label], band_name=band_name, qa_layers=layers
         )
@@ -433,6 +507,7 @@ def build_period_composites(
     temporal_scale: str = "annual",
     composite_stat: str = "median",
     add_clear_count: bool = False,
+    qa_layers: Sequence[str] = (),
 ) -> ee.ImageCollection:
     """Build annual or monthly composites from an ImageCollection, producing one
     composite per period with data.
@@ -444,12 +519,14 @@ def build_period_composites(
         end_date: Compositing end date as a string or ee.Date.
         temporal_scale: Temporal aggregation window; either 'annual' or 'monthly' (default 'annual').
         composite_stat: Statistic used to combine images within each window; one of 'mean', 'median', or 'sum' (default 'median').
-        add_clear_count: Add a uint16 'clear_count' band per composite: the number of unmasked observations of the first band in ``bands`` per pixel in that period (image_count only counts scenes).
+        add_clear_count: Add a uint16 'clear_count' band per composite: the number of unmasked observations of the first band in ``bands`` per pixel in that period (image_count only counts scenes). Same as ``"clear_count"`` in ``qa_layers``.
+        qa_layers: Per-pixel QA layers per composite (see :func:`build_period_stack`): ``"clear_count"``, ``"doy"`` (day counted from 1 January of the window's year) and ``"gap"`` (bounded by the window).
 
     Returns:
         ee.ImageCollection of composite images, one per period with data (empty periods are dropped), each with date, year, month, day, image_count, temporal_scale, and composite_stat properties.
     """
     _validate_composite_stat(composite_stat)
+    layers = _resolve_qa_layers(add_clear_count, qa_layers)
 
     collection = ee.ImageCollection(collection).select(bands)
     start = ee.Date(start_date)
@@ -466,7 +543,9 @@ def build_period_composites(
         )
         subset = collection.filterDate(window_start, window_end)
         image_count = subset.size()
-        composite = _composite(subset, bands, composite_stat, add_clear_count)
+        composite = _composite(
+            subset, bands, composite_stat, layers, window_start, window_end
+        )
 
         return ee.Image(
             ee.Algorithms.If(
@@ -500,6 +579,7 @@ def build_seasonal_composites(
     season_name: str,
     composite_stat: str = "median",
     add_clear_count: bool = False,
+    qa_layers: Sequence[str] = (),
 ) -> ee.ImageCollection:
     """Build per-year seasonal composites by filtering each year's collection to a
     fixed window of consecutive months.
@@ -524,7 +604,10 @@ def build_seasonal_composites(
             'median', or 'sum' (default 'median').
         add_clear_count: Add a uint16 'clear_count' band per composite: the
             number of unmasked observations of the first band in ``bands`` per
-            pixel in that season window.
+            pixel in that season window. Same as ``"clear_count"`` in ``qa_layers``.
+        qa_layers: Per-pixel QA layers per composite (see
+            :func:`build_period_stack`): ``"clear_count"``, ``"doy"`` (calendar day
+            of year) and ``"gap"`` (bounded by the season window).
 
     Returns:
         ee.ImageCollection of per-year composites, one per year with imagery in
@@ -536,6 +619,7 @@ def build_seasonal_composites(
             season_months is not a valid (start, end) pair with 1 ≤ start ≤ end ≤ 12.
     """
     _validate_composite_stat(composite_stat)
+    layers = _resolve_qa_layers(add_clear_count, qa_layers)
     start_month, end_month = season_months
     if not (1 <= start_month <= end_month <= 12):
         raise ValueError(
@@ -552,7 +636,9 @@ def build_seasonal_composites(
         window_end = ee.Date.fromYMD(year, end_month, 1).advance(1, "month")
         subset = col.filterDate(window_start, window_end)
         image_count = subset.size()
-        composite = _composite(subset, bands, composite_stat, add_clear_count)
+        composite = _composite(
+            subset, bands, composite_stat, layers, window_start, window_end
+        )
         return ee.Image(
             ee.Algorithms.If(
                 image_count.gt(0),

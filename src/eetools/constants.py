@@ -867,8 +867,12 @@ OBS_DOY_BANDS: tuple[str, ...] = (
     f"{OBS_DOY_BAND}_min",
     f"{OBS_DOY_BAND}_max",
 )
-# Per-pixel QA layers build_period_stack can add, in output order after the bands.
-COMPOSITE_QA_LAYERS: tuple[str, ...] = ("clear_count", "doy")
+# Optional per-pixel gap band (qa_layers "gap"): the longest interval in days between
+# consecutive clear observations, bounded by the window's start and end (FORCE's
+# clear-sky-observation gap statistic); the window length where there is none.
+OBS_GAP_BAND = "obs_gap_max"
+# Per-pixel QA layers the composite builders can add, in output order after the bands.
+COMPOSITE_QA_LAYERS: tuple[str, ...] = ("clear_count", "doy", "gap")
 # Image properties collection_lineage records per scene by default (sensor-agnostic);
 # add sensor fields such as CLOUDY_PIXEL_PERCENTAGE or MGRS_TILE per call.
 LINEAGE_PROPERTIES: tuple[str, ...] = ("system:index", "system:time_start")
@@ -906,7 +910,8 @@ SITE_EXPORT_DTYPE_BYTES: dict[str, int] = {"int16": 2, "float32": 4}
 SITE_EXPORT_SCALE_FACTOR = 10000  # stored = round(physical * 10000) for int16 stacks
 # Bands stored unscaled (scale_factor 1), as exact names or fnmatch patterns: the bare
 # clear_count band, <metric>_<period> names and toBands() "<i>_clear_count" prefixes;
-# likewise the observation-timing bands (obs_doy_median_<period>, <i>_obs_doy_min, ...),
+# likewise the observation-timing bands (obs_doy_median_<period>, <i>_obs_doy_min,
+# obs_gap_max_<period>, ...),
 # which would overflow int16 if scaled. Adding patterns only changes the entries of
 # bands that match them, so manifests (and params_hash) of other stacks are unchanged.
 SITE_EXPORT_UNSCALED_BANDS: tuple[str, ...] = (
@@ -915,6 +920,9 @@ SITE_EXPORT_UNSCALED_BANDS: tuple[str, ...] = (
     f"*_{CLEAR_COUNT_BAND}",
     f"{OBS_DOY_BAND}_*",
     f"*_{OBS_DOY_BAND}_*",
+    OBS_GAP_BAND,
+    f"{OBS_GAP_BAND}_*",
+    f"*_{OBS_GAP_BAND}",
 )
 SITE_EXPORT_WARN_BYTES = 1e9  # warn above ~1 GB (bands x pixels x bytes) per file
 # Grid snapping: a bounds edge within this many pixels of a grid line counts as on it.
@@ -1764,6 +1772,22 @@ BASELINE_LAYER_METADATA: dict[str, dict[str, object]] = {
 SCENE_TABLE_ID_COLUMNS: tuple[str, ...] = ("date", "scene_id", "region_id")
 SCENE_TABLE_FRACTION_COLUMNS: tuple[str, ...] = ("clear_frac", "footprint_frac")
 SCENE_TABLE_DEFAULT_NAME = "scene_site_table"
+# Standard scene properties per sensor, for scene_site_rows(image_properties=...) and
+# collection_lineage(properties=...). The eetools S2 and Landsat builders carry them
+# through processing (process_s2_image, process_l8_image, process_landsat_image, which the L5/L7/L9 builders use).
+S2_SCENE_PROPERTIES: tuple[str, ...] = (
+    "CLOUDY_PIXEL_PERCENTAGE",
+    "SPACECRAFT_NAME",
+    "MGRS_TILE",
+    "MEAN_SOLAR_ZENITH_ANGLE",
+)
+LANDSAT_SCENE_PROPERTIES: tuple[str, ...] = (
+    "CLOUD_COVER",
+    "SPACECRAFT_ID",
+    "WRS_PATH",
+    "WRS_ROW",
+    "SUN_ELEVATION",
+)
 
 #################### FIRMS active fire (E9) ##########################################
 # MODIS C6/C6.1 active-fire detections rasterised at 1 km, one image per day

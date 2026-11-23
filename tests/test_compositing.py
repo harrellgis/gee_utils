@@ -263,7 +263,7 @@ def test_composite_without_clear_count_is_unchanged():
     from eetools.compositing import _composite
 
     col = MagicMock(name="collection")
-    out = _composite(col, ["NDVI", "EVI"], "median", add_clear_count=False)
+    out = _composite(col, ["NDVI", "EVI"], "median", [])
     assert out is col.median.return_value
     col.select.assert_not_called()
     col.median.return_value.addBands.assert_not_called()
@@ -276,7 +276,7 @@ def test_composite_with_clear_count_counts_first_band_as_uint16():
     from eetools.constants import CLEAR_COUNT_BAND
 
     col = MagicMock(name="collection")
-    out = _composite(col, ["NDVI", "EVI"], "mean", add_clear_count=True)
+    out = _composite(col, ["NDVI", "EVI"], "mean", ["clear_count"])
 
     col.select.assert_called_once_with("NDVI")
     count = col.select.return_value.count
@@ -419,7 +419,7 @@ def test_period_stack_band_names_qa_layers():
         ({"periods": [("p", "2021-01-01", "2022-01-01")] * 2}, "unique"),
         ({"band_name": "{band}"}, "band_name"),
         ({"composite_stat": "max"}, "composite_stat"),
-        ({"qa_layers": ("gap",)}, "qa_layers"),
+        ({"qa_layers": ("cloud_distance",)}, "qa_layers"),
         ({"qa_layers": "doy"}, "qa_layers"),
     ],
 )
@@ -581,3 +581,113 @@ def test_collection_lineage(ee_session, masked_triplet):
         collection_lineage(
             masked_triplet, [("apr", "2021-04-01", "2021-05-01")], max_scenes=2
         )
+
+
+# --------------------------------------------------------------------------- #
+# QA layers: gap, and the other builders (0.15.0)
+# --------------------------------------------------------------------------- #
+def test_build_composite_rejects_gap():
+    from eetools.compositing import build_composite
+
+    with pytest.raises(ValueError, match="needs a window"):
+        build_composite(None, ["b"], qa_layers=("gap",))
+
+
+@pytest.mark.ee
+def test_build_period_stack_gap(ee_session, masked_triplet):
+    """Window 1 March (day 60) to 1 May (121): east obs 91, 100, 110 -> longest
+    interval 31 (60 -> 91); west obs 100, 110 -> 40 (60 -> 100). Empty: 31 days."""
+    from eetools.compositing import build_period_stack
+
+    periods = [
+        ("ma", "2021-03-01", "2021-05-01"),
+        ("jan22", "2022-01-01", "2022-02-01"),
+    ]
+    stack = build_period_stack(
+        masked_triplet, ["b"], periods, qa_layers=("clear_count", "doy", "gap")
+    )
+    assert stack.bandNames().getInfo()[:6] == [
+        "b_ma",
+        "clear_count_ma",
+        "obs_doy_median_ma",
+        "obs_doy_min_ma",
+        "obs_doy_max_ma",
+        "obs_gap_max_ma",
+    ]
+    ee = ee_session
+    assert _value_at(ee, stack, "obs_gap_max_ma", 0.5) == pytest.approx(31)
+    assert _value_at(ee, stack, "obs_gap_max_ma", -0.5) == pytest.approx(40)
+    assert _value_at(ee, stack, "obs_gap_max_jan22", 0.5) == pytest.approx(31)
+    assert _value_at(ee, stack, "obs_doy_median_ma", 0.5) == pytest.approx(100)
+
+
+@pytest.mark.ee
+def test_build_period_stack_gap_only(ee_session, masked_triplet):
+    from eetools.compositing import build_period_stack
+
+    stack = build_period_stack(
+        masked_triplet, ["b"], [("ma", "2021-03-01", "2021-05-01")], qa_layers=("gap",)
+    )
+    assert stack.bandNames().getInfo() == ["b_ma", "obs_gap_max_ma"]
+    assert _value_at(ee_session, stack, "obs_gap_max_ma", -0.5) == pytest.approx(40)
+
+
+@pytest.mark.ee
+def test_build_composite_doy_layers(ee_session, masked_triplet):
+    from eetools.compositing import build_composite
+
+    out = build_composite(masked_triplet, ["b"], qa_layers=("clear_count", "doy"))
+    assert out.bandNames().getInfo() == [
+        "b",
+        "clear_count",
+        "obs_doy_median",
+        "obs_doy_min",
+        "obs_doy_max",
+    ]
+    assert _value_at(ee_session, out, "b", 0.5) == pytest.approx(0.4)
+    assert _value_at(ee_session, out, "obs_doy_median", -0.5) == pytest.approx(105)
+    assert _value_at(ee_session, out, "obs_doy_min", 0.5) == pytest.approx(91)
+
+
+@pytest.mark.ee
+def test_build_period_composites_qa_layers(ee_session, masked_triplet):
+    """Annual 2021 window: days 1 to 366 (first day after); last obs day 110 -> 256."""
+    from eetools.compositing import build_period_composites
+
+    col = build_period_composites(
+        masked_triplet,
+        ["b"],
+        "2021-01-01",
+        "2022-01-01",
+        qa_layers=("doy", "gap"),
+    )
+    img = ee_session.Image(col.first())
+    assert img.bandNames().getInfo() == [
+        "b",
+        "obs_doy_median",
+        "obs_doy_min",
+        "obs_doy_max",
+        "obs_gap_max",
+    ]
+    assert _value_at(ee_session, img, "obs_doy_median", 0.5) == pytest.approx(100)
+    assert _value_at(ee_session, img, "obs_gap_max", 0.5) == pytest.approx(256)
+
+
+@pytest.mark.ee
+def test_build_seasonal_composites_qa_layers(ee_session, masked_triplet):
+    """March-May 2021: days 60 to 152 (first day after); last obs 110 -> gap 42."""
+    from eetools.compositing import build_seasonal_composites
+
+    col = build_seasonal_composites(
+        masked_triplet,
+        ["b"],
+        2021,
+        2021,
+        (3, 5),
+        "mam",
+        qa_layers=("clear_count", "gap"),
+    )
+    img = ee_session.Image(col.first())
+    assert img.bandNames().getInfo() == ["b", "clear_count", "obs_gap_max"]
+    assert _value_at(ee_session, img, "clear_count", -0.5) == 2
+    assert _value_at(ee_session, img, "obs_gap_max", -0.5) == pytest.approx(42)

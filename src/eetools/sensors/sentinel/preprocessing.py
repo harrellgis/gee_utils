@@ -7,6 +7,7 @@ from eetools.constants import (
     S2_BAND_MAP,
     S2_DEFAULT_CLOUD_MASK,
     S2_SCALE_FACTOR,
+    S2_SCENE_PROPERTIES,
     S2_SR_COLLECTION,
 )
 from eetools.sensors.indices import calc_indices, select_base_bands
@@ -57,7 +58,7 @@ def process_s2_image(
         domains: Index domains to append (e.g. ['vegetation', 'burn']), or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with scaled reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with scaled reflectance bands and appended index bands, preserving system:time_start and ``S2_SCENE_PROPERTIES``.
     """
     source = image
     image = select_base_bands(
@@ -81,7 +82,7 @@ def process_s2_image(
     image = calc_indices(
         image=image, band_map=S2_BAND_MAP, indices=indices, domains=domains
     )
-    return image.copyProperties(source, ["system:time_start"])
+    return image.copyProperties(source, ["system:time_start", *S2_SCENE_PROPERTIES])
 
 
 def get_s2_sr_collection(

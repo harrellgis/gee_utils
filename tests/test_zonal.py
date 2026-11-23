@@ -338,6 +338,47 @@ def test_scene_site_rows_rejects_bad_args(kwargs, match):
         zonal.scene_site_rows("COL", "REGIONS", **kwargs)
 
 
+def test_scene_property_columns():
+    assert zonal.scene_property_columns(["CLOUD_COVER", "system:time_start"]) == {
+        "CLOUD_COVER": "CLOUD_COVER",
+        "system:time_start": "time_start",
+    }
+    with pytest.raises(ValueError, match="clash"):
+        zonal.scene_property_columns(["date"])
+    with pytest.raises(ValueError, match="clash"):
+        zonal.scene_property_columns(["nirv"], ["nirv"])
+    with pytest.raises(ValueError, match="sequence"):
+        zonal.scene_property_columns("CLOUD_COVER")
+
+
+def test_export_scene_site_table_property_columns():
+    from eetools.constants import S2_SCENE_PROPERTIES
+
+    with (
+        patch.object(zonal, "scene_site_rows") as rows,
+        patch.object(zonal, "export_csv_table") as export,
+    ):
+        zonal.export_scene_site_table(
+            "COL",
+            "REGIONS",
+            bands=["nirv"],
+            scale=10,
+            dest="gcs",
+            bucket="bkt",
+            prefix="p",
+            image_properties=S2_SCENE_PROPERTIES,
+            start=False,
+        )
+    assert rows.call_args.kwargs["image_properties"] == list(S2_SCENE_PROPERTIES)
+    assert export.call_args.kwargs["selectors"][-5:] == [
+        "footprint_frac",
+        "CLOUDY_PIXEL_PERCENTAGE",
+        "SPACECRAFT_NAME",
+        "MGRS_TILE",
+        "MEAN_SOLAR_ZENITH_ANGLE",
+    ]
+
+
 def test_export_scene_site_table_columns_and_dispatch():
     with (
         patch.object(zonal, "scene_site_rows") as rows,
@@ -361,6 +402,7 @@ def test_export_scene_site_table_columns_and_dispatch():
         scale=10,
         id_property="site_id",
         crs="EPSG:32737",
+        image_properties=[],
     )
     kwargs = export.call_args.kwargs
     assert export.call_args.args == (rows.return_value,)
@@ -465,3 +507,28 @@ def test_region_stats_fc_crs_puts_pixels_on_the_projected_grid(ee_session):
         col, regions, ["b"], scale=10, reducers=ee.Reducer.count(), crs=utm
     )
     assert fc.first().get("count").getInfo() == 100
+
+
+@pytest.mark.ee
+def test_scene_site_rows_live_image_properties(ee_session):
+    import ee
+
+    region = ee.Geometry.Rectangle([36.0, -1.0, 36.1, -0.9])
+    regions = ee.FeatureCollection([ee.Feature(region, {"site_id": "a"})])
+    image = (
+        ee.Image.constant(0.3)
+        .rename("nirv")
+        .clip(ee.Geometry.Rectangle([35.9, -1.1, 36.2, -0.8]))
+        .set({"system:time_start": ee.Date("2021-01-01").millis(), "CLOUD_COVER": 12.5})
+    )
+    rows = zonal.scene_site_rows(
+        ee.ImageCollection([image]),
+        regions,
+        bands=["nirv"],
+        scale=500,
+        image_properties=["CLOUD_COVER", "SPACECRAFT_ID", "system:time_start"],
+    )
+    (row,) = [f["properties"] for f in rows.getInfo()["features"]]
+    assert row["CLOUD_COVER"] == pytest.approx(12.5)
+    assert row.get("SPACECRAFT_ID") is None  # missing property -> empty
+    assert row["time_start"] == 1609459200000
