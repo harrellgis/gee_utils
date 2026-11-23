@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Standard composite QA layers, second slice (vault: `feature_backlog/composite_qa_layers`).
-Opt-in: existing band lists, scene-table columns and `params_hash` values are unchanged.
+## [0.15.0] - 2026-11-23
+
+- Standard composite QA layers, second slice (vault: `feature_backlog/composite_qa_layers`): the `"gap"` layer
+  (`obs_gap_max`), `qa_layers` on every composite builder, and scene properties as scene-table columns
+  (`image_properties`, `S2_SCENE_PROPERTIES`, `LANDSAT_SCENE_PROPERTIES`).
+- Opt-in: existing band lists, scene-table columns and `params_hash` values are unchanged. The S2 and Landsat
+  builders now keep their standard scene properties.
 
 ### Added
 - `qa_layers="gap"`: `obs_gap_max`, the longest interval in days between consecutive clear observations, with the window's start and end as boundaries (FORCE's clear-sky gap statistic). A window with no clear observation gives its length. Available on `build_period_stack`, `build_period_composites` and `build_seasonal_composites`.
