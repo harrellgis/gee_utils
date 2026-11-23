@@ -857,6 +857,22 @@ DEFAULT_CRS = "EPSG:4326"
 # Optional per-pixel band: number of unmasked (clear, valid) observations behind a
 # composite, counted on the first requested band. uint16, never rescaled on export.
 CLEAR_COUNT_BAND = "clear_count"
+# Optional per-pixel observation-timing bands (build_period_stack qa_layers "doy"): the
+# median, earliest and latest day of the clear observations behind a composite, counted
+# from 1 January of the period's start year (1 = 1 January; a window that crosses a
+# year end continues past 365/366, so values stay monotonic). Never rescaled on export.
+OBS_DOY_BAND = "obs_doy"
+OBS_DOY_BANDS: tuple[str, ...] = (
+    f"{OBS_DOY_BAND}_median",
+    f"{OBS_DOY_BAND}_min",
+    f"{OBS_DOY_BAND}_max",
+)
+# Per-pixel QA layers build_period_stack can add, in output order after the bands.
+COMPOSITE_QA_LAYERS: tuple[str, ...] = ("clear_count", "doy")
+# Image properties collection_lineage records per scene by default (sensor-agnostic);
+# add sensor fields such as CLOUDY_PIXEL_PERCENTAGE or MGRS_TILE per call.
+LINEAGE_PROPERTIES: tuple[str, ...] = ("system:index", "system:time_start")
+LINEAGE_MAX_SCENES = 5000  # per period; more raises (summarise instead)
 
 #################### CLOUD STORAGE EXPORTS (eetools.io) ##########################
 # Per-dtype no-data value for GCS image exports. -9999 is a valid value in an int16
@@ -889,11 +905,16 @@ SITE_EXPORT_DTYPES: tuple[str, ...] = ("int16", "float32")
 SITE_EXPORT_DTYPE_BYTES: dict[str, int] = {"int16": 2, "float32": 4}
 SITE_EXPORT_SCALE_FACTOR = 10000  # stored = round(physical * 10000) for int16 stacks
 # Bands stored unscaled (scale_factor 1), as exact names or fnmatch patterns: the bare
-# clear_count band, <metric>_<period> names and toBands() "<i>_clear_count" prefixes.
+# clear_count band, <metric>_<period> names and toBands() "<i>_clear_count" prefixes;
+# likewise the observation-timing bands (obs_doy_median_<period>, <i>_obs_doy_min, ...),
+# which would overflow int16 if scaled. Adding patterns only changes the entries of
+# bands that match them, so manifests (and params_hash) of other stacks are unchanged.
 SITE_EXPORT_UNSCALED_BANDS: tuple[str, ...] = (
     CLEAR_COUNT_BAND,
     f"{CLEAR_COUNT_BAND}_*",
     f"*_{CLEAR_COUNT_BAND}",
+    f"{OBS_DOY_BAND}_*",
+    f"*_{OBS_DOY_BAND}_*",
 )
 SITE_EXPORT_WARN_BYTES = 1e9  # warn above ~1 GB (bands x pixels x bytes) per file
 # Grid snapping: a bounds edge within this many pixels of a grid line counts as on it.

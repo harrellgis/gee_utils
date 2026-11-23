@@ -1310,3 +1310,69 @@ def test_validate_table_dest(dest, bucket, match):
     with pytest.raises(ValueError, match=match):
         io.validate_table_dest(dest, bucket)
     io.validate_table_dest("drive", None)
+
+
+# --------------------------------------------------------------------------- #
+# Composite QA layers: unscaled obs_doy bands and unhashed lineage (0.14.0)
+# --------------------------------------------------------------------------- #
+def test_obs_doy_bands_are_stored_unscaled():
+    names = [
+        "NDVI_2021_dry",
+        "clear_count_2021_dry",
+        "obs_doy_median_2021_dry",
+        "obs_doy_min_2021_dry",
+        "0_obs_doy_max",
+    ]
+    factors = [e["scale_factor"] for e in io.build_band_entries(names)]
+    assert factors == [10000, 1, 1, 1, 1]
+
+
+def test_new_unscaled_patterns_leave_other_manifests_unchanged():
+    """Existing stacks (no obs_doy bands) keep their entries and params_hash."""
+    old_patterns = ("clear_count", "clear_count_*", "*_clear_count")
+    names = ["NDVI_2022_dry_jf", "B2_2022_dry_jf", "clear_count_2022_dry_jf"]
+    common = dict(
+        region_id="s01",
+        product="s2_dry",
+        file="s01_s2_dry.tif",
+        crs="EPSG:32737",
+        crs_transform=[10, 0, 500000, 0, -10, 9900000],
+        dtype="int16",
+        nodata=-32768,
+    )
+    old = io.build_site_manifest(
+        **common, bands=io.build_band_entries(names, unscaled_bands=old_patterns)
+    )
+    new = io.build_site_manifest(**common, bands=io.build_band_entries(names))
+    assert new["params_hash"] == old["params_hash"]
+
+
+def test_lineage_is_not_hashed():
+    manifest = io.build_site_manifest(
+        region_id="s01",
+        product="s2",
+        file="s01_s2.tif",
+        crs="EPSG:32737",
+        crs_transform=[10, 0, 0, 0, -10, 0],
+        dtype="int16",
+        nodata=-32768,
+        bands=io.build_band_entries(["NDVI_2022"]),
+    )
+    with_lineage = {**manifest, "lineage": {"p": {"n_scenes": 3, "scenes": []}}}
+    assert io.manifest_params_hash(with_lineage) == manifest["params_hash"]
+
+
+def test_export_composites_per_site_writes_lineage_per_region(site_export):
+    lineage = {"s01": {"2022": {"n_scenes": 4}}, "*": {"2022": {"n_scenes": 9}}}
+    records = _run_site_export(lineage=lineage)
+    assert records[0].manifest["lineage"] == {"2022": {"n_scenes": 4}}
+    assert records[1].manifest["lineage"] == {"2022": {"n_scenes": 9}}  # "*" default
+    plain = _run_site_export()
+    assert "lineage" not in plain[0].manifest
+    assert records[0].manifest["params_hash"] == plain[0].manifest["params_hash"]
+
+
+def test_export_composites_per_site_lineage_without_default(site_export):
+    records = _run_site_export(lineage={"s02": {"x": 1}})
+    assert "lineage" not in records[0].manifest
+    assert records[1].manifest["lineage"] == {"x": 1}

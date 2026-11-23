@@ -1,9 +1,17 @@
 from collections.abc import Sequence
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, cast
 
 import ee
 
-from eetools.constants import CLEAR_COUNT_BAND
+from eetools.constants import (
+    CLEAR_COUNT_BAND,
+    COMPOSITE_QA_LAYERS,
+    LINEAGE_MAX_SCENES,
+    LINEAGE_PROPERTIES,
+    OBS_DOY_BAND,
+    OBS_DOY_BANDS,
+)
 
 # --------------------------------------------------------------------------- #
 # Private helpers                                                              #
@@ -165,25 +173,67 @@ def _validate_periods(
     return labels
 
 
+def _resolve_qa_layers(add_clear_count: bool, qa_layers: Sequence[str]) -> list[str]:
+    """QA layers in output order; ``add_clear_count`` is the same as ``"clear_count"``."""
+    if isinstance(qa_layers, str):
+        raise ValueError("qa_layers must be a sequence of names, e.g. ('doy',).")
+    unknown = sorted(set(qa_layers) - set(COMPOSITE_QA_LAYERS))
+    if unknown:
+        raise ValueError(
+            f"unknown qa_layers {unknown}; choose from {list(COMPOSITE_QA_LAYERS)}"
+        )
+    wanted = set(qa_layers) | ({"clear_count"} if add_clear_count else set())
+    return [layer for layer in COMPOSITE_QA_LAYERS if layer in wanted]
+
+
+def _qa_band_names(layers: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    for layer in layers:
+        out += [CLEAR_COUNT_BAND] if layer == "clear_count" else list(OBS_DOY_BANDS)
+    return out
+
+
 def period_stack_band_names(
     bands: Sequence[str],
     labels: Sequence[str],
     add_clear_count: bool = False,
     band_name: str = PERIOD_BAND_NAME,
+    qa_layers: Sequence[str] = (),
 ) -> list[str]:
     """The band names :func:`build_period_stack` writes, in order (client-side, no EE).
 
     Args:
         bands: Composite bands, in order.
         labels: Period labels, in order.
-        add_clear_count: Whether each period also has a ``clear_count`` band.
+        add_clear_count: Whether each period also has a ``clear_count`` band (same as ``"clear_count"`` in ``qa_layers``).
         band_name: Format string with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``).
+        qa_layers: Per-pixel QA layers, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``).
 
     Returns:
-        List of output band names: for each period, its bands (then ``clear_count``).
+        List of output band names: for each period, its bands, then ``clear_count``, then ``obs_doy_median``, ``obs_doy_min``, ``obs_doy_max`` (each when requested).
+
+    Raises:
+        ValueError: If ``qa_layers`` names an unknown layer.
     """
-    per = [*bands, CLEAR_COUNT_BAND] if add_clear_count else list(bands)
+    layers = _resolve_qa_layers(add_clear_count, qa_layers)
+    per = [*bands, *_qa_band_names(layers)]
     return [band_name.format(band=b, label=lab) for lab in labels for b in per]
+
+
+def _add_obs_doy(image: ee.Image, first_band: str, start: Any) -> ee.Image:
+    """Add an ``obs_doy`` band: the image's day counted from 1 January of the period's
+    start year (1-based), masked where ``first_band`` is masked (no clear observation).
+    """
+    image = ee.Image(image)
+    jan1 = ee.Date.fromYMD(ee.Date(start).get("year"), 1, 1)
+    day = ee.Date(image.get("system:time_start")).difference(jan1, "day").floor().add(1)
+    doy = (
+        ee.Image.constant(day)
+        .toFloat()
+        .rename(OBS_DOY_BAND)
+        .updateMask(image.select(first_band).mask())
+    )
+    return image.addBands(doy)
 
 
 def build_period_stack(
@@ -193,6 +243,7 @@ def build_period_stack(
     composite_stat: str = "median",
     add_clear_count: bool = False,
     band_name: str = PERIOD_BAND_NAME,
+    qa_layers: Sequence[str] = (),
 ) -> ee.Image:
     """Composite each named period and stack the results into one multi-band image,
     keeping every period, including empty ones.
@@ -208,34 +259,58 @@ def build_period_stack(
     placeholder that keeps empty periods ("Expected a homogeneous image collection").
     The cast leaves the values unchanged.
 
+    QA layers (``qa_layers``, opt-in; the defaults leave the band list unchanged):
+
+    - ``"clear_count"``: a uint16 band with the number of clear (unmasked) observations
+      of the first band, 0 where there is none. Same as ``add_clear_count=True``.
+    - ``"doy"``: ``obs_doy_median``, ``obs_doy_min`` and ``obs_doy_max``, the median,
+      earliest and latest day of the clear observations of the first band, counted from
+      1 January of the period's start year (1 = 1 January; a window that crosses a year
+      end continues past 365/366). Masked where there is no clear observation. They
+      describe when the composite's inputs were observed: with a median composite each
+      band's median can come from a different scene, so they are not "the date of the
+      median value". Each image needs ``system:time_start``. Cost: about one extra
+      composited band (scene loading and masking, the main cost, is shared).
+
     Args:
         collection: ee.ImageCollection to composite (e.g. a cloud-masked Sentinel-2 collection).
-        bands: Bands to composite, in output order; ``clear_count`` counts the first band's unmasked observations.
+        bands: Bands to composite, in output order; the QA layers are computed on the first band's mask (its clear observations).
         periods: (label, start, end) per period, end exclusive; dates as 'YYYY-MM-DD' strings or ee.Date. Labels must be unique and are written into the band names.
         composite_stat: 'mean', 'median' (default) or 'sum'.
-        add_clear_count: Add a uint16 ``clear_count`` band per period (0 where no clear observation).
-        band_name: Format string for output band names, with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``, ``{band}_{label}``); ``clear_count`` is named the same way.
+        add_clear_count: Add a uint16 ``clear_count`` band per period (0 where no clear observation); same as ``"clear_count"`` in ``qa_layers``.
+        band_name: Format string for output band names, with ``{band}`` and ``{label}`` (default ``PERIOD_BAND_NAME``, ``{band}_{label}``); QA bands are named the same way.
+        qa_layers: Per-pixel QA layers to add, any of ``COMPOSITE_QA_LAYERS`` (``"clear_count"``, ``"doy"``); default none.
 
     Returns:
-        ee.Image with the bands of :func:`period_stack_band_names`, period by period. Composite bands are float; ``clear_count`` bands are uint16.
+        ee.Image with the bands of :func:`period_stack_band_names`, period by period. Composite and ``obs_doy_*`` bands are float; ``clear_count`` bands are uint16.
 
     Raises:
-        ValueError: If composite_stat is invalid, bands or periods are empty, period labels repeat, or band_name lacks a placeholder.
+        ValueError: If composite_stat is invalid, bands or periods are empty, period labels repeat, band_name lacks a placeholder, or qa_layers names an unknown layer.
     """
     _validate_composite_stat(composite_stat)
     bands = list(bands)
     labels = _validate_periods(bands, periods, band_name)
+    layers = _resolve_qa_layers(add_clear_count, qa_layers)
+    doy = "doy" in layers
 
     col = ee.ImageCollection(collection).select(bands)
-    empty = ee.Image.constant([0] * len(bands)).rename(bands).toFloat()
+    placeholder = [*bands, OBS_DOY_BAND] if doy else bands
+    empty = ee.Image.constant([0] * len(placeholder)).rename(placeholder).toFloat()
     empty_col = ee.ImageCollection([empty.updateMask(ee.Image(0))])
+    doy_reducer = (
+        ee.Reducer.median()
+        .combine(ee.Reducer.min(), sharedInputs=True)
+        .combine(ee.Reducer.max(), sharedInputs=True)
+    )
 
     parts = []
     for label, (_, start, end) in zip(labels, periods, strict=True):
         sub = col.filterDate(start, end).map(lambda i: ee.Image(i).toFloat())
+        if doy:
+            sub = sub.map(lambda i, s=start: _add_obs_doy(i, bands[0], s))
         merged = sub.merge(empty_col)
-        comp = _apply_stat(merged, composite_stat)
-        if add_clear_count:
+        comp = _apply_stat(merged.select(bands), composite_stat)
+        if "clear_count" in layers:
             count = (
                 merged.select(bands[0])
                 .count()
@@ -244,10 +319,110 @@ def build_period_stack(
                 .rename(CLEAR_COUNT_BAND)
             )
             comp = comp.addBands(count)
-        names = period_stack_band_names(bands, [label], add_clear_count, band_name)
-        per = [*bands, CLEAR_COUNT_BAND] if add_clear_count else bands
+        if doy:
+            stats = merged.select(OBS_DOY_BAND).reduce(doy_reducer)
+            comp = comp.addBands(stats.rename(list(OBS_DOY_BANDS)))
+        names = period_stack_band_names(
+            bands, [label], band_name=band_name, qa_layers=layers
+        )
+        per = [*bands, *_qa_band_names(layers)]
         parts.append(comp.select(per).rename(names))
     return ee.Image.cat(parts)
+
+
+def _iso_from_millis(value: Any) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    dt = datetime.fromtimestamp(value / 1000, tz=timezone.utc).replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def collection_lineage(
+    collection: ee.ImageCollection,
+    periods: Sequence[tuple[str, str | ee.Date, str | ee.Date]],
+    *,
+    region: ee.Geometry | None = None,
+    properties: Sequence[str] = LINEAGE_PROPERTIES,
+    max_scenes: int = LINEAGE_MAX_SCENES,
+) -> dict[str, dict[str, Any]]:
+    """The scenes in each period of a collection, as plain Python (one ``getInfo``).
+
+    Scene lineage for a period stack: which images fall in each ``(label, start, end)``
+    period (and touch ``region``), with the requested properties. Metadata only: no
+    pixels are computed, so it costs essentially no EECU. Pass the result to
+    ``io.export_composites_per_site(lineage=...)`` to record it in the manifests (not
+    hashed), which makes a changed scene set (e.g. an archive reprocessing) visible.
+
+    It lists scene-level membership after any scene filter already applied to
+    ``collection`` (e.g. a cloud-cover filter), not per-pixel use: a listed scene can
+    be fully cloud-masked over a pixel. Per-pixel use is ``build_period_stack``'s
+    ``qa_layers`` (``clear_count``, ``doy``).
+
+    Args:
+        collection: ee.ImageCollection, normally the one passed to :func:`build_period_stack`.
+        periods: (label, start, end) per period, end exclusive, as for :func:`build_period_stack`.
+        region: Optional ee.Geometry; only scenes intersecting it are listed (e.g. one export window).
+        properties: Image properties to record per scene (default ``LINEAGE_PROPERTIES``: ``system:index``, ``system:time_start``); missing ones are None.
+        max_scenes: Maximum scenes listed per period (default ``LINEAGE_MAX_SCENES``).
+
+    Returns:
+        ``{label: {"start", "end", "n_scenes", "scenes": [{property: value, ..., "datetime": ISO-8601 UTC}]}}``, scenes sorted by time. ``start``/``end`` are ``YYYY-MM-DD`` (end exclusive).
+
+    Raises:
+        ValueError: If periods are empty or labels repeat, properties is empty, or a period holds more than ``max_scenes`` scenes.
+    """
+    labels = _validate_periods(["_"], periods, PERIOD_BAND_NAME)
+    props = list(properties)
+    if not props:
+        raise ValueError("properties must name at least one image property.")
+    if "system:time_start" not in props:
+        props.append("system:time_start")
+    col = ee.ImageCollection(collection)
+    if region is not None:
+        col = col.filterBounds(region)
+
+    # Feature.toDictionary() leaves out "system:" properties, so carry every property
+    # under a neutral key (p0, p1, ...) and map it back client-side.
+    keys = {f"p{i}": p for i, p in enumerate(props)}
+
+    def _row(image: ee.Image) -> ee.Feature:
+        image = ee.Image(image)
+        return ee.Feature(None, {k: image.get(p) for k, p in keys.items()})
+
+    per: dict[str, Any] = {}
+    for label, (_, start, end) in zip(labels, periods, strict=True):
+        sub = col.filterDate(start, end).sort("system:time_start")
+        rows = ee.FeatureCollection(sub.map(_row)).toList(max_scenes + 1)
+        per[label] = ee.Dictionary(
+            {
+                "start": ee.Date(start).format("YYYY-MM-dd"),
+                "end": ee.Date(end).format("YYYY-MM-dd"),
+                "n_scenes": sub.size(),
+                "scenes": rows.map(lambda f: ee.Feature(f).toDictionary()),
+            }
+        )
+    info = cast(dict, ee.Dictionary(per).getInfo())
+
+    out: dict[str, dict[str, Any]] = {}
+    for label in labels:
+        rec = info[label]
+        if int(rec["n_scenes"]) > max_scenes:
+            raise ValueError(
+                f"period {label!r} holds {rec['n_scenes']} scenes, more than "
+                f"max_scenes={max_scenes}; narrow the region or raise max_scenes."
+            )
+        scenes = []
+        for raw in rec["scenes"]:
+            scene = {p: raw.get(k) for k, p in keys.items()}
+            scene["datetime"] = _iso_from_millis(scene.get("system:time_start"))
+            scenes.append(scene)
+        out[label] = {
+            "start": rec["start"],
+            "end": rec["end"],
+            "n_scenes": int(rec["n_scenes"]),
+            "scenes": scenes,
+        }
+    return out
 
 
 def build_period_composites(

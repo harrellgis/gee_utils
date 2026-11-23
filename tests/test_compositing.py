@@ -390,6 +390,27 @@ def test_period_stack_band_names():
     assert period_stack_band_names(["a"], ["x"], band_name="{label}|{band}") == ["x|a"]
 
 
+def test_period_stack_band_names_qa_layers():
+    from eetools.compositing import period_stack_band_names
+
+    # layer order is fixed (clear_count, then doy) whatever order is passed
+    assert period_stack_band_names(["a"], ["p1"], qa_layers=("doy", "clear_count")) == [
+        "a_p1",
+        "clear_count_p1",
+        "obs_doy_median_p1",
+        "obs_doy_min_p1",
+        "obs_doy_max_p1",
+    ]
+    assert period_stack_band_names(["a"], ["p1"], add_clear_count=True) == (
+        period_stack_band_names(["a"], ["p1"], qa_layers=("clear_count",))
+    )
+    assert period_stack_band_names(["a"], ["p1"], qa_layers=("doy",))[1:] == [
+        "obs_doy_median_p1",
+        "obs_doy_min_p1",
+        "obs_doy_max_p1",
+    ]
+
+
 @pytest.mark.parametrize(
     "kwargs, match",
     [
@@ -398,6 +419,8 @@ def test_period_stack_band_names():
         ({"periods": [("p", "2021-01-01", "2022-01-01")] * 2}, "unique"),
         ({"band_name": "{band}"}, "band_name"),
         ({"composite_stat": "max"}, "composite_stat"),
+        ({"qa_layers": ("gap",)}, "qa_layers"),
+        ({"qa_layers": "doy"}, "qa_layers"),
     ],
 )
 def test_build_period_stack_validates_before_ee(kwargs, match):
@@ -455,3 +478,106 @@ def test_build_period_stack_merges_typed_range_bands(ee_session):
         ee.ImageCollection(images), ["nd"], [("jun", "2021-06-01", "2021-07-01")]
     )
     assert _value_at(ee, stack, "nd_jun", 0.5) == pytest.approx(2 / 3, rel=1e-5)
+
+
+@pytest.mark.ee
+def test_build_period_stack_doy_layers(ee_session, masked_triplet):
+    """Clear observations on 1, 10 and 20 April 2021 (days 91, 100, 110); the first is
+    masked west of lon 0."""
+    from eetools.compositing import build_period_stack
+
+    periods = [
+        ("apr", "2021-04-01", "2021-05-01"),
+        ("none", "2022-01-01", "2022-02-01"),
+    ]
+    stack = build_period_stack(
+        masked_triplet, ["b"], periods, qa_layers=("clear_count", "doy")
+    )
+    assert stack.bandNames().getInfo()[:5] == [
+        "b_apr",
+        "clear_count_apr",
+        "obs_doy_median_apr",
+        "obs_doy_min_apr",
+        "obs_doy_max_apr",
+    ]
+    ee = ee_session
+    assert _value_at(ee, stack, "b_apr", 0.5) == pytest.approx(0.4)  # unchanged
+    assert _value_at(ee, stack, "obs_doy_median_apr", 0.5) == pytest.approx(100)
+    assert _value_at(ee, stack, "obs_doy_min_apr", 0.5) == pytest.approx(91)
+    assert _value_at(ee, stack, "obs_doy_max_apr", 0.5) == pytest.approx(110)
+    assert _value_at(ee, stack, "obs_doy_median_apr", -0.5) == pytest.approx(105)
+    assert _value_at(ee, stack, "obs_doy_min_apr", -0.5) == pytest.approx(100)
+    assert _value_at(ee, stack, "obs_doy_median_none", 0.5) is None  # empty: masked
+    assert _value_at(ee, stack, "clear_count_none", 0.5) == 0
+
+
+@pytest.mark.ee
+def test_build_period_stack_doy_crosses_year_end(ee_session):
+    from eetools.compositing import build_period_stack
+
+    ee = ee_session
+    images = [
+        ee.Image.constant(0.3)
+        .toFloat()
+        .rename("b")
+        .set("system:time_start", ee.Date(d).millis())
+        for d in ("2021-12-31", "2022-01-02")
+    ]
+    stack = build_period_stack(
+        ee.ImageCollection(images),
+        ["b"],
+        [("djf", "2021-12-01", "2022-03-01")],
+        qa_layers=("doy",),
+    )
+    assert _value_at(ee, stack, "obs_doy_min_djf", 0.5) == pytest.approx(365)
+    assert _value_at(ee, stack, "obs_doy_max_djf", 0.5) == pytest.approx(367)
+
+
+@pytest.mark.ee
+def test_build_period_stack_default_bands_unchanged(ee_session, masked_triplet):
+    from eetools.compositing import build_period_stack
+
+    periods = [("apr", "2021-04-01", "2021-05-01")]
+    stack = build_period_stack(masked_triplet, ["b"], periods, add_clear_count=True)
+    assert stack.bandNames().getInfo() == ["b_apr", "clear_count_apr"]
+
+
+def test_collection_lineage_validates_before_ee():
+    from eetools.compositing import collection_lineage
+
+    with pytest.raises(ValueError, match="periods"):
+        collection_lineage(None, [])
+    with pytest.raises(ValueError, match="properties"):
+        collection_lineage(None, [("p", "2021-01-01", "2021-02-01")], properties=[])
+
+
+@pytest.mark.ee
+def test_collection_lineage(ee_session, masked_triplet):
+    from eetools.compositing import collection_lineage
+
+    out = collection_lineage(
+        masked_triplet,
+        [("apr", "2021-04-01", "2021-04-15"), ("none", "2022-01-01", "2022-02-01")],
+    )
+    apr = out["apr"]
+    assert (apr["start"], apr["end"], apr["n_scenes"]) == (
+        "2021-04-01",
+        "2021-04-15",
+        2,
+    )
+    assert [s["datetime"] for s in apr["scenes"]] == [
+        "2021-04-01T00:00:00Z",
+        "2021-04-10T00:00:00Z",
+    ]
+    assert apr["scenes"][0]["system:time_start"] == 1617235200000  # system: props kept
+    assert set(apr["scenes"][0]) == {"system:index", "system:time_start", "datetime"}
+    assert out["none"] == {
+        "start": "2022-01-01",
+        "end": "2022-02-01",
+        "n_scenes": 0,
+        "scenes": [],
+    }
+    with pytest.raises(ValueError, match="max_scenes"):
+        collection_lineage(
+            masked_triplet, [("apr", "2021-04-01", "2021-05-01")], max_scenes=2
+        )
