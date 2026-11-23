@@ -171,3 +171,18 @@ def test_get_s2_sr_collection_real_cloud_masks(ee_session, small_aoi, cloud_mask
     if col.size().getInfo() == 0:
         pytest.skip("no Sentinel-2 scenes for the AOI/window")
     assert "NDVI" in col.first().bandNames().getInfo()
+
+
+@pytest.mark.slow
+def test_get_s2_sr_collection_keeps_scene_properties(ee_session, small_aoi):
+    """Metadata only: the standard scene properties survive processing."""
+    from eetools.constants import S2_SCENE_PROPERTIES
+    from eetools.sensors.sentinel.preprocessing import get_s2_sr_collection
+
+    col = get_s2_sr_collection(
+        small_aoi, ee_session.Date("2021-06-01"), ee_session.Date("2021-07-01")
+    )
+    if col.size().getInfo() == 0:
+        pytest.skip("no Sentinel-2 scenes for the AOI/window")
+    props = ee_session.Image(col.first()).toDictionary(list(S2_SCENE_PROPERTIES))
+    assert set(props.getInfo()) == set(S2_SCENE_PROPERTIES)

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Standard composite QA layers, second slice (vault: `feature_backlog/composite_qa_layers`).
+Opt-in: existing band lists, scene-table columns and `params_hash` values are unchanged.
+
+### Added
+- `qa_layers="gap"`: `obs_gap_max`, the longest interval in days between consecutive clear observations, with the window's start and end as boundaries (FORCE's clear-sky gap statistic). A window with no clear observation gives its length. Available on `build_period_stack`, `build_period_composites` and `build_seasonal_composites`.
+- `qa_layers` on `build_composite` (`"clear_count"` and `"doy"`, as calendar day of year; `"gap"` raises because there is no window), `build_period_composites` and `build_seasonal_composites`. The QA layers now share one implementation.
+- `zonal.scene_site_rows` / `export_scene_site_table(image_properties=...)`: scene properties as extra columns after `footprint_frac`; `scene_property_columns` drops a `system:` prefix and rejects clashing names.
+- Constants `OBS_GAP_BAND`, `S2_SCENE_PROPERTIES` (`CLOUDY_PIXEL_PERCENTAGE`, `SPACECRAFT_NAME`, `MGRS_TILE`, `MEAN_SOLAR_ZENITH_ANGLE`) and `LANDSAT_SCENE_PROPERTIES` (`CLOUD_COVER`, `SPACECRAFT_ID`, `WRS_PATH`, `WRS_ROW`, `SUN_ELEVATION`).
+
+### Changed
+- `process_s2_image`, `process_l8_image` and `process_landsat_image` (used by the L5, L7 and L9 builders) keep `S2_SCENE_PROPERTIES` / `LANDSAT_SCENE_PROPERTIES` next to `system:time_start`, so scene tables and lineage can record them. A table built with `image_properties=None` (all scalar image properties) from these collections gains those columns.
+- `SITE_EXPORT_UNSCALED_BANDS` also matches `obs_gap_max`, `obs_gap_max_*` and `*_obs_gap_max`.
+
 ## [0.14.0] - 2026-11-23
 
 - Standard composite QA layers, first slice (vault: `feature_backlog/composite_qa_layers`): per-pixel observation

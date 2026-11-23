@@ -183,22 +183,32 @@ wet_season = build_seasonal_composites(
 number of unmasked observations of the first requested band behind each pixel, so it
 counts cloud-free valid observations when the collection is cloud-masked.
 
-`build_period_stack` (fixed-band stacks for exports) also takes
-`qa_layers=("clear_count", "doy")`. `"doy"` adds `obs_doy_median`, `obs_doy_min` and
-`obs_doy_max` per period: the median, earliest and latest day of the clear observations
-behind each pixel, counted from 1 January of the period's start year (a window that
-crosses a year end continues past 365). They show whether a composite leans early or late
-in its window, which a scene list cannot: cloud masking makes each pixel's usable dates
-different. `collection_lineage(collection, periods, region=...)` lists the scenes in each
+Every composite builder (`build_composite`, `build_period_composites`,
+`build_seasonal_composites`, `build_period_stack`) also takes
+`qa_layers=("clear_count", "doy", "gap")`, all opt-in:
+- `"doy"` adds `obs_doy_median`, `obs_doy_min` and `obs_doy_max`: the median, earliest
+  and latest day of the clear observations behind each pixel. Days are counted from
+  1 January of the window's start year, so a window that crosses a year end continues
+  past 365; `build_composite`, which has no window, uses the calendar day of year.
+- `"gap"` adds `obs_gap_max`: the longest interval in days between consecutive clear
+  observations, with the window's start and end as boundaries (FORCE's clear-sky gap
+  statistic). It needs a window, so `build_composite` doesn't offer it.
+
+These layers show whether a composite leans early or late in its window, or is "clear"
+only at its ends, which a scene list cannot: cloud masking makes each pixel's usable
+dates different. `collection_lineage(collection, periods, region=...)` lists the scenes in each
 period (metadata only, one `getInfo`). Pass it to `export_composites_per_site(lineage=...)`
 to record it in the manifests, where it is not hashed, so a changed scene set is visible
-without forcing a re-export.
+without forcing a re-export. For per-site scene tables, `zonal.export_scene_site_table`
+takes `image_properties=S2_SCENE_PROPERTIES` (or `LANDSAT_SCENE_PROPERTIES`): scene cloud
+cover, satellite, tile or path/row, and sun angle, as extra columns. The S2 and Landsat
+builders keep those properties through processing.
 
 ```python
 from eetools.compositing import build_period_stack, collection_lineage
 
 periods = [("2021_dry", "2021-06-01", "2021-10-01"), ("2026_dry", "2026-06-01", "2026-10-01")]
-stack = build_period_stack(col, ["B4", "B8"], periods, qa_layers=("clear_count", "doy"))
+stack = build_period_stack(col, ["B4", "B8"], periods, qa_layers=("clear_count", "doy", "gap"))
 lineage = {sid: collection_lineage(col, periods, region=win) for sid, win in windows.items()}
 ```
 

@@ -484,6 +484,35 @@ _VALID_BAND = "eetools_valid"  # EE band names may not start with "_"
 _FOOTPRINT_BAND = "eetools_footprint"
 
 
+def scene_property_columns(
+    image_properties: Sequence[str], bands: Sequence[str] = ()
+) -> dict[str, str]:
+    """Column name per scene property for the scene table (client-side, no EE).
+
+    A ``system:`` prefix is dropped (``system:time_start`` -> ``time_start``); other
+    names are kept.
+
+    Args:
+        image_properties: Image property names.
+        bands: The table's band columns, checked for clashes.
+
+    Returns:
+        dict. ``{property: column}`` in the given order.
+
+    Raises:
+        ValueError: If image_properties is a single string, or a column repeats or clashes with a band or a fixed column.
+    """
+    if isinstance(image_properties, str):
+        raise ValueError("image_properties must be a sequence of property names.")
+    cols = {p: p.removeprefix("system:") for p in image_properties}
+    taken = [*SCENE_TABLE_ID_COLUMNS, *SCENE_TABLE_FRACTION_COLUMNS, *bands]
+    names = list(cols.values())
+    clash = sorted({c for c in names if c in taken or names.count(c) > 1})
+    if clash:
+        raise ValueError(f"image property columns clash with other columns: {clash}")
+    return cols
+
+
 def scene_site_rows(
     collection: ee.ImageCollection,
     regions: ee.FeatureCollection,
@@ -492,6 +521,7 @@ def scene_site_rows(
     scale: float,
     id_property: str = "site_id",
     crs: str | None = None,
+    image_properties: Sequence[str] = (),
 ) -> ee.FeatureCollection:
     """Per-scene polygon means with clear and footprint fractions (no compositing).
 
@@ -515,17 +545,19 @@ def scene_site_rows(
         scale: Reduction scale in metres (required).
         id_property: Region property written as ``region_id``.
         crs: Optional reduction CRS (default: EE picks the image's).
+        image_properties: Scene properties to add as columns (default none), e.g. ``S2_SCENE_PROPERTIES`` or ``LANDSAT_SCENE_PROPERTIES``; column names drop a ``system:`` prefix (``scene_property_columns``). A property the image lacks gives an empty value.
 
     Returns:
         ee.FeatureCollection. One geometry-free feature per scene x overlapped region.
 
     Raises:
-        ValueError: If ``bands`` is empty or ``scale`` is not positive.
+        ValueError: If ``bands`` is empty, ``scale`` is not positive, or an image property column clashes with another column.
     """
     bands = list(bands)
     if not bands:
         raise ValueError("bands must name at least one band.")
     _validate_positive("scale", scale)
+    prop_cols = scene_property_columns(image_properties, bands)
     regions = ee.FeatureCollection(regions)
 
     def _per_image(image: ee.Image) -> ee.FeatureCollection:
@@ -549,6 +581,7 @@ def scene_site_rows(
         )
         date = image.date().format("YYYY-MM-dd")
         scene_id = image.get("system:index")
+        scene_props = {col: image.get(p) for p, col in prop_cols.items()}
 
         def _row(feature: ee.Feature) -> ee.Feature:
             feature = ee.Feature(feature)
@@ -562,6 +595,7 @@ def scene_site_rows(
                     "clear_frac": ee.Number(feature.get(_VALID_BAND)).divide(
                         footprint_frac
                     ),
+                    **scene_props,
                 }
             ).combine(feature.toDictionary(bands))
             return ee.Feature(None, props)
@@ -585,11 +619,12 @@ def export_scene_site_table(
     crs: str | None = None,
     skip_existing: bool = True,
     start: bool = True,
+    image_properties: Sequence[str] = (),
 ) -> ee.batch.Task | None:
     """Export a per-scene site table (``scene_site_rows``) as one CSV.
 
     Columns, in order: ``date, scene_id, region_id, <bands...>, clear_frac,
-    footprint_frac``. A band mean is empty where a scene has no clear pixel in the
+    footprint_frac``, then one column per ``image_properties`` entry. A band mean is empty where a scene has no clear pixel in the
     region. Written to ``gs://<bucket>/<prefix>/<name>.csv`` (``dest="gcs"``) or
     ``<name>.csv`` in the Drive folder ``prefix``.
 
@@ -606,6 +641,7 @@ def export_scene_site_table(
         crs: Optional reduction CRS.
         skip_existing: GCS only: skip when the CSV already exists (needs ``eetools[gcs]``).
         start: Start the task (default True); False returns it unstarted.
+        image_properties: Scene properties to add as columns (default none), e.g. ``S2_SCENE_PROPERTIES``; see ``scene_site_rows``.
 
     Returns:
         ee.batch.Task | None. The export task, or None when skipped.
@@ -614,10 +650,22 @@ def export_scene_site_table(
         ValueError: If ``bands`` is empty, ``scale`` is not positive, ``dest`` is unknown, or ``bucket`` is missing for 'gcs'.
     """
     validate_table_dest(dest, bucket)
+    prop_cols = scene_property_columns(image_properties, bands)
     rows = scene_site_rows(
-        collection, regions, bands=bands, scale=scale, id_property=id_property, crs=crs
+        collection,
+        regions,
+        bands=bands,
+        scale=scale,
+        id_property=id_property,
+        crs=crs,
+        image_properties=list(image_properties),
     )
-    selectors = [*SCENE_TABLE_ID_COLUMNS, *bands, *SCENE_TABLE_FRACTION_COLUMNS]
+    selectors = [
+        *SCENE_TABLE_ID_COLUMNS,
+        *bands,
+        *SCENE_TABLE_FRACTION_COLUMNS,
+        *prop_cols.values(),
+    ]
     return export_csv_table(
         rows,
         dest=dest,

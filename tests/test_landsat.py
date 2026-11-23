@@ -131,6 +131,21 @@ def test_get_l8_sr_collection_real(ee_session, small_aoi):
     assert "NDVI" in col.first().bandNames().getInfo()
 
 
+@pytest.mark.slow
+def test_get_l8_sr_collection_keeps_scene_properties(ee_session, small_aoi):
+    """Metadata only: the standard scene properties survive processing."""
+    from eetools.constants import LANDSAT_SCENE_PROPERTIES
+    from eetools.sensors.landsat.preprocessing import get_l8_sr_collection
+
+    col = get_l8_sr_collection(
+        small_aoi, ee_session.Date("2021-01-01"), ee_session.Date("2021-04-01")
+    )
+    if col.size().getInfo() == 0:
+        pytest.skip("no Landsat scenes for the AOI/window")
+    props = ee_session.Image(col.first()).toDictionary(list(LANDSAT_SCENE_PROPERTIES))
+    assert set(props.getInfo()) == set(LANDSAT_SCENE_PROPERTIES)
+
+
 # --------------------------------------------------------------------------- #
 # Landsat 9 (OLI) — identical band layout to Landsat 8
 # --------------------------------------------------------------------------- #

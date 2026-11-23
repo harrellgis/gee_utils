@@ -12,6 +12,7 @@ from eetools.constants import (
     L9_SR_COLLECTION,
     LANDSAT_C2_ADD_OFFSET,
     LANDSAT_C2_SCALE_FACTOR,
+    LANDSAT_SCENE_PROPERTIES,
     TM_BAND_MAP,
     TM_BANDS,
 )
@@ -64,7 +65,7 @@ def process_l8_image(
         domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start and ``LANDSAT_SCENE_PROPERTIES``.
     """
     source = image
     image = select_base_bands(
@@ -75,7 +76,9 @@ def process_l8_image(
     image = calc_indices(
         image=image, band_map=L8_BAND_MAP, indices=indices, domains=domains
     )
-    return image.copyProperties(source, ["system:time_start"])
+    return image.copyProperties(
+        source, ["system:time_start", *LANDSAT_SCENE_PROPERTIES]
+    )
 
 
 def get_l8_sr_collection(
@@ -141,7 +144,7 @@ def process_landsat_image(
         domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start and ``LANDSAT_SCENE_PROPERTIES``.
     """
     source = image
     image = select_base_bands(source, input_bands=source_bands)
@@ -149,7 +152,9 @@ def process_landsat_image(
     image = calc_indices(
         image=image, band_map=band_map, indices=indices, domains=domains
     )
-    return image.copyProperties(source, ["system:time_start"])
+    return image.copyProperties(
+        source, ["system:time_start", *LANDSAT_SCENE_PROPERTIES]
+    )
 
 
 def get_landsat_sr_collection(
@@ -251,7 +256,7 @@ def process_l9_image(
         domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start and ``LANDSAT_SCENE_PROPERTIES``.
     """
     return process_landsat_image(
         image, L9_BANDS, L9_BAND_MAP, indices=indices, domains=domains
@@ -334,7 +339,7 @@ def process_l7_image(
         domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start and ``LANDSAT_SCENE_PROPERTIES``.
     """
     return process_landsat_image(
         image, TM_BANDS, TM_BAND_MAP, indices=indices, domains=domains
@@ -420,7 +425,7 @@ def process_l5_image(
         domains: Index domains to append, or None. See eetools.sensors.indices.calc_indices.
 
     Returns:
-        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start.
+        ee.Image with calibrated reflectance bands and appended index bands, preserving system:time_start and ``LANDSAT_SCENE_PROPERTIES``.
     """
     return process_landsat_image(
         image, TM_BANDS, TM_BAND_MAP, indices=indices, domains=domains
