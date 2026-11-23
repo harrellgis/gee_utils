@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Standard composite QA layers, first slice (vault: `feature_backlog/composite_qa_layers`):
+per-pixel observation dates on period stacks, and scene lineage in export manifests.
+Opt-in, so existing band lists and `params_hash` values are unchanged.
+
+### Added
+- `build_period_stack(qa_layers=...)`: per-pixel QA layers from `COMPOSITE_QA_LAYERS`. `"clear_count"` is the same as `add_clear_count=True`. `"doy"` adds `obs_doy_median`, `obs_doy_min` and `obs_doy_max` per period: the median, earliest and latest day of the clear observations of the first band, counted from 1 January of the period's start year (monotonic across a year end; masked where there is no clear observation). `period_stack_band_names(qa_layers=...)` gives the names client-side.
+- `compositing.collection_lineage(collection, periods, region=, properties=, max_scenes=)`: the scenes of each period (default properties `system:index`, `system:time_start`, plus an ISO `datetime`). Metadata only, one `getInfo`.
+- `io.export_composites_per_site(lineage=...)`: per-region scene lineage written into each manifest as `lineage` (a `"*"` key applies to every region without its own). Not part of `params_hash`, like `task_id`.
+- Constants `OBS_DOY_BAND`, `OBS_DOY_BANDS`, `COMPOSITE_QA_LAYERS`, `LINEAGE_PROPERTIES`, `LINEAGE_MAX_SCENES`.
+
+### Changed
+- `SITE_EXPORT_UNSCALED_BANDS` also matches `obs_doy_*` and `*_obs_doy_*`, so the day bands are stored unscaled (x 10,000 they would overflow int16). Only bands matching the new patterns change, so manifests and `params_hash` of existing stacks stay the same (tested).
+
 ## [0.13.0] - 2026-11-19
 
 - Site-selection condition diagnostic for any project (`plot_pool_condition`), with circular AUCs removed.

@@ -1307,6 +1307,7 @@ def export_composites_per_site(
     skip_existing: bool = True,
     overwrite: bool = False,
     start: bool = True,
+    lineage: Mapping[str, Any] | None = None,
 ) -> list[ExportRecord]:
     """Export one multiband stack per region to Cloud Storage, each with a band manifest.
 
@@ -1339,6 +1340,9 @@ def export_composites_per_site(
       (treat that as pending); ``file`` is always the unsharded basename;
     - ``task_id`` (the EE task id, written since 0.7.2) is informational and not
       part of ``params_hash``;
+    - ``lineage`` (since 0.14.0, only when passed) is informational and not part of
+      ``params_hash``: a different scene set never forces a re-export, but it is
+      visible by comparing manifests;
     - ``params_hash`` covers the export parameters and band list
       (``manifest_params_hash``), not the file content (that is the GCS MD5).
 
@@ -1372,6 +1376,7 @@ def export_composites_per_site(
         skip_existing: Apply the skip logic above (default True).
         overwrite: Replace an existing export whose parameters differ.
         start: Start the tasks and write the manifests (default True). With False, nothing is written; start each task and then call ``write_export_manifest``.
+        lineage: Optional scene lineage written into each manifest as ``lineage`` (not hashed), keyed by region id, e.g. ``{rid: compositing.collection_lineage(col, periods, region=window)}``; a ``"*"`` key applies to every region without its own entry. Regions with no entry get no ``lineage`` key. Skipped and pending regions keep their existing manifest.
 
     Returns:
         list[ExportRecord]. One record per region, in collection order.
@@ -1422,6 +1427,10 @@ def export_composites_per_site(
             nodata=fill,
             bands=entries,
         )
+        if lineage is not None:
+            region_lineage = lineage.get(region_id, lineage.get("*"))
+            if region_lineage is not None:
+                manifest["lineage"] = region_lineage
         shape = _grid_shape(ring, transform)
         size = len(bands) * shape[0] * shape[1] * SITE_EXPORT_DTYPE_BYTES[dtype]
         if size > SITE_EXPORT_WARN_BYTES:

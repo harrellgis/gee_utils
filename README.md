@@ -183,6 +183,25 @@ wet_season = build_seasonal_composites(
 number of unmasked observations of the first requested band behind each pixel, so it
 counts cloud-free valid observations when the collection is cloud-masked.
 
+`build_period_stack` (fixed-band stacks for exports) also takes
+`qa_layers=("clear_count", "doy")`. `"doy"` adds `obs_doy_median`, `obs_doy_min` and
+`obs_doy_max` per period: the median, earliest and latest day of the clear observations
+behind each pixel, counted from 1 January of the period's start year (a window that
+crosses a year end continues past 365). They show whether a composite leans early or late
+in its window, which a scene list cannot: cloud masking makes each pixel's usable dates
+different. `collection_lineage(collection, periods, region=...)` lists the scenes in each
+period (metadata only, one `getInfo`). Pass it to `export_composites_per_site(lineage=...)`
+to record it in the manifests, where it is not hashed, so a changed scene set is visible
+without forcing a re-export.
+
+```python
+from eetools.compositing import build_period_stack, collection_lineage
+
+periods = [("2021_dry", "2021-06-01", "2021-10-01"), ("2026_dry", "2026-06-01", "2026-10-01")]
+stack = build_period_stack(col, ["B4", "B8"], periods, qa_layers=("clear_count", "doy"))
+lineage = {sid: collection_lineage(col, periods, region=win) for sid, win in windows.items()}
+```
+
 Each sensor exposes a `get_<sensor>_collection(aoi, start_date, end_date, ...)`
 builder (`get_l8_sr_collection`, `get_hls_merged_collection`,
 `get_chirps_collection`, `get_modis_lai_fpar_col`, …) that validates the date
