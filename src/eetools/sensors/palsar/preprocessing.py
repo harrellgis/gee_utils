@@ -51,8 +51,12 @@ def _dn_to_db(dn: ee.Image) -> ee.Image:
 
 
 def _db_to_linear(db: ee.Image) -> ee.Image:
-    """Linear power = 10^(dB / 10)."""
-    return ee.Image(10).pow(db.divide(10))
+    """Linear power = 10^(dB / 10), keeping the band names of ``db``.
+
+    ``ee.Image(10).pow(x)`` names its output after the first operand when both have
+    one band, so a single-polarisation input would come back as ``constant``.
+    """
+    return ee.Image(10).pow(db.divide(10)).rename(db.bandNames())
 
 
 def _linear_to_db(linear: ee.Image) -> ee.Image:

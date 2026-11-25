@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Single-polarisation ScanSAR composites failed.** `palsar2_scansar_composite(..., polarizations=("HV",))` failed in Earth Engine with "Band pattern 'HV' did not match any bands. Available bands: [constant]". The private `_db_to_linear` computed `ee.Image(10).pow(dB / 10)`, and when both operands have one band EE names the result after the first one (`constant`). It now keeps the input band names. The HH+HV default was unaffected, because there the names come from the two-band operand. Found by the first tgbs_rs `structure export` (HV only) for TGBS_Ecosia and TGBS_ITF, before any task was submitted.
+
 ## [0.15.0] - 2026-11-23
 
 - Standard composite QA layers, second slice (vault: `feature_backlog/composite_qa_layers`): the `"gap"` layer
