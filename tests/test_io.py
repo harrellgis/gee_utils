@@ -916,6 +916,18 @@ def test_export_composites_per_site_one_export_and_manifest_per_region(site_expo
     site_export["write"].assert_any_call("bkt", records[1])
 
 
+def test_export_composites_per_site_band_names_skip_the_lookup(site_export):
+    names = ["HV_2015", "HV_scene_count_2015", "height_eth"]
+    records = _run_site_export(band_names=names, dtype="float32", scale_factor=1)
+    site_export["ee"].Image.return_value.bandNames.assert_not_called()
+    assert [b["name"] for b in records[0].manifest["bands"]] == names
+    (_, entries, _), _ = site_export["scale_stack"].call_args
+    assert [e["name"] for e in entries] == names
+    for bad in ([], ["HV_2015", "HV_2015"]):
+        with pytest.raises(ValueError, match="band_names"):
+            _run_site_export(band_names=bad)
+
+
 def test_export_composites_per_site_start_false_writes_no_manifest(site_export):
     records = _run_site_export(start=False, skip_existing=False)
     assert [r.status for r in records] == ["unstarted", "unstarted"]

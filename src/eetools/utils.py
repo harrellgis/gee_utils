@@ -146,7 +146,9 @@ def validate_collection_date_range(
         raise ValueError(
             f"Invalid end_date: {e_str} is on/before the earliest {sensor_label} date over this AOI ({min_str})."
         )
-    if s_ms < min_ts:
+    # By calendar day: products stamp their first image at a time of day (GEDI
+    # monthly rasters at 08:00 UTC), so a start on that same day is not "earlier".
+    if cast(str, s_str) < cast(str, min_str):
         raise ValueError(
             f"Invalid start_date: {s_str} is earlier than the first available {sensor_label} date over this AOI ({min_str})."
         )
