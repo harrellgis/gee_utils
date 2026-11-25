@@ -1308,6 +1308,7 @@ def export_composites_per_site(
     overwrite: bool = False,
     start: bool = True,
     lineage: Mapping[str, Any] | None = None,
+    band_names: Sequence[str] | None = None,
 ) -> list[ExportRecord]:
     """Export one multiband stack per region to Cloud Storage, each with a band manifest.
 
@@ -1357,7 +1358,10 @@ def export_composites_per_site(
     exports without any check or deletion.
 
     Makes two small ``getInfo`` calls (band names; all region ids and bounds), plus one
-    task-status request per region with a manifest but no tif (no EECU).
+    task-status request per region with a manifest but no tif (no EECU). Pass
+    ``band_names`` to skip the band-name call: resolving the names of a large lazy stack
+    (e.g. many yearly composites over hundreds of scenes) can exceed Earth Engine's
+    interactive memory even when the export itself runs fine.
 
     Args:
         image: Multiband image to export (one stack, all periods/indices).
@@ -1377,12 +1381,13 @@ def export_composites_per_site(
         overwrite: Replace an existing export whose parameters differ.
         start: Start the tasks and write the manifests (default True). With False, nothing is written; start each task and then call ``write_export_manifest``.
         lineage: Optional scene lineage written into each manifest as ``lineage`` (not hashed), keyed by region id, e.g. ``{rid: compositing.collection_lineage(col, periods, region=window)}``; a ``"*"`` key applies to every region without its own entry. Regions with no entry get no ``lineage`` key. Skipped and pending regions keep their existing manifest.
+        band_names: Optional band names of ``image``, in the order to export, instead of reading them with ``image.bandNames().getInfo()``. Each is selected by name, so the manifest order always matches the tif; a name ``image`` does not have fails the export task, not this call.
 
     Returns:
         list[ExportRecord]. One record per region, in collection order.
 
     Raises:
-        ValueError: For an invalid ``product``/``region_id`` name, duplicate region ids, unknown ``dtype``, non-positive ``scale``/``scale_factor``, bad ``band_meta``, or an existing export with other parameters (without ``overwrite``).
+        ValueError: For an invalid ``product``/``region_id`` name, duplicate region ids, unknown ``dtype``, non-positive ``scale``/``scale_factor``, bad ``band_meta``, empty or duplicate ``band_names``, or an existing export with other parameters (without ``overwrite``).
         RuntimeError: If a matching manifest's task succeeded but its tif is missing.
         ImportError: If google-cloud-storage is missing and ``skip_existing`` or ``start`` needs it.
     """
@@ -1397,7 +1402,12 @@ def export_composites_per_site(
     base = sanitize_file_name_prefix(f"{prefix}/{product}")
 
     image = ee.Image(image)
-    bands = cast(list, image.bandNames().getInfo())
+    if band_names is not None:
+        bands = [str(b) for b in band_names]
+        if not bands or len(set(bands)) != len(bands):
+            raise ValueError("band_names must be non-empty and unique.")
+    else:
+        bands = cast(list, image.bandNames().getInfo())
     entries = build_band_entries(
         bands,
         scale_factor=scale_factor,

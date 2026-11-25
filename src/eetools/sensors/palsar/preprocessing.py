@@ -324,37 +324,46 @@ def palsar2_scansar_composite(
         is_linear = ee.Algorithms.IsEqual(img.get(_UNIT_PROPERTY), "linear")
         return ee.Image(ee.Algorithms.If(is_linear, bands, _db_to_linear(bands)))
 
-    linear = window.map(_to_linear)
+    # One fully masked placeholder per collection keeps every reduction's bands even
+    # when the window holds no scene (an empty collection reduces to a band-less
+    # image), without ee.Algorithms.If: an If makes EE evaluate the scene filter just
+    # to know the band names, which ran out of user memory for a stack of yearly
+    # composites over a few hundred scenes. Masked pixels are ignored by every
+    # reducer, so the placeholder changes no value; an empty window gives masked
+    # backscatter and scene_count 0.
+    blank = ee.Image.constant([0.0] * len(pols)).rename(pols).toFloat().updateMask(0)
+    blank_lin = (
+        ee.Image.constant(0.0).rename(PALSAR2_SCANSAR_LIN_BAND).toFloat().updateMask(0)
+    )
+    fallback = ee.Projection("EPSG:4326").atScale(PALSAR2_SCALE_M)
+    linear = window.map(_to_linear).merge(
+        ee.ImageCollection([blank.setDefaultProjection(fallback)])
+    )
     backscatter = _linear_to_db(linear.reduce(ee_reducer).rename(pols))
-    lin_mean = window.select(PALSAR2_SCANSAR_LIN_BAND).mean()
+    lin_mean = (
+        window.select(PALSAR2_SCANSAR_LIN_BAND)
+        .merge(ee.ImageCollection([blank_lin]))
+        .mean()
+    )
     count = linear.select(pols[0]).count().unmask(0)
-    projection = ee.Image(window.first()).select(pols[0]).projection()
-    filled = (
+    # The first real scene when there is one (merge appends the placeholder last).
+    projection = ee.Image(linear.first()).select(pols[0]).projection()
+    image = (
         backscatter.addBands(lin_mean.rename(PALSAR2_SCANSAR_LIN_MEAN_BAND))
         .addBands(count.toInt16().rename(PALSAR2_SCANSAR_COUNT_BAND))
         .setDefaultProjection(projection)
     )
-
-    # An empty window reduces to a band-less image; return the same bands instead,
-    # masked, with scene_count 0, so thin years flag rather than fail at export.
-    empty = (
-        ee.Image.constant([0.0] * (len(pols) + 1))
-        .rename([*pols, PALSAR2_SCANSAR_LIN_MEAN_BAND])
-        .toFloat()
-        .updateMask(0)
-        .addBands(ee.Image.constant(0).toInt16().rename(PALSAR2_SCANSAR_COUNT_BAND))
-        .setDefaultProjection(ee.Projection("EPSG:4326").atScale(PALSAR2_SCALE_M))
-    )
     n_scenes = window.size()
-    image = ee.Image(ee.Algorithms.If(n_scenes.gt(0), filled, empty))
-    return image.set(
-        {
-            "year": year,
-            "start_month": m0,
-            "end_month": m1,
-            "reducer": reducer,
-            "n_scenes": n_scenes,
-            _UNIT_PROPERTY: "dB",
-            "system:time_start": ee.Date.fromYMD(year, m0, 1).millis(),
-        }
+    return ee.Image(
+        image.set(
+            {
+                "year": year,
+                "start_month": m0,
+                "end_month": m1,
+                "reducer": reducer,
+                "n_scenes": n_scenes,
+                _UNIT_PROPERTY: "dB",
+                "system:time_start": ee.Date.fromYMD(year, m0, 1).millis(),
+            }
+        )
     )

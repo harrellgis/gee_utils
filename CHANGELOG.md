@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`export_composites_per_site(band_names=...)`.** The caller can pass the stack's band names (in export order) instead of eetools reading them with `image.bandNames().getInfo()`. For a large lazy stack, that interactive call can exceed Earth Engine's user memory even though the export task itself runs fine. The tgbs_rs structure stack (11 yearly ScanSAR composites plus heights) failed this way for TGBS_ITF. Bands are selected by name, so the manifest order always matches the tif.
+
+### Fixed
+- **`validate_collection_date_range` rejected a start on the first image's day.** The check compared timestamps, and GEDI L4A monthly rasters are stamped 08:00 UTC, so `get_gedi_l4a_monthly(..., "2019-04-01", ...)` failed with "2019-04-01 is earlier than the first available GEDI L4A monthly date over this AOI (2019-04-01)". The start is now compared by calendar day. Found by the tgbs_rs structure export (GEDI footprint tables).
+
+### Changed
+- **`palsar2_scansar_composite` without `ee.Algorithms.If`.** The empty-window fallback is now one fully masked placeholder image merged into each reduction, instead of `If(n_scenes > 0, composite, empty)`. EE no longer evaluates the scene filter just to resolve the band names: one year over 379 ITF scenes went from 10-15 s to about 7 s for `bandNames().getInfo()`. On its own this did not get an 11-year stack under the interactive memory limit (see `band_names` above). Outputs are unchanged: an empty window still gives masked backscatter, `scene_count` 0 and the same bands.
+
 ## [0.15.1] - 2026-11-25
 
 ### Fixed
