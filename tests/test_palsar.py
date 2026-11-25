@@ -205,6 +205,25 @@ def test_scansar_composite_averages_in_linear_power(ee_session, first_value, lin
 
 
 @pytest.mark.ee
+@pytest.mark.parametrize("linear", [False, True])
+def test_scansar_composite_single_polarisation(ee_session, first_value, linear):
+    # One band (HV only): 10 ** x keeps the band name, so the composite does not fail
+    # with "Band pattern 'HV' did not match any bands. Available bands: [constant]".
+    scenes = ee_session.ImageCollection(
+        [
+            _scansar_scene(ee_session, _dn_for_db(-10), _dn_for_db(-10)),
+            _scansar_scene(ee_session, _dn_for_db(-20), _dn_for_db(-20)),
+        ]
+    ).map(lambda img: palsar.palsar2_scansar_to_gamma0(img, ("HV",), linear=linear))
+    out = palsar.palsar2_scansar_composite(
+        scenes, 2025, (6, 9), polarizations=("HV",), reducer="mean"
+    )
+    assert out.bandNames().getInfo() == ["HV", "lin_mean", "scene_count"]
+    assert first_value(out, "HV") == pytest.approx(10 * math.log10(0.055), abs=0.01)
+    assert first_value(out, "scene_count") == 2
+
+
+@pytest.mark.ee
 def test_scansar_composite_window_and_count(ee_session, first_value):
     scenes = ee_session.ImageCollection(
         [
