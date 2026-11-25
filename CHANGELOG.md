@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-25
+
 ### Added
 - **`export_composites_per_site(band_names=...)`.** The caller can pass the stack's band names (in export order) instead of eetools reading them with `image.bandNames().getInfo()`. For a large lazy stack, that interactive call can exceed Earth Engine's user memory even though the export task itself runs fine. The tgbs_rs structure stack (11 yearly ScanSAR composites plus heights) failed this way for TGBS_ITF. Bands are selected by name, so the manifest order always matches the tif.
 
