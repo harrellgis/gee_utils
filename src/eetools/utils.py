@@ -1,3 +1,4 @@
+import datetime as _dt
 from typing import cast
 
 import ee
@@ -114,7 +115,7 @@ def validate_collection_date_range(
         collection_id: EE collection asset ID string, or list of IDs that are merged before checking.
         aoi: Area of interest as ee.Geometry used to filter the collection.
         start_date: Requested start date as ee.Date; must be earlier than end_date.
-        end_date: Requested end date as ee.Date; must be later than start_date.
+        end_date: Requested end date as ee.Date, exclusive (as in filterDate); must be later than start_date and at most the day after the last image.
         sensor_label: Human-readable sensor name used in error messages (default 'imagery').
 
     Returns:
@@ -152,9 +153,14 @@ def validate_collection_date_range(
         raise ValueError(
             f"Invalid start_date: {s_str} is earlier than the first available {sensor_label} date over this AOI ({min_str})."
         )
-    if e_ms > max_ts:
+    # end_date is exclusive (as in filterDate), so "through the last image day" is
+    # that day + 1; compare by calendar day.
+    after_last = (
+        _dt.date.fromisoformat(cast(str, max_str)) + _dt.timedelta(days=1)
+    ).isoformat()
+    if cast(str, e_str) > after_last:
         raise ValueError(
-            f"Invalid end_date: {e_str} is later than the most recent {sensor_label} date over this AOI ({max_str})."
+            f"Invalid end_date: {e_str} (exclusive) is later than the day after the most recent {sensor_label} date over this AOI ({max_str})."
         )
 
 

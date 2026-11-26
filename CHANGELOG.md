@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-26
+
+### Fixed
+- **`validate_collection_date_range` rejected an exclusive end on the day after the last image.** End dates in eetools are exclusive (as in `filterDate`), but the check refused any end later than the last image's timestamp, so "everything through the last image" (`end = last day + 1`) could never pass. The end is now compared by calendar day against the day after the last image. Found by the tgbs_rs rainfall export: CHIRPS v2 ends on 2026-09-30, and `end_date` 2026-10-01 failed with "Invalid end_date: 2026-10-01 is later than the most recent CHIRPS imagery date over this AOI (2026-09-30)". This affects every builder that validates its dates (CHIRPS, FIRMS, MODIS, GEDI and others).
+
 ## [0.16.1] - 2026-11-26
 
 ### Fixed
