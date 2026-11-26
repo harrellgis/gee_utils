@@ -8,6 +8,7 @@ from eetools.constants import (
     FIRMS_CONFIDENCE_BAND,
     FIRMS_DEFAULT_MIN_CONFIDENCE,
     FIRMS_FIRE_BAND,
+    REGION_BOUNDS_MAX_ERROR_M,
 )
 from eetools.utils import validate_collection_date_range
 
@@ -113,7 +114,7 @@ def firms_counts(
         raise ValueError(f"scale must be positive, got {scale}.")
     regions = ee.FeatureCollection(regions)
     fires = get_firms(
-        regions.geometry().bounds(),
+        regions.geometry(REGION_BOUNDS_MAX_ERROR_M).bounds(REGION_BOUNDS_MAX_ERROR_M),
         f"{start_year}-01-01",
         f"{end_year + 1}-01-01",
         min_confidence,

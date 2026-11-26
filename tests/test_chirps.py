@@ -212,6 +212,11 @@ def test_export_daily_rainfall_table_one_gcs_task_per_version_year(daily_export)
     source = mock_ee.ImageCollection.return_value.filterBounds.return_value
     source.select.return_value.filterDate.assert_any_call("2020-06-01", "2021-01-01")
     source.select.return_value.filterDate.assert_any_call("2021-01-01", "2022-01-01")
+    regions = mock_ee.FeatureCollection.return_value
+    regions.geometry.assert_called_once_with(constants.REGION_BOUNDS_MAX_ERROR_M)
+    regions.geometry.return_value.bounds.assert_called_once_with(
+        constants.REGION_BOUNDS_MAX_ERROR_M
+    )
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-26
+
+### Fixed
+- **`firms_counts` and `export_daily_rainfall_table` failed on planar regions.** Both filter the collection by `regions.geometry().bounds()`, with no error margin. For regions given as planar polygons in a projected CRS (the tgbs_rs site windows, UTM), Earth Engine fails with "Geometry.bounds: Unable to perform this geometry operation. Please specify a non-zero error margin." They now use `geometry(REGION_BOUNDS_MAX_ERROR_M).bounds(REGION_BOUNDS_MAX_ERROR_M)` (1 m; new constant). The bounds only filter the collection, so results are unchanged for lon/lat regions. Found by the first tgbs_rs `fire export` for TGBS_Ecosia and TGBS_ITF, before any task was submitted.
+
 ## [0.16.0] - 2026-11-25
 
 ### Added

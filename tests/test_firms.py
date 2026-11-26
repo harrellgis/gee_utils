@@ -55,6 +55,11 @@ def test_firms_counts_one_unweighted_sum_per_year():
     ):
         firms.firms_counts("REGIONS", 2019, 2021, scale=1000, min_confidence=50)
     regions = mock_ee.FeatureCollection.return_value
+    # A non-zero error margin, so planar (projected-CRS) regions work.
+    regions.geometry.assert_called_once_with(constants.REGION_BOUNDS_MAX_ERROR_M)
+    regions.geometry.return_value.bounds.assert_called_once_with(
+        constants.REGION_BOUNDS_MAX_ERROR_M
+    )
     get_firms.assert_called_once_with(
         regions.geometry.return_value.bounds.return_value,
         "2019-01-01",
@@ -104,3 +109,18 @@ def test_firms_counts_real(ee_session):
         p["fire_count"] >= 0 and float(p["fire_count"]).is_integer() for p in props
     )
     assert sum(p["fire_count"] for p in props) > 0
+
+
+@pytest.mark.ee
+@pytest.mark.slow
+def test_firms_counts_planar_utm_region(ee_session):
+    """A planar window in a UTM CRS (as tgbs_rs sends) needs a bounds error margin."""
+    import ee
+
+    # 2 km window near the Mara test box, planar in UTM 36S.
+    region = ee.Geometry.Rectangle(
+        [722000, 9823000, 724000, 9825000], "EPSG:32736", False
+    )
+    regions = ee.FeatureCollection([ee.Feature(region, {"site_id": "w1"})])
+    rows = firms.firms_counts(regions, 2019, 2019, scale=1000).getInfo()["features"]
+    assert [f["properties"]["region_id"] for f in rows] == ["w1"]
