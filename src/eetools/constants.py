@@ -845,6 +845,10 @@ CANNY_SIGMA = 1.0  # Gaussian smoothing sigma (pixels) before edge detection
 # outside the region (e.g. a 6 ha site inside one 5566 m CHIRPS pixel).
 DEFAULT_MIN_PIXELS_PER_REGION = 4
 REGION_AREA_MAX_ERROR_M = 1  # maxError (m) for the geometry.area() size check
+# maxError (m) for the bounding box used to filter collections over a set of regions.
+# Regions given as planar polygons in a projected CRS (e.g. UTM site windows) need a
+# non-zero margin, or EE fails with "Geometry.bounds: ... specify a non-zero error margin".
+REGION_BOUNDS_MAX_ERROR_M = 1
 
 #################### GLOBAL DEFAULTS ##########################
 SIGMA = 0.15  # default kNDVI sigma

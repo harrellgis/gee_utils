@@ -13,6 +13,7 @@ from eetools.constants import (
     CHIRPS_PRECIP_BAND,
     CLIMATOLOGY_END_YEAR,
     CLIMATOLOGY_START_YEAR,
+    REGION_BOUNDS_MAX_ERROR_M,
 )
 from eetools.io import export_csv_table, export_table_to_drive, validate_table_dest
 from eetools.utils import validate_collection_date_range
@@ -419,7 +420,9 @@ def export_daily_rainfall_table(
         )
 
     regions = ee.FeatureCollection(regions)
-    bounds = regions.geometry().bounds()
+    bounds = regions.geometry(REGION_BOUNDS_MAX_ERROR_M).bounds(
+        REGION_BOUNDS_MAX_ERROR_M
+    )
     tasks: list[ee.batch.Task | None] = []
     for version in versions:
         collection_id = CHIRPS_DAILY_VERSIONS[version]
