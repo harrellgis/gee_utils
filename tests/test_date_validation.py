@@ -37,3 +37,28 @@ def test_validate_collection_date_range_start_on_first_image_day():
                 _fake_date(9 * day, "1970-01-10"),
                 _fake_date(20 * day, "1970-01-21"),
             )
+
+
+def test_validate_collection_date_range_end_is_exclusive():
+    """An end of last image day + 1 (exclusive) covers the record; a later one fails."""
+    from unittest.mock import patch
+
+    from eetools import utils
+
+    day = 86_400_000
+    first = _fake_date(10 * day, "1970-01-11")
+    last = _fake_date(40 * day, "1970-02-10")
+    with patch.object(utils, "get_available_window", return_value=(first, last)):
+        utils.validate_collection_date_range(
+            "C",
+            "AOI",
+            _fake_date(20 * day, "1970-01-21"),
+            _fake_date(41 * day, "1970-02-11"),
+        )
+        with pytest.raises(ValueError, match="later than the day after"):
+            utils.validate_collection_date_range(
+                "C",
+                "AOI",
+                _fake_date(20 * day, "1970-01-21"),
+                _fake_date(42 * day, "1970-02-12"),
+            )
