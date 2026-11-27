@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-27
+
+### Added
+- **`get_change_map(..., filter_before_sort=False)`.** When True, the checked `mag` / `dur` / `preval` / `year` filters mask the segment array before `sort` picks one segment per pixel. They then choose among qualifying segments instead of only masking the selected one.
+  - **Example:** `{sort: "greatest", dur < 5, mag >= 0.1}` with `filter_before_sort=True` returns the greatest abrupt loss even where a larger slow decline exists.
+  - **The problem it solves:** with post-selection filters, `greatest` picked the whole-record decline (dated to the second year of the run), and adding `dur < 5` masked the pixel and hid the event.
+  - **Default False:** outputs are unchanged.
+  - **Found by:** the first tgbs_rs disturbance run at TGBS_ITF and TGBS_Ecosia, where 75% (ITF) and 35% (Ecosia) of window loss pixels were single slow segments dated 2001.
+- The `get_change_map` docstring now says when the filters run, and that `yod` is the first year of the selected segment.
+
 ## [0.16.2] - 2026-11-26
 
 ### Fixed

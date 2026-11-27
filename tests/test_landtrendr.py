@@ -271,3 +271,68 @@ def test_get_change_map_and_fitted_stack(ee_session, small_aoi):
     seg = get_segment_data(lt)
     assert isinstance(seg, ee_session.Image)
     assert len(seg.bandNames().getInfo()) == 1  # single array band
+
+
+def test_get_change_map_filter_before_sort_masks_segments_first(monkeypatch):
+    """filter_before_sort masks the segment array before arraySort; default does not."""
+    from unittest.mock import MagicMock
+
+    from eetools.landtrendr import outputs
+
+    def run(**kw):
+        seg = MagicMock(name="seg")
+        monkeypatch.setattr(outputs, "get_segment_data", lambda lt, d: seg)
+        monkeypatch.setattr(outputs, "ee", MagicMock())
+        params = {
+            "sort": "greatest",
+            "mag": {"checked": True, "value": 0.1, "operator": ">="},
+            "dur": {"checked": True, "value": 5, "operator": "<"},
+            "mmu": {"checked": False, "value": 11},
+        }
+        outputs.get_change_map("lt", params, **kw)
+        return [str(c[0]) for c in seg.mock_calls]
+
+    after = run()
+    before = run(filter_before_sort=True)
+    # one arrayMask (change type) before the sort by default; two with pre-selection
+    assert "arrayMask().arraySort" in after
+    assert "arrayMask().arrayMask().arraySort" not in after
+    assert "arrayMask().arrayMask().arraySort" in before
+
+
+@pytest.mark.ee
+def test_get_change_map_filter_before_sort_synthetic(ee_session):
+    """26-yr 0.4 decline + 1-yr 0.3 drop + 1-yr 0.03 wiggle (NBR, one pixel)."""
+    import ee
+
+    from eetools.landtrendr.outputs import get_change_map
+
+    years = list(range(2000, 2027))
+    nbr = {2000: 0.9, 2024: 0.5, 2025: 0.2, 2026: 0.17}
+    vertex = [1 if y in nbr else 0 for y in years]
+
+    def fit(y):  # piecewise-linear NBR between the vertices
+        ks = sorted(nbr)
+        for a, b in zip(ks, ks[1:]):
+            if a <= y <= b:
+                return nbr[a] + (nbr[b] - nbr[a]) * (y - a) / (b - a)
+        return nbr[ks[-1]]
+
+    fitted = [-fit(y) for y in years]  # loss-positive storage (dist_dir -1)
+    lt = ee.Image(ee.Array([years, fitted, fitted, vertex])).rename("LandTrendr")
+    lt = lt.addBands(ee.Image.constant(0.02).rename("rmse"))
+    pt = ee.Geometry.Point([36.8, -1.3])
+
+    def at(**kw):
+        params = {"sort": "greatest", "mmu": {"checked": False, "value": 11}}
+        params.update(kw.pop("params", {}))
+        img = get_change_map(lt, params, **kw)
+        return img.reduceRegion(ee.Reducer.first(), pt, 30).getInfo()
+
+    dur5 = {"checked": True, "value": 5, "operator": "<"}
+    mag01 = {"checked": True, "value": 0.1, "operator": ">="}
+    v = at()
+    assert v["yod"] == 2001 and v["mag"] == pytest.approx(0.4)
+    assert at(params={"dur": dur5, "mag": mag01})["yod"] is None  # post: masked
+    v = at(params={"dur": dur5, "mag": mag01}, filter_before_sort=True)
+    assert v["yod"] == 2025 and v["mag"] == pytest.approx(0.3) and v["dur"] == 1

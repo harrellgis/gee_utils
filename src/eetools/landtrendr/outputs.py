@@ -105,10 +105,38 @@ def _apply_operator(band: ee.Image, spec: dict) -> ee.Image:
     raise ValueError(f"Unsupported operator {operator!r}.")
 
 
+def _segment_keep(seg: ee.Image, params: dict) -> ee.Image | None:
+    """1 x nSegments keep-mask from the checked mag/dur/preval/year filters (or None).
+
+    Uses the same quantities as the post-selection filters of :func:`get_change_map`:
+    absolute magnitude (row 4), duration (row 5), natural-signed start value (row 2)
+    and year of detection (row 0).
+    """
+    keep = None
+
+    def _and(a: ee.Image | None, b: ee.Image) -> ee.Image:
+        return b if a is None else a.And(b)
+
+    if params["mag"]["checked"]:
+        keep = _and(keep, _apply_operator(seg.arraySlice(0, 4, 5).abs(), params["mag"]))
+    if params["dur"]["checked"]:
+        keep = _and(keep, _apply_operator(seg.arraySlice(0, 5, 6), params["dur"]))
+    if params["preval"]["checked"]:
+        keep = _and(keep, _apply_operator(seg.arraySlice(0, 2, 3), params["preval"]))
+    if params["year"]["checked"]:
+        yod = seg.arraySlice(0, 0, 1)
+        keep = _and(
+            keep,
+            yod.gte(params["year"]["start"]).And(yod.lte(params["year"]["end"])),
+        )
+    return keep
+
+
 def get_change_map(
     lt: ee.Image,
     change_params: dict | None = None,
     dist_dir: int = DIST_DIR,
+    filter_before_sort: bool = False,
 ) -> ee.Image:
     """Reduce a LandTrendr output to a single change-event image per pixel.
 
@@ -117,31 +145,53 @@ def get_change_map(
     bands and applies optional magnitude/duration/pre-value/year filters and a minimum-
     mapping-unit (connected-pixel) cleanup. Magnitudes are absolute, in native index units.
 
+    **When the filters run.** By default (``filter_before_sort=False``, as LT-GEE's
+    ``getChangeMap``) the mag/dur/preval/year filters are applied AFTER one segment per
+    pixel has been selected: they can only mask a pixel, never pick a different segment.
+    So ``sort='greatest'`` with ``dur < 5`` masks every pixel whose greatest loss is a slow
+    decline, hiding any abrupt event in it. With ``filter_before_sort=True`` the filters
+    first drop non-qualifying segments and ``sort`` then chooses among the rest: e.g.
+    ``{sort: greatest, dur < 5, mag >= 0.1}`` returns the greatest abrupt loss even where a
+    larger slow decline exists. A pixel with no qualifying segment is masked either way.
+
+    ``yod`` is the first year of the selected segment (start vertex + 1), so a segment that
+    spans the whole record dates to the second year of the run.
+
     Args:
         lt: LandTrendr output image.
         change_params: Overrides merged over DEFAULT_CHANGE_PARAMS (delta, sort, year, mag, dur, preval, mmu).
         dist_dir: Loss-orientation factor used by get_segment_data (default DIST_DIR).
+        filter_before_sort: Apply the checked mag/dur/preval/year filters to every segment before ``sort`` selects one (default False: after selection, unchanged outputs).
 
     Returns:
         ee.Image with bands 'yod' (year of detection), 'mag', 'dur', 'rate', 'dsnr', 'preval', masked to the filters/MMU.
+
+    Raises:
+        ValueError: For an unsupported ``sort`` or filter operator.
     """
     params = {**DEFAULT_CHANGE_PARAMS, **(change_params or {})}
 
     seg = get_segment_data(lt, dist_dir)  # 8 x nSegments, natural-signed
 
-    mag_row = seg.arraySlice(0, 4, 5)
     # Keep only segments of the requested change type (loss = decrease, gain = increase).
-    type_mask = mag_row.lt(0) if params["delta"] == "loss" else mag_row.gt(0)
+    mag_all = seg.arraySlice(0, 4, 5)
+    type_mask = mag_all.lt(0) if params["delta"] == "loss" else mag_all.gt(0)
     seg = seg.arrayMask(type_mask)
+    if filter_before_sort:
+        keep_seg = _segment_keep(seg, params)
+        if keep_seg is not None:
+            seg = seg.arrayMask(keep_seg)
 
-    # Sort key (arraySort is ascending; negate for "most"-style criteria).
+    # Sort key (arraySort is ascending; negate for "most"-style criteria), from the
+    # segments that remain.
+    mag_row = seg.arraySlice(0, 4, 5)
     end_year_row = seg.arraySlice(0, 1, 2)
     rate_row = seg.arraySlice(0, 6, 7)
     sort = params["sort"]
     if sort == "greatest":
-        key = mag_row.arrayMask(type_mask).abs().multiply(-1)
+        key = mag_row.abs().multiply(-1)
     elif sort == "least":
-        key = mag_row.arrayMask(type_mask).abs()
+        key = mag_row.abs()
     elif sort == "newest":
         key = end_year_row.multiply(-1)
     elif sort == "oldest":
